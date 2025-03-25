@@ -1,0 +1,14 @@
+flask
+flask-cors
+gunicorn
+requests
+kubernetes
+langchain
+langchain-core
+langchain-google-vertexai
+langgraph
+vertexai
+google-cloud-aiplatform
+prometheus-api-client
+python-dotenv
+google-generativeai
