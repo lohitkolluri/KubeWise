@@ -65,23 +65,3 @@ client_secret.json
 # Local configuration
 config.local.yaml
 local_settings.py
-
-# Node modules (if you have a frontend)
-node_modules/
-npm-debug.log
-yarn-error.log
-yarn-debug.log
-
-# Build outputs
-/build
-/dist
-/.next/
-/out/
-
-# Misc
-.DS_Store
-Thumbs.db
-
-.env
-.env.*
-!.env.example

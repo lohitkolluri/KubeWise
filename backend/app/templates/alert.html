@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Critical Kubernetes Alert</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #f44336;
+            color: white;
+            padding: 15px;
+            border-radius: 5px 5px 0 0;
+            text-align: center;
+        }
+        .content {
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 5px 5px;
+        }
+        .issue-info {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        .issue-info h3 {
+            margin-top: 0;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .label {
+            font-weight: bold;
+            color: #555;
+        }
+        .remediation {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e8f5e9;
+            border-radius: 5px;
+        }
+        .command {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+        .timestamp {
+            font-size: 0.9em;
+            color: #777;
+            text-align: right;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>CRITICAL KUBERNETES ALERT</h2>
+    </div>
+    <div class="content">
+        <div class="issue-info">
+            <h3>Issue Details</h3>
+            <p><span class="label">Type:</span> {{ issue.type }}</p>
+            <p><span class="label">Severity:</span> {{ issue.severity }}</p>
+            <p><span class="label">Kubernetes Object:</span> {{ issue.k8s_object_type }} - {{ issue.k8s_object_name }}</p>
+            {% if issue.k8s_object_namespace %}
+            <p><span class="label">Namespace:</span> {{ issue.k8s_object_namespace }}</p>
+            {% endif %}
+            <p><span class="label">Description:</span> {{ issue.description }}</p>
+            {% if issue.ai_confidence_score %}
+            <p><span class="label">AI Confidence:</span> {{ issue.ai_confidence_score }}</p>
+            {% endif %}
+        </div>
+
+        <div class="remediation">
+            <h3>Remediation Steps</h3>
+            <p>{{ issue.remediation_suggestion }}</p>
+            {% if issue.remediation_command %}
+            <p><span class="label">Suggested Command:</span></p>
+            <div class="command">{{ issue.remediation_command }}</div>
+            {% endif %}
+        </div>
+
+        <p class="timestamp">
+            Alert generated at: {{ issue.last_detected_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}
+        </p>
+    </div>
+</body>
+</html>
