@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kubewise
+description: KubeWise - AI-Powered Kubernetes Anomaly Detection and Autonomous Remediation System
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
