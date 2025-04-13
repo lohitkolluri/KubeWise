@@ -1,0 +1,15 @@
+apiVersion: v1
+entries:
+  kubewise:
+  - apiVersion: v2
+    appVersion: 1.0.0
+    created: "2025-04-13T18:05:59.772488+05:30"
+    description: KubeWise - AI-Powered Kubernetes Anomaly Detection and Autonomous
+      Remediation System
+    digest: d1a7ca6b60f5cd615175cb7ba18a81c267a76b6d98b0f4513ed56fab9d3df924
+    name: kubewise
+    type: application
+    urls:
+    - kubewise-0.1.0.tgz
+    version: 0.1.0
+generated: "2025-04-13T18:05:59.771828+05:30"
