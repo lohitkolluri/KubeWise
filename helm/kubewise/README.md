@@ -83,3 +83,9 @@ Then install the chart with:
 ```bash
 helm install my-kubewise ./helm/kubewise -f my-values.yaml
 ```
+
+## License
+
+KubeWise is protected under a proprietary license. Usage, reproduction, or distribution without explicit permission and proper attribution is strictly prohibited. See the LICENSE file for details.
+
+Copyright (c) 2025 Lohit Kolluri. All Rights Reserved.
