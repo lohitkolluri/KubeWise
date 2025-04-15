@@ -1,6 +1,6 @@
 import requests
 from loguru import logger
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from app.core.config import settings
 from datetime import datetime, timedelta
 import asyncio
@@ -14,7 +14,61 @@ class PrometheusScraper:
     def __init__(self):
         """Initialize the Prometheus scraper with the configured URL."""
         self.prometheus_url = settings.PROMETHEUS_URL
+        self.timeout = settings.PROMETHEUS_TIMEOUT
         logger.info(f"PrometheusScraper initialized for URL: {self.prometheus_url}")
+
+    async def validate_query(self, query: str) -> Dict[str, Any]:
+        """
+        Validate a PromQL query by checking its syntax and structure.
+
+        Args:
+            query: The PromQL query to validate
+
+        Returns:
+            Dict containing validation results:
+                - valid: bool indicating if query is valid
+                - error: str with error message if invalid
+                - warnings: List of warnings about the query
+        """
+        try:
+            # Basic syntax checks
+            if not query.strip():
+                return {
+                    "valid": False,
+                    "error": "Empty query",
+                    "warnings": []
+                }
+
+            # Check for common issues
+            warnings = []
+
+            # Check for missing time range
+            if "[" not in query and "]" not in query:
+                warnings.append("Query does not specify a time range")
+
+            # Check for potentially expensive operations
+            if "rate(" in query and "[" not in query:
+                warnings.append("rate() function used without time range")
+
+            if "sum(" in query and "by (" not in query:
+                warnings.append("sum() aggregation without by() clause may be expensive")
+
+            # Test the query with a small time range
+            test_results = await self.query_prometheus(query, time_window_seconds=60)
+
+            return {
+                "valid": True,
+                "error": None,
+                "warnings": warnings,
+                "test_results": len(test_results) if test_results else 0
+            }
+
+        except Exception as e:
+            return {
+                "valid": False,
+                "error": str(e),
+                "warnings": []
+            }
 
     async def query_prometheus(self, query: str, time_window_seconds: int) -> List[Dict[str, Any]]:
         """
@@ -42,7 +96,7 @@ class PrometheusScraper:
 
             # Use asyncio with requests in a thread pool
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(None, lambda: requests.get(api_endpoint, params=params, timeout=15))
+            response = await loop.run_in_executor(None, lambda: requests.get(api_endpoint, params=params, timeout=self.timeout))
             response.raise_for_status()
 
             data = response.json()

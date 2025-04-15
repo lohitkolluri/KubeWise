@@ -95,11 +95,11 @@ def print_ascii_banner(banner_text=STARTUP_BANNER, color="\033[1;36m"):
 
 
 @pause_logging
-def print_version_info(version="3.0.0", mode="MANUAL"):
+def print_version_info(version="3.1.0", mode="MANUAL"):
     """Print version information with colorful formatting."""
     print("\033[1;97m╔════════════════════════════════════════════════════════════╗\033[0m")
     print(f"\033[1;97m║ \033[1;93mKubeWise \033[1;97mv{version}                                            \033[1;97m║\033[0m")
-    print(f"\033[1;97m║ \033[0;37mMode: \033[1;92m{mode.upper()}                                               \033[1;97m║\033[0m")
+    print(f"\033[1;97m║ \033[0;37mMode: \033[1;92m{mode.upper()}                                                 \033[1;97m║\033[0m")
     print(f"\033[1;97m║ \033[0;37mAI-Powered Kubernetes Anomaly Detection & Remediation      \033[1;97m║\033[0m")
     print("\033[1;97m╚════════════════════════════════════════════════════════════╝\033[0m")
 

@@ -1,1001 +1,417 @@
-# 🧠 KubeWise
-
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.95+-green.svg)
-![Kubernetes](https://img.shields.io/badge/kubernetes-1.22+-blue.svg)
-![Gemini](https://img.shields.io/badge/Gemini%20API-integrated-purple.svg)
+# KubeWise 🛡️
 
-**AI-Powered Kubernetes Anomaly Detection and Autonomous Remediation System**
+<h2>AI-Powered Guardian for Kubernetes: Detect, Diagnose, Defend</h2>
+
+```
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║   ██╗  ██╗██╗   ██╗██████╗ ███████╗██╗    ██╗██╗███████╗███████╗  ║
+║   ██║ ██╔╝██║   ██║██╔══██╗██╔════╝██║    ██║██║██╔════╝██╔════╝  ║
+║   █████╔╝ ██║   ██║██████╔╝█████╗  ██║ █╗ ██║██║███████╗█████╗    ║
+║   ██╔═██╗ ██║   ██║██╔══██╗██╔══╝  ██║███╗██║██║╚════██║██╔══╝    ║
+║   ██║  ██╗╚██████╔╝██████╔╝███████╗╚███╔███╔╝██║███████║███████╗  ║
+║   ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝ ╚══╝╚══╝ ╚═╝╚══════╝╚══════╝  ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+```
+
+**Transform your Kubernetes experience with autonomous anomaly detection, AI-powered diagnosis, and intelligent remediation**
+
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
+[![Status](https://img.shields.io/badge/status-active-success.svg)]()
 
 </div>
 
-<p align="center">
-  <a href="#-project-overview">Overview</a> •
-  <a href="#-key-features">Features</a> •
-  <a href="#-architecture--workflow">Architecture</a> •
-  <a href="#-installation--setup">Installation</a> •
-  <a href="#-usage--operation">Usage</a> •
-  <a href="#-api-reference">API</a> •
-  <a href="#-technology-stack">Tech Stack</a> •
-  <a href="#-development--contribution">Development</a> •
-  <a href="#-troubleshooting">Troubleshooting</a> •
-  <a href="#-license--contact">License</a>
-</p>
+> *"Let KubeWise handle the chaos while you focus on innovation"*
+
+KubeWise is an intelligent system designed to proactively monitor Kubernetes clusters, detect anomalies using a combination of machine learning and direct failure checks, leverage AI (Google Gemini) for deep analysis and remediation planning, and optionally automate the remediation process. It aims to improve cluster stability, reduce downtime, and streamline operations for SREs and DevOps teams.
 
 ---
 
-## 📋 Project Overview
-
-The K8s Autonomous Anomaly Detector is a comprehensive system designed to monitor Kubernetes clusters in real-time, detect anomalies using machine learning, and autonomously remediate issues with the help of AI-powered analysis.
-
-This project bridges the gap between traditional rule-based monitoring and modern AI-driven operations by combining:
-
-- **Machine Learning** for anomaly detection using Isolation Forest algorithm
-- **Google Gemini AI** for insightful root cause analysis and intelligent remediation suggestion
-- **Autonomous remediation** capabilities with safety-validated Kubernetes operations
-- **Continuous verification** to ensure issues are properly resolved
-
-### Target Environment
-
-- Kubernetes clusters (v1.22+)
-- Prometheus monitoring setup
-- MongoDB for data persistence
-
-### Core Technologies
-
-- FastAPI for the API layer
-- Scikit-learn for ML-based anomaly detection
-- Google Gemini API for AI analysis and remediation
-- Official Kubernetes Python client for cluster interactions
-- Prometheus for metrics collection
-- MongoDB for event storage and persistence
+## 📑 Table of Contents
+- [Demo](#-demo)
+- [Key Features](#-key-features)
+- [Novelties & Why KubeWise?](#-novelties--why-kubewise)
+- [Architecture & Workflow](#-architecture--workflow)
+- [Prerequisites](#-prerequisites)
+- [Setup & Installation](#-setup--installation)
+- [Running the Application](#-running-the-application)
+- [API Endpoints & Usage](#-api-endpoints--usage)
+- [Configuration](#-configuration)
+- [License](#-license)
 
 ---
 
-## 🌟 Key Features
+## 🎬 Demo
 
-### Monitoring & Detection
+Watch KubeWise in action! This video showcases its key features, from anomaly detection to AI-driven remediation.
 
-- **Real-time Metric Collection**: Continuously monitors Kubernetes clusters via Prometheus metrics
-- **Dynamic PromQL Query Generation**: AI-driven discovery and optimization of PromQL queries based on available metrics
-- **ML-Powered Anomaly Detection**: Uses Isolation Forest algorithm to identify anomalous patterns in metrics
-- **Feature Engineering Pipeline**: Transforms raw metrics into ML-compatible feature vectors
+<div align="center">
 
-### AI Analysis & Remediation
+[![KubeWise Demo Video](https://img.youtube.com/vi/PxobbNKy1Kc/0.jpg)](https://youtu.be/PxobbNKy1Kc)
 
-- **Root Cause Analysis**: Google Gemini AI analyzes anomaly context to provide insights on probable causes
-- **Intelligent Remediation**: AI suggests appropriate remediation commands based on historical success patterns
-- **Autonomous Mode**: Optionally executes safe, validated remediation commands without human intervention
-- **Manual Mode**: Allows human review of AI-suggested remediation before execution
-
-### Safety & Verification
-
-- **Command Validation**: All remediation actions are validated for safety before execution
-- **Phased Operations**: Critical operations like scaling can be performed incrementally
-- **Post-Remediation Verification**: AI-assisted verification confirms successful resolution
-- **Dependency Checking**: Validates impact on related resources before operations
-
-### Extensible API & Interfaces
-
-- **RESTful API**: Comprehensive API for system management and monitoring
-- **Swagger Documentation**: Interactive API documentation with OpenAPI/Swagger
-- **System Health Monitoring**: Endpoints for system status and health checks
-
-### Anomaly Detection Capabilities
-
-The system can identify various types of Kubernetes anomalies:
-
-- **Resource Exhaustion**: CPU/memory spikes, disk space issues, resource contention
-- **Application Health Issues**: Container crashes, failed deployments, restart loops
-- **Control Plane Problems**: API server latency, etcd health issues, scheduler problems
-- **Node Health Issues**: Node pressure, network connectivity, hardware issues
-- **Workload Instability**: Deployment replica mismatches, HPA scaling issues, pod evictions
-
-### Remediation Capabilities
-
-The system can execute multiple remediation strategies:
-
-- **Workload Operations**: Restart deployments/pods, scale resources up or down
-- **Resource Management**: Adjust CPU/memory requests and limits
-- **Node Management**: Cordon/uncordon nodes, drain workloads safely
-- **Custom Commands**: Execute user-defined safe operations
+**(Click the image to watch the demo on YouTube)**
+</div>
 
 ---
 
-## 🏗 Architecture & Workflow
+## ✨ Key Features
 
-### System Architecture
+*   **Real-time Monitoring:** Continuously scrapes metrics from Prometheus using configurable PromQL queries.
+*   **Hybrid Anomaly Detection:**
+    *   **ML-Based:** Uses Isolation Forest for identifying subtle deviations from normal behavior.
+    *   **Direct Failure Scanning:** Proactively scans Kubernetes API for explicit failure states (e.g., Failed Pods, NotReady Nodes).
+    *   **Threshold Breaching:** Detects immediate issues when critical metric thresholds are crossed.
+    *   **Predictive Forecasting:** Predicts potential future failures based on metric trends.
+*   **AI-Powered Analysis (Gemini):**
+    *   **Root Cause Analysis:** Provides insights into the likely causes of anomalies and failures.
+    *   **Remediation Suggestions:** Generates specific `kubectl` or structured K8s commands tailored to the problem.
+    *   **Verification:** Assesses whether applied remediation actions were successful.
+    *   **Query Generation:** Can automatically generate relevant PromQL queries based on cluster context.
+*   **Autonomous Remediation:**
+    *   **MANUAL Mode:** Detects anomalies, analyzes them, and suggests remediation steps for user approval.
+    *   **AUTO Mode:** Automatically executes validated, safe remediation steps based on detected issues, criticality, and configuration.
+*   **Safety First:** Validates generated remediation commands against a safe list and uses structured parameters for execution via the Kubernetes Python client. Blacklisting of operations is also supported.
+*   **Adaptive Learning:** The ML model can be retrained automatically as more data becomes available.
+*   **Observability:** Exposes internal metrics via a Prometheus client endpoint and provides API endpoints for status, configuration, and event management.
+*   **Persistent Storage:** Uses SQLite to store anomaly events and remediation history.
+*   **Configuration:** Easily configurable via environment variables (`.env` file).
 
-The system follows a modular architecture with clear separation of concerns:
+---
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           K8s Autonomous Anomaly Detector                       │
-│                                                                                 │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐       │
-│  │   FastAPI   │    │   Anomaly   │    │   Gemini    │    │     K8s     │       │
-│  │   Server    │◄───┤  Detector   │◄───┤   Service   │◄───┤   Executor  │       │
-│  │             │    │             │    │             │    │             │       │
-│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    └──────┬──────┘       │
-│         │                  │                  │                   │              │
-│         ▼                  ▼                  ▼                   ▼              │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐       │
-│  │ API Router: │    │ Autonomous  │    │   MongoDB   │    │  Prometheus │       │
-│  │ - Health    │    │   Worker    │    │  Database   │    │   Client    │       │
-│  │ - Metrics   │    │   Process   │    │             │    │             │       │
-│  │ - Anomaly   │    │             │    │             │    │             │       │
-│  │ - Remediate │    │             │    │             │    │             │       │
-│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘       │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-           │                  │                  │                   │
-           ▼                  ▼                  ▼                   ▼
-  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-  │    HTTP     │    │  Kubernetes │    │   MongoDB   │    │  Prometheus │
-  │   Clients   │    │   Cluster   │    │    Atlas    │    │    Server   │
-  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-```
+## 💡 Novelties & Why KubeWise?
 
-### Component Descriptions
+*   **Multi-Faceted Detection:** Goes beyond traditional monitoring by combining ML anomaly scores, direct K8s failure states, threshold checks, and predictive forecasting for faster, more accurate issue identification.
+*   **True Autonomy:** The background worker enables a continuous monitor-detect-analyze-remediate-verify loop.
+*   **Deep AI Integration:** Leverages Google Gemini not just for analysis but also for suggesting *and* verifying actions, closing the feedback loop. Gemini can even help bootstrap the monitoring itself via query generation.
+*   **Context-Aware Remediation:** Tailors remediation commands based on the specific entity type (Pod, Deployment, Node), the nature of the failure (e.g., `CrashLoopBackOff` vs. threshold breach), and whether it's a current or predicted issue.
+*   **Safety and Validation Focus:** Prioritizes safe execution by parsing and validating commands before applying them, distinguishing between standard, critical, and proactive remediation scenarios.
+*   **Persistent Event Tracking:** Maintains a history of anomalies and remediation attempts in a local SQLite database for auditability and analysis.
 
-#### Core Services
+---
 
-1. **FastAPI Server (`app/main.py`)**
-   - Web framework providing the API layer
-   - Handles HTTP requests and responses
-   - Manages dependency injection and middleware
+## 🏗️ Architecture & Workflow
 
-2. **Anomaly Detector (`app/models/anomaly_detector.py`)**
-   - ML-based anomaly detection using Isolation Forest
-   - Feature engineering from raw metrics
-   - Model training, persistence, and evaluation
+KubeWise operates through a central `AutonomousWorker` that orchestrates the monitoring and remediation process.
 
-3. **Gemini Service (`app/services/gemini_service.py`)**
-   - Integration with Google's Gemini API
-   - Structured output with function calling
-   - Root cause analysis and remediation suggestion
+### 📊 Architecture Diagram
 
-4. **K8s Executor (`app/utils/k8s_executor.py`)**
-   - Safe execution of Kubernetes operations
-   - Command validation and parsing
-   - Resource dependency checking
+```mermaid
+flowchart TD
+    subgraph "Kubernetes Cluster"
+        Prometheus[📈 Prometheus Metrics]
+        K8sAPI[☸️ Kubernetes API]
+    end
 
-#### Supporting Components
+    subgraph "KubeWise Application"
+        A[PrometheusScraper] -->|Fetches Metrics| B(AutonomousWorker)
+        K8sAPI -->|Fetches K8s Status| J(K8sExecutor)
+        J -->|Direct Failure Info| B
 
-5. **Autonomous Worker (`app/worker.py`)**
-   - Background process for continuous monitoring
-   - Anomaly detection pipeline orchestration
-   - Remediation decision and execution
+        B -->|Stores Metric History| C(Metric History - in-memory)
+        C -->|Provides Window| D(AnomalyDetector ML Model)
+        B -->|Latest Metrics| D
 
-6. **Event Service (`app/services/anomaly_event_service.py`)**
-   - Manages anomaly events lifecycle
-   - Stores and retrieves events from MongoDB
-   - Tracks remediation attempts
+        D -->|Anomaly/Failure Detected| E[AnomalyEventService]
+        E -->|Stores Event| F[(💾 SQLite DB)]
 
-7. **Prometheus Scraper (`app/utils/prometheus_scraper.py`)**
-   - Fetches metrics from Prometheus
-   - Query validation and execution
-   - Metric transformation
+        B -->|Triggers Analysis/Remediation| G(GeminiService AI 🧠)
+        E -->|Provides Event Context| G
+        J -->|Provides Cluster Context| G
 
-### Data Flow & Workflow
+        G -->|Analysis & Suggestions| E
+        G -->|PromQL Queries| B
 
-#### Monitoring & Detection Workflow
+        B -->|"Executes Remediation (AUTO Mode)"| J
+        J -->|Interacts With| K8sAPI
 
-1. **Metric Collection**:
-   ```
-   AutonomousWorker
-     ↓
-   PrometheusClient.fetch_all_metrics()
-     ↓
-   Raw metrics from Prometheus
-   ```
+        B -->|Triggers Verification| G
+        J -->|Fetches Current State| G
+        E -->|Provides Attempt Info| G
+        G -->|Verification Result| E
 
-2. **Feature Engineering & Anomaly Detection**:
-   ```
-   Raw metrics
-     ↓
-   AnomalyDetector._engineer_features_aggregate()
-     ↓
-   Feature vectors
-     ↓
-   AnomalyDetector.predict()
-     ↓
-   Anomaly prediction (boolean) + anomaly score
-   ```
+        User[👤 User / API Client] <-->|"API Calls (FastAPI)"| KubeWiseAPI{API Routers}
+        KubeWiseAPI <--> E
+        KubeWiseAPI <--> G
+        KubeWiseAPI <--> J
+        KubeWiseAPI <--> D
+        KubeWiseAPI <--> B
+    end
 
-3. **Event Creation**:
-   ```
-   Anomaly detected
-     ↓
-   AnomalyEventService.create_event()
-     ↓
-   MongoDB: anomaly_events collection
-   ```
+    Prometheus --> A
 
-#### Remediation Workflow
+    %% Define straight lines for all edges
+    linkStyle default stroke-width:2px,fill:none,stroke:gray;
 
-4. **AI Analysis**:
-   ```
-   Anomaly event
-     ↓
-   GeminiService.batch_process_anomaly()
-     ↓
-   AI analysis & suggested remediation
-   ```
+    classDef user fill:#d14,stroke:#333,stroke-width:2px
+    classDef api fill:#0366d6,stroke:#333,stroke-width:1px,color:#fff
+    classDef ai fill:#6f42c1,stroke:#333,stroke-width:1px,color:#fff
+    classDef storage fill:#2ea44f,stroke:#333,stroke-width:1px,color:#fff
 
-5. **Remediation Execution** (AUTO mode):
-   ```
-   Validated remediation commands
-     ↓
-   K8sExecutor.execute_validated_command()
-     ↓
-   Kubernetes API: Apply changes
-     ↓
-   AnomalyEventService.add_remediation_attempt()
-   ```
-
-6. **Verification**:
-   ```
-   After remediation timeout
-     ↓
-   AutonomousWorker._verify_remediation()
-     ↓
-   GeminiService.verify_remediation_success()
-     ↓
-   Update event status: RESOLVED or REMEDIATION_FAILED
-   ```
-
-### Code Example: Anomaly Detection Process
-
-```python
-# From app/worker.py
-async def _predict_and_handle_anomaly(self, entity_key: str, entity_data: Dict[str, Any], metric_window: List[List[Dict[str, Any]]]):
-    """Predicts anomaly and handles if detected."""
-    # Get latest metrics for prediction
-    latest_metrics_snapshot = metric_window[-1] if metric_window else []
-
-    # Predict anomaly using ML model
-    is_anomaly, score = await anomaly_detector.predict(latest_metrics_snapshot)
-
-    if is_anomaly:
-        # Create anomaly context for AI analysis
-        anomaly_context = {
-            "entity_id": entity_data["entity_id"],
-            "entity_type": entity_data["entity_type"],
-            "namespace": entity_data["namespace"],
-            "metrics_snapshot": latest_metrics_snapshot,
-            "anomaly_score": score,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-        # Process with Google Gemini AI
-        batch_result = await self.gemini_service.batch_process_anomaly(anomaly_context)
-
-        # Create event and handle remediation
-        new_event = await self.anomaly_event_service.create_event(event_data)
-        if new_event:
-            await self._decide_remediation(new_event, remediation_suggestions_raw)
+    class User user
+    class KubeWiseAPI api
+    class G ai
+    class F storage
 ```
 
+### 🔄 Operational Workflow: 10-Step Process
+
+1.  **Scrape:** `PrometheusScraper` fetches metrics based on active PromQL queries.
+2.  **Direct Scan:** `K8sExecutor` queries the K8s API directly for resources in failure states (complementary to metrics).
+3.  **Process & Store:** `AutonomousWorker` updates the in-memory metric history for each entity.
+4.  **Detect:** `AnomalyDetector` uses the Isolation Forest model and direct checks (thresholds, K8s status) on the latest metrics and history to detect anomalies, failures, or predict future issues.
+5.  **Record:** If an anomaly/failure is detected, an event is created via `AnomalyEventService` and stored in SQLite.
+6.  **Analyze (Gemini):** `GeminiService` analyzes the event context (metrics, status) to determine root cause and suggest remediation commands.
+7.  **Decide & Remediate (AUTO Mode):** `AutonomousWorker` validates suggested commands (from Gemini or fallback logic) using `K8sExecutor`. If in `AUTO` mode and the command is deemed safe for the context (critical/predicted/standard), `K8sExecutor` applies it via the Kubernetes API. Remediation attempts are recorded.
+8.  **Suggest (MANUAL Mode):** If in `MANUAL` mode, validated suggestions are stored in the event for user review via the API.
+9.  **Verify (AUTO Mode):** After a delay, `AutonomousWorker` triggers `GeminiService` (if enabled) or uses `AnomalyDetector` to check if the remediation was successful by examining current metrics and K8s status. The event status is updated.
+10. **API Interaction:** Users can view events, trigger analysis/remediation manually, check system health, and configure the mode via the FastAPI interface.
+
 ---
 
-## 📦 Installation & Setup
+## ⚙️ Prerequisites
 
-### Prerequisites
+<table>
+<tr>
+<td>Python</td>
+<td>Version 3.8 or higher</td>
+</tr>
+<tr>
+<td>Kubernetes Cluster</td>
+<td>Access to a Kubernetes cluster (e.g., Minikube, Kind, GKE, EKS, AKS)</td>
+</tr>
+<tr>
+<td>kubectl</td>
+<td>Configured to connect to your cluster</td>
+</tr>
+<tr>
+<td>Prometheus</td>
+<td>Deployed in your cluster (e.g., via Helm chart, kube-prometheus-stack) and accessible to KubeWise</td>
+</tr>
+<tr>
+<td>Gemini API Key</td>
+<td>Required for AI-powered analysis. Get one from <a href="https://aistudio.google.com/app/apikey">Google AI Studio</a></td>
+</tr>
+<tr>
+<td>jq (Optional)</td>
+<td>Useful for formatting JSON output when interacting with the API</td>
+</tr>
+</table>
 
-- Python 3.9+
-- Kubernetes cluster (for production deployments)
-- Access to Google Gemini API (API key)
-- MongoDB instance or MongoDB Atlas account
-- Prometheus monitoring setup for your Kubernetes cluster
+> **Note:** KubeWise assumes it can reach Prometheus at the configured `PROMETHEUS_URL`. AI features will be limited without a valid Gemini API key.
 
-### Local Development Setup
+---
 
-#### 1. Clone the Repository
+## 🚀 Setup & Installation
 
+### 1. Clone the Repository
+Clone the repo and navigate to the directory
 ```bash
-git clone https://github.com/your-org/k8s-anomaly-detector.git
-cd k8s-anomaly-detector
+git clone https://github.com/lohitkolluri/KubeWise
+cd KubeWise
 ```
 
-#### 2. Create a Python Virtual Environment
-
+### 2. Create and Activate a Virtual Environment
+Set up Python virtual environment
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python3 -m venv venv
+source venv/bin/activate  # On Windows use `venv\Scripts\activate`
 ```
 
-#### 3. Install Dependencies
-
+### 3. Install Dependencies
+Install required packages
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 4. Set Up Environment Variables
+> 📦 **Package Requirements**: Ensure you have a `requirements.txt` file containing packages like `fastapi`, `uvicorn`, `loguru`, `requests`, `kubernetes`, `scikit-learn`, `joblib`, `google-generativeai`, `sqlalchemy`, `aiosqlite`, `prometheus-client`, `pydantic-settings`, `httpx`, `aiohttp`, `gunicorn`, etc.
 
-Create a `.env` file in the project root:
+### 4. Configure Environment Variables
+Create and configure environment file
+```bash
+cp .env.example .env
+```
+
+<div style="background-color: #f6f8fa; padding: 10px; border-left: 4px solid #0366d6; margin-bottom: 10px;">
+<strong>Configuration Example:</strong>
 
 ```dotenv
-# Database Configuration
-MONGODB_ATLAS_URI=mongodb://localhost:27017
-MONGODB_DB_NAME=k8s_monitoring
-
-# External Services
-GEMINI_API_KEY=your-gemini-api-key
-PROMETHEUS_URL=http://localhost:9090
-
-# Application Settings
+# .env Example
 LOG_LEVEL=INFO
-WORKER_SLEEP_INTERVAL_SECONDS=30
-PROMETHEUS_SCRAPE_INTERVAL_SECONDS=15
-ANOMALY_SCORE_THRESHOLD=-0.2
-ANOMALY_METRIC_WINDOW_SECONDS=600
+DEFAULT_REMEDIATION_MODE=AUTO
 
-# Feature Flags
-GEMINI_AUTO_VERIFICATION=true
-GEMINI_AUTO_ANALYSIS=true
-REMEDIATION_MODE=MANUAL  # or AUTO
+# --- Monitoring ---
+PROMETHEUS_PORT=9090
+
+# --- Worker ---
+WORKER_SLEEP_INTERVAL_SECONDS=15
+
+# --- Gemini AI ---
+GEMINI_API_KEY="YOUR_GEMINI_API_KEY_HERE" # !!! REQUIRED for AI features !!!
+GEMINI_AUTO_ANALYSIS=True         # Use AI for analysis & remediation suggestions?
+GEMINI_AUTO_VERIFICATION=True     # Use AI to verify remediation?
+
+# ... other remediation settings can be modified from config.py ...
+```
+</div>
+
+> ⚠️ **Important**: Set your `GEMINI_API_KEY`. If left blank, AI features will be disabled. Ensure `PROMETHEUS_PORT` is correct.
+
+### 5. Port-Forward Prometheus
+Make Prometheus accessible locally
+```bash
+# Find the Prometheus service name
+kubectl get svc -n monitoring
+
+# Port-forward (adjust namespace and service name as needed)
+kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n monitoring
 ```
 
-#### 5. Start Local Infrastructure with Docker Compose
+> 🔍 **Verification**: Keep this terminal running. Verify access by opening `http://localhost:9090` in your browser.
 
-Create a `docker-compose.yml` file:
+---
 
-```yaml
-version: '3'
-services:
-  mongodb:
-    image: mongo:latest
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
+## ▶️ Running the Application
 
-  prometheus:
-    image: prom/prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+You can run KubeWise in development mode (with auto-reload) or production mode.
 
-volumes:
-  mongo_data:
-```
+<div align="center">
 
-Start the infrastructure services:
+| Mode | Use Case | Command |
+|------|----------|---------|
+| **Development** | Local testing with auto-reload | `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000` |
+| **Production** | Deployment with multiple workers | `gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000` |
+
+</div>
+
+### Development Mode (using Uvicorn)
+
+Ideal for local development and testing.
 
 ```bash
-docker-compose up -d
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-#### 6. Run the Application
+*   `--reload`: Automatically restarts the server when code changes are detected.
+*   `--host 0.0.0.0`: Makes the server accessible on your local network.
+*   `--port 8000`: Specifies the port to run on.
+
+### Production Mode (using Gunicorn)
+
+Recommended for deployment scenarios. Gunicorn manages multiple Uvicorn workers for better performance and reliability.
 
 ```bash
-# Development mode with auto-reload
-uvicorn app.main:app --reload
-
-# Production mode
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 ```
 
-### Production Deployment
+*   `-w 4`: Specifies the number of worker processes (adjust based on your server's CPU cores, typically `2 * num_cores + 1`).
+*   `-k uvicorn.workers.UvicornWorker`: Tells Gunicorn to use Uvicorn to handle requests asynchronously.
+*   `-b 0.0.0.0:8000`: Binds the server to the specified address and port.
 
-#### Kubernetes Deployment with Helm
+> 🚀 Once started, KubeWise will initialize, perform health checks, start the autonomous worker, and begin monitoring your cluster. The API will be available at `http://localhost:8000`.
 
-1. **Configure values.yaml**
+---
 
-Create a `values.yaml` file:
+## 🔌 API Endpoints & Usage
 
-```yaml
-replicaCount: 1
+Interact with KubeWise using standard HTTP requests. `curl` examples are provided below.
 
-image:
-  repository: your-registry/k8s-anomaly-detector
-  tag: 3.0.0
-  pullPolicy: Always
+**(Base URL: `http://localhost:8000`)**
 
-mongodb:
-  uri: mongodb+srv://your-username:your-password@your-cluster.mongodb.net
-  dbName: k8s_monitoring
+### Root & Health Endpoints
 
-gemini:
-  apiKey: your-gemini-api-key
+#### Root
 
-prometheus:
-  url: http://prometheus-server.monitoring.svc
+*   **`GET /`**
+    *   Description: Get basic application info.
+    *   `curl -X GET "http://localhost:8000/"`
 
-remediation:
-  mode: "MANUAL"  # or "AUTO"
+#### Health
 
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 200m
-    memory: 256Mi
-```
+*   **`GET /api/v1/health/`**
+    *   Description: Check the health status of KubeWise and its dependencies (Prometheus, Gemini, Kubernetes connectivity).
+    *   `curl -X GET "http://localhost:8000/api/v1/health/" | jq`
 
-2. **Deploy using Helm**
+### Setup & Configuration Endpoints
 
-```bash
-helm install k8s-anomaly-detector ./helm/k8s-anomaly-detector -f values.yaml \
-  --namespace monitoring \
-  --create-namespace
-```
+#### Setup
 
-#### Building the Docker Image
+*   **`GET /api/v1/setup/mode`**
+    *   Description: Get the current remediation mode (`AUTO` or `MANUAL`).
+    *   `curl -X GET "http://localhost:8000/api/v1/setup/mode" | jq`
+*   **`PUT /api/v1/setup/mode`**
+    *   Description: Set the remediation mode.
+    *   `curl -X PUT "http://localhost:8000/api/v1/setup/mode" -H "Content-Type: application/json" -d '{"mode": "AUTO"}' | jq`
+    *   `curl -X PUT "http://localhost:8000/api/v1/setup/mode" -H "Content-Type: application/json" -d '{"mode": "MANUAL"}' | jq`
+*   **`GET /api/v1/setup/config`**
+    *   Description: Get the current application configuration (sensitive data excluded).
+    *   `curl -X GET "http://localhost:8000/api/v1/setup/config" | jq`
 
-```bash
-docker build -t your-registry/k8s-anomaly-detector:3.0.0 .
-docker push your-registry/k8s-anomaly-detector:3.0.0
-```
+### Metrics & Model Endpoints
+
+#### Metrics
+
+*   **`GET /api/v1/metrics/`**
+    *   Description: Fetch the latest metrics snapshot from Prometheus for all monitored entities.
+    *   `curl -X GET "http://localhost:8000/api/v1/metrics/" | jq`
+*   **`GET /api/v1/metrics/queries`**
+    *   Description: Get the list of active PromQL queries used for monitoring.
+    *   `curl -X GET "http://localhost:8000/api/v1/metrics/queries" | jq`
+*   **`GET /api/v1/metrics/model/info`**
+    *   Description: Get information about the anomaly detection model (status, parameters).
+    *   `curl -X GET "http://localhost:8000/api/v1/metrics/model/info" | jq`
+
+### Anomalies & Remediation Endpoints
+
+#### Anomalies
+
+*   **`POST /api/v1/anomalies/analyze/{anomaly_id}`**
+    *   Description: Trigger AI analysis for a specific anomaly event. Requires Gemini API key.
+    *   `curl -X POST "http://localhost:8000/api/v1/anomalies/analyze/YOUR_ANOMALY_EVENT_ID" | jq`
+
+#### Remediation
+
+*   **`GET /api/v1/remediation/events`**
+    *   Description: List detected anomaly events. Filter by status (e.g., `?status=Detected`, `?status=RemediationSuggested`).
+    *   `curl -X GET "http://localhost:8000/api/v1/remediation/events?limit=10" | jq`
+    *   `curl -X GET "http://localhost:8000/api/v1/remediation/events?status=RemediationSuggested" | jq`
+*   **`GET /api/v1/remediation/events/{anomaly_id}`**
+    *   Description: Get details for a specific anomaly event.
+    *   `curl -X GET "http://localhost:8000/api/v1/remediation/events/YOUR_ANOMALY_EVENT_ID" | jq`
+*   **`POST /api/v1/remediation/events/{anomaly_id}/remediate`**
+    *   Description: Manually execute a specific remediation command for an anomaly event. Use commands listed by `/commands` or suggested in the event details.
+    *   `curl -X POST "http://localhost:8000/api/v1/remediation/events/YOUR_ANOMALY_EVENT_ID/remediate" -H "Content-Type: application/json" -d '{"command": "restart_deployment name=my-app namespace=dev"}' | jq`
+*   **`GET /api/v1/remediation/commands`**
+    *   Description: List available, validated Kubernetes commands that KubeWise can execute.
+    *   `curl -X GET "http://localhost:8000/api/v1/remediation/commands" | jq`
+
+---
+
+## 🔧 Configuration
+
+KubeWise uses environment variables for configuration, typically loaded from a `.env` file in the project root.
 
 ### Configuration Options
 
-#### Core Configuration Options
-
-| Parameter | Description | Default | Required |
-|-----------|-------------|---------|----------|
-| `MONGODB_ATLAS_URI` | MongoDB connection string | - | Yes |
-| `MONGODB_DB_NAME` | MongoDB database name | `k8s_monitoring` | No |
-| `GEMINI_API_KEY` | Google Gemini API key | - | Yes |
-| `PROMETHEUS_URL` | Prometheus server URL | `http://localhost:9090` | No |
-| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | `INFO` | No |
-| `WORKER_SLEEP_INTERVAL_SECONDS` | Time between worker processing cycles | `30` | No |
-| `PROMETHEUS_SCRAPE_INTERVAL_SECONDS` | Metrics scraping interval | `15` | No |
-| `ANOMALY_SCORE_THRESHOLD` | Threshold for anomaly detection | `-0.2` | No |
-| `ANOMALY_METRIC_WINDOW_SECONDS` | Time window for metrics history | `600` | No |
-| `ANOMALY_MODEL_PATH` | Path to pre-trained model file | `models/anomaly_detector_scaler.joblib` | No |
-| `REMEDIATION_MODE` | Operation mode (AUTO or MANUAL) | `MANUAL` | No |
-
-#### Feature Flag Options
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `GEMINI_AUTO_ANALYSIS` | Enable automatic anomaly analysis with Gemini | `true` |
-| `GEMINI_AUTO_VERIFICATION` | Enable automatic verification of remediation | `true` |
-| `DEFAULT_PROMQL_QUERIES` | List of default PromQL queries if none detected | *[see documentation]* |
-
----
-
-## 🚀 Usage & Operation
-
-### Starting the System
-
-#### Local Development
-
-```bash
-# Start with default configuration
-uvicorn app.main:app --reload
-
-# Start with specific log level
-LOG_LEVEL=DEBUG uvicorn app.main:app --reload
-
-# Start with specific port
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
-```
-
-#### Production Mode
-
-```bash
-# Start with production settings
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-### Web Interface & API Documentation
-
-The system provides interactive API documentation:
-
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-
-### Operation Modes
-
-#### MANUAL Mode
-
-In MANUAL mode, the system detects anomalies and suggests remediation, but requires explicit API calls to execute commands.
-
-```bash
-# Set MANUAL mode
-curl -X POST "http://localhost:8000/api/v1/setup/mode" \
-     -H "Content-Type: application/json" \
-     -d '{"mode": "MANUAL"}'
-```
-
-When an anomaly is detected:
-1. The system creates an anomaly event in MongoDB
-2. Gemini AI analyzes the anomaly and suggests remediation
-3. You can view events and suggested commands via the API
-4. You must explicitly call the remediate endpoint to execute commands
-
-#### AUTO Mode
-
-In AUTO mode, the system automatically executes validated remediation commands.
-
-```bash
-# Set AUTO mode
-curl -X POST "http://localhost:8000/api/v1/setup/mode" \
-     -H "Content-Type: application/json" \
-     -d '{"mode": "AUTO"}'
-```
-
-When an anomaly is detected:
-1. The system creates an anomaly event in MongoDB
-2. Gemini AI analyzes the anomaly and suggests remediation
-3. The system validates and executes safe remediation commands
-4. After a verification delay, the system checks if remediation was successful
-
-### Monitoring System Activity
-
-#### View Current Metrics
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/metrics"
-```
-
-Example response:
-```json
-{
-  "metrics": {
-    "deployment/nginx-deployment": {
-      "entity_id": "nginx-deployment",
-      "entity_type": "deployment",
-      "namespace": "default",
-      "metrics": [
-        {
-          "query": "sum(rate(container_cpu_usage_seconds_total{container!=\"POD\",pod=~\"nginx-deployment-.*\"}[5m])) by (pod)",
-          "values": [[1618245000, "0.21"], [1618245015, "0.65"], ...],
-          "labels": {"pod": "nginx-deployment-7b9b4b6fb7-abcd1"}
-        },
-        ...
-      ]
-    },
-    ...
-  }
-}
-```
-
-#### List Anomaly Events
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/remediation/events"
-```
-
-Example response:
-```json
-{
-  "events": [
-    {
-      "anomaly_id": "f82b4a7e-1c2d-4e5f-6g7h-8i9j0k1l2m3n",
-      "status": "RemediationSuggested",
-      "detection_timestamp": "2023-04-13T14:25:30.123456",
-      "entity_id": "nginx-deployment",
-      "entity_type": "deployment",
-      "namespace": "default",
-      "anomaly_score": -0.35,
-      "suggested_remediation_commands": [
-        "restart_deployment name=nginx-deployment ns=default",
-        "scale_deployment name=nginx-deployment ns=default replicas=3"
-      ],
-      "ai_analysis": {
-        "root_cause": "Memory pressure on deployment pods",
-        "severity": "MEDIUM",
-        "description": "The deployment is experiencing memory pressure..."
-      }
-    },
-    ...
-  ]
-}
-```
-
-#### Manually Execute Remediation
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/remediation/events/f82b4a7e-1c2d-4e5f-6g7h-8i9j0k1l2m3n/remediate" \
-     -H "Content-Type: application/json" \
-     -d '{"command": "restart_deployment name=nginx-deployment ns=default"}'
-```
-
-Example response:
-```json
-{
-  "status": "success",
-  "message": "Remediation command executed successfully",
-  "event_id": "f82b4a7e-1c2d-4e5f-6g7h-8i9j0k1l2m3n",
-  "command": "restart_deployment name=nginx-deployment ns=default",
-  "result": {
-    "status": "success",
-    "timestamp": "2023-04-13T14:30:45.123456"
-  }
-}
-```
-
-#### Manual Anomaly Analysis
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/anomalies/analyze/f82b4a7e-1c2d-4e5f-6g7h-8i9j0k1l2m3n"
-```
-
-#### Check System Health
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/health"
-```
-
-Example response:
-```json
-{
-  "status": "healthy",
-  "version": "3.0.0",
-  "services": {
-    "API": {
-      "status": "healthy",
-      "message": "API is operational"
-    },
-    "MongoDB": {
-      "status": "healthy",
-      "message": "Connected to MongoDB Atlas"
-    },
-    "Prometheus": {
-      "status": "healthy",
-      "message": "Connected to Prometheus at http://localhost:9090"
-    },
-    "Kubernetes": {
-      "status": "healthy",
-      "message": "Connected to Kubernetes cluster with 3 nodes"
-    },
-    "Gemini API": {
-      "status": "healthy",
-      "message": "Gemini API client initialized successfully"
-    },
-    "Worker": {
-      "status": "healthy",
-      "message": "Worker process running normally"
-    }
-  },
-  "timestamp": "2023-04-13T15:00:00.123456"
-}
-```
-
-### Understanding System Logs
-
-The application uses structured logging with Loguru. Log formats include:
-
-```
-2023-04-13 15:00:00.123 | INFO     | app.worker:run_cycle:307 - Starting worker cycle... Mode: MANUAL
-2023-04-13 15:00:01.456 | WARNING  | app.worker:_predict_and_handle_anomaly:97 - Anomaly DETECTED for entity deployment/nginx-deployment with score -0.35
-2023-04-13 15:00:02.789 | INFO     | app.services.gemini_service:batch_process_anomaly:747 - Received both analysis and remediation in a single Gemini API call
-```
-
----
-
-## 📘 API Reference
-
-### Health & Status Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/health` | GET | Check system health and component status |
-| `/api/v1/setup/mode` | GET | Get current remediation mode (AUTO/MANUAL) |
-| `/api/v1/setup/mode` | POST | Set remediation mode |
-| `/api/v1/setup/config` | GET | Get current system configuration |
-
-### Metrics & Monitoring
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/metrics` | GET | Get current metrics from Prometheus |
-| `/api/v1/metrics/queries` | GET | Get active PromQL queries |
-| `/api/v1/metrics/model/info` | GET | Get anomaly model information |
-| `/api/v1/metrics/model/train` | POST | Manually trigger model training |
-
-### Anomaly Management
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/remediation/events` | GET | List anomaly events with optional filtering |
-| `/api/v1/remediation/events/{anomaly_id}` | GET | Get detailed anomaly information |
-| `/api/v1/anomalies/analyze/{anomaly_id}` | POST | Manually analyze an anomaly |
-
-### Remediation Management
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/remediation/commands` | GET | List available remediation commands |
-| `/api/v1/remediation/events/{anomaly_id}/remediate` | POST | Execute remediation command |
-
----
-
-## 💻 Technology Stack
-
-### Core Technologies
-
-| Technology | Purpose | Benefits |
-|------------|---------|----------|
-| **Python 3.9+** | Primary programming language | Async support, strong ML ecosystem |
-| **FastAPI** | API framework | High performance, async/await support, auto-docs |
-| **Kubernetes Python Client** | K8s API interaction | Official client with comprehensive API coverage |
-| **Scikit-learn** | Machine learning | Robust anomaly detection with Isolation Forest |
-| **Google Gemini API** | AI for analysis and remediation | Advanced reasoning capabilities for complex analysis |
-| **MongoDB** | Database for events & metrics | Flexible schema design for metric data |
-| **Prometheus** | Metrics collection | Industry standard for K8s monitoring |
-
-### Key Libraries
-
-| Library | Purpose |
-|---------|---------|
-| **Pydantic** | Data validation and settings management |
-| **Loguru** | Structured logging with improved developer experience |
-| **Motor** | Async MongoDB driver |
-| **Joblib** | Model serialization/deserialization |
-| **Numpy** | Numerical operations for ML |
-| **Prometheus Client** | Prometheus integration |
-| **Httpx** | Async HTTP client |
-| **python-dotenv** | Environment variable management |
-
-### Design Patterns
-
-- **Dependency Injection**: For services and components
-- **Repository Pattern**: For data access abstraction
-- **Service Layer**: Business logic separation
-- **Event-Driven**: For anomaly detection and remediation flow
-- **Worker Process**: Background task processing
-
----
-
-## 🧩 Development & Contribution
-
-### Project Structure
-
-```
-k8s-anomaly-detector/
-├── app/                      # Application code
-│   ├── api/                  # API routers
-│   │   ├── anomaly_router.py # Anomaly-related endpoints
-│   │   ├── health_router.py  # Health check endpoints
-│   │   ├── metrics_router.py # Metrics-related endpoints
-│   │   ├── remediation_router.py # Remediation endpoints
-│   │   └── setup_router.py   # System configuration endpoints
-│   ├── core/                 # Core functionality
-│   │   ├── config.py         # Application configuration
-│   │   ├── database.py       # Database connection
-│   │   ├── logger.py         # Logger configuration
-│   │   └── middleware.py     # FastAPI middleware
-│   ├── models/               # Data models
-│   │   ├── anomaly_detector.py # ML model for anomaly detection
-│   │   ├── anomaly_event.py    # Anomaly event data model
-│   │   └── common.py         # Common/shared models
-│   ├── services/             # Business logic services
-│   │   ├── anomaly_event_service.py # Anomaly event management
-│   │   ├── gemini_service.py # Google Gemini AI integration
-│   │   └── mode_service.py   # Remediation mode management
-│   ├── utils/                # Utility functions
-│   │   ├── cli_aesthetics.py # CLI output formatting
-│   │   ├── health_checker.py # Component health checks
-│   │   ├── k8s_config.py     # Kubernetes configuration
-│   │   ├── k8s_executor.py   # Kubernetes operation executor
-│   │   ├── prometheus_client.py # Prometheus API client
-│   │   └── prometheus_scraper.py # Metric scraping logic
-│   ├── main.py               # FastAPI application entry point
-│   └── worker.py             # Autonomous worker process
-├── models/                   # ML model files
-│   └── anomaly_detector_scaler.joblib # Pre-trained model
-├── prometheus/               # Prometheus configuration
-│   └── prometheus.yml        # Prometheus config
-├── .env                      # Environment variables (not in repo)
-├── docker-compose.yml        # Local development environment
-├── Dockerfile                # Container definition
-├── requirements.txt          # Python dependencies
-└── README.md                 # Project documentation
-```
-
-### Development Workflow
-
-1. **Set Up Development Environment**
-   ```bash
-   # Clone repository
-   git clone https://github.com/your-org/k8s-anomaly-detector.git
-
-   # Create virtual environment
-   python -m venv venv
-   source venv/bin/activate
-
-   # Install dependencies
-   pip install -r requirements.txt
-   ```
-
-2. **Run Tests**
-   ```bash
-   # Run unit tests
-   pytest
-
-   # Run with coverage
-   pytest --cov=app
-   ```
-
-3. **Code Style & Linting**
-   ```bash
-   # Check code style
-   flake8 app
-
-   # Format code
-   black app
-
-   # Check typing
-   mypy app
-   ```
-
-### Adding New Features
-
-#### 1. Adding a New Remediation Command
-
-1. Update the `_define_safe_operations` method in `app/utils/k8s_executor.py`:
-   ```python
-   def _define_safe_operations(self):
-       """Define safe operations that can be executed"""
-       self.safe_operations = {
-           # Existing operations...
-
-           # New operation
-           "new_command_name": {
-               "api": "apps_v1", "method": "api_method_name",
-               "required": ["param1", "param2"], "optional": ["param3"],
-               "validation": lambda p: "param1" in p and "param2" in p,
-               "patch_body": lambda p: {"spec": {"yourField": p["param1"]}}
-           },
-       }
-   ```
-
-2. Add the command handler if needed (for complex commands):
-   ```python
-   async def _handle_new_command(self, param1: str, param2: str, param3: Optional[str] = None) -> Dict[str, Any]:
-       """Handle new command execution."""
-       if not self.apps_v1:
-           return {"error": "Kubernetes client not available"}
-
-       try:
-           # Implementation
-           pass
-       except Exception as e:
-           logger.error(f"Error executing new command: {e}")
-           return {"error": f"Error: {str(e)}"}
-   ```
-
-#### 2. Extending the Anomaly Detection Model
-
-1. Update feature engineering in `app/models/anomaly_detector.py`:
-   ```python
-   def _engineer_features_aggregate(self, data_snapshots: List[List[Dict[str, Any]]]) -> np.ndarray:
-       # Existing code...
-
-       # Add new metric handling
-       elif 'new_metric_name' in query:
-           new_metric_stats[0] = np.mean(metric_values)
-           new_metric_stats[1] = np.max(metric_values)
-
-       # Include new feature in vector
-       entity_feature_vector.extend(new_metric_stats)  # Add new features
-   ```
-
-2. Update model training if needed.
-
-### Contribution Guidelines
-
-1. **Fork and Branch**
-   - Fork the repository
-   - Create a feature branch: `git checkout -b feature/my-feature`
-
-2. **Code Standards**
-   - Follow PEP 8 style guidelines
-   - Use type hints for function parameters and return values
-   - Document code using docstrings (Google style)
-   - Keep functions focused and single-purpose
-
-3. **Testing**
-   - Write unit tests for new functionality
-   - Ensure all existing tests pass
-   - Aim for at least 80% code coverage
-
-4. **Pull Requests**
-   - Submit a pull request with detailed description
-   - Link to relevant issues
-   - Ensure CI/CD pipeline passes
-   - Request code review from maintainers
-
----
-
-## 🛠 Troubleshooting
-
-### Common Issues
-
-#### Connection to Prometheus Failed
-
-```
-ERROR:     Failed to connect to Prometheus: ConnectError
-```
-
-**Solution**:
-- Verify your Prometheus URL in the configuration
-- Check network connectivity and firewall rules
-- Ensure Prometheus is running with proper permissions
-
-#### Gemini API Key Issues
-
-```
-WARNING:    Gemini service disabled: GEMINI_API_KEY not set
-```
-
-**Solution**:
-- Verify your Gemini API key is correctly set in the environment
-- Check for API key quotas or usage limitations
-- Ensure your Gemini API key has the necessary permissions
-
-#### Model Loading Failed
-
-```
-CRITICAL:   Failed to load model/scaler from models/anomaly_detector_scaler.joblib
-```
-
-**Solution**:
-- Ensure the model file exists at the specified path
-- Verify file permissions allow reading
-- Check if the model format is compatible with your scikit-learn version
-- If needed, train a new model
-
-#### Worker Process Errors
-
-```
-ERROR:     Error during worker cycle: OperationTimeout
-```
-
-**Solution**:
-- Check MongoDB connection parameters
-- Verify Prometheus is responding within timeouts
-- Increase worker interval if needed
-
-### Debug Mode
-
-Enable debug logging for more verbose output:
-
-```
-LOG_LEVEL=DEBUG uvicorn app.main:app --reload
-```
-
-### Logs
-
-The application uses structured logging with Loguru. Check logs at:
-- Console output when running in development mode
-- Log files (if configured in the environment)
-- Container logs when running in Kubernetes
-
-### Diagnostic Endpoints
-
-The system provides diagnostic endpoints for troubleshooting:
-
-- `/api/v1/health`: Check system health and component status
-- `/api/v1/metrics/queries`: View current PromQL queries
-
----
-
-## 📄 License & Contact
-
-### License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-### Contact Information
-
-- **Project Maintainer**: [Your Name](mailto:your.email@example.com)
-- **Issue Tracker**: [GitHub Issues](https://github.com/your-org/k8s-anomaly-detector/issues)
-- **Documentation**: [Project Wiki](https://github.com/your-org/k8s-anomaly-detector/wiki)
-
----
-
-<div align="center">
-  <p>Made with ❤️ for Kubernetes observability and autonomous operations</p>
-</div>
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PROMETHEUS_URL` | Endpoint for your Prometheus server | `http://localhost:9090` |
+| `GEMINI_API_KEY` | Your Google Gemini API Key | None (required for AI) |
+| `DEFAULT_REMEDIATION_MODE` | Set to `MANUAL` or `AUTO` | `MANUAL` |
+| `LOG_LEVEL` | Controls log verbosity | `INFO` |
+| `WORKER_SLEEP_INTERVAL_SECONDS` | How often monitoring cycle runs | `15` |
+| `PROMETHEUS_SCRAPE_INTERVAL_SECONDS` | Frequency of metric collection | `15` |
+| `ANOMALY_METRIC_WINDOW_SECONDS` | Duration of metric history kept | `3600` |
+| `GEMINI_AUTO_QUERY_GENERATION` | Enable AI PromQL generation | `False` |
+| `GEMINI_AUTO_ANALYSIS` | Enable AI analysis | `True` |
+| `GEMINI_AUTO_VERIFICATION` | Enable AI verification | `True` |
+| `AUTO_REMEDIATE_CRITICAL` | Auto-fix critical issues | `False` |
+
+> 📝 Refer to `app/core/config.py` for the full list of settings and their defaults.
+
+## 📄 License
+
+Distributed under the Proprietary License. See [`LICENSE`](LICENSE) file for more information.

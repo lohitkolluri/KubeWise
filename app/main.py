@@ -2,31 +2,28 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 import asyncio
-import os
-import sys
 from app.core.config import settings
-from app.core.database import database, get_database
 from app.core.logger import setup_logger
 from app.core.middleware import prometheus_middleware
 from app.utils.health_checker import HealthChecker
 from app.utils.prometheus_client import prometheus
 from app.utils.cli_aesthetics import (
     print_ascii_banner, print_version_info,
-    start_spinner, print_service_dashboard, print_shutdown_message,
-    ServiceStatus
+    start_spinner, print_service_dashboard, print_shutdown_message
 )
 from app.api import health_router, metrics_router, remediation_router, setup_router, anomaly_router
 from app.worker import AutonomousWorker
 from app.services.anomaly_event_service import AnomalyEventService
 from app.services.gemini_service import GeminiService
 from app.services.mode_service import mode_service
+from app.core.dependencies.service_factory import set_gemini_service
+
+# Display startup banner with ASCII art first
+print_ascii_banner()
+print_version_info(version="3.1.0", mode=mode_service.get_mode())
 
 # Setup logging
 setup_logger()
-
-# --- Global Service Instances ---
-# Instantiate GeminiService globally if API key is available
-gemini_service_instance = GeminiService() if settings.GEMINI_API_KEY else None
 
 # Create FastAPI app
 app = FastAPI(
@@ -52,7 +49,7 @@ app = FastAPI(
     - **Remediation**: Manage and apply remediations for detected anomalies
     - **Setup**: Configure system settings and environment variables
     """,
-    version="3.0.0",
+    version="3.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_tags=[
@@ -96,16 +93,16 @@ app.add_middleware(
 # Add Prometheus middleware
 app.middleware("http")(prometheus_middleware)
 
-# Include routers
+# Global instances for state management
+worker_instance = None
+worker_task = None
+
+# Include routers with dependency injection
 app.include_router(health_router.router, prefix=settings.API_V1_STR)
 app.include_router(metrics_router.router, prefix=settings.API_V1_STR)
 app.include_router(remediation_router.router, prefix=settings.API_V1_STR)
 app.include_router(setup_router.router, prefix=settings.API_V1_STR)
 app.include_router(anomaly_router.router, prefix=settings.API_V1_STR)
-
-# Global worker state
-worker_task = None
-worker_instance = None
 
 async def setup_monitoring_if_needed():
     """
@@ -123,71 +120,30 @@ async def setup_monitoring_if_needed():
             return False
     return False
 
-async def load_env_settings_from_db(db):
-    """Load environment settings from database and apply them to the current runtime."""
-    try:
-        config_doc = await db.system_config.find_one({"_id": "environment_settings"})
-        if not config_doc or "settings" not in config_doc:
-            logger.info("No stored environment settings found during startup")
-            return False
-
-        stored_settings = config_doc["settings"]
-        if not stored_settings:
-            logger.info("Empty environment settings document found during startup")
-            return False
-
-        # Apply environment variables
-        env_vars_applied = 0
-        for key, value in stored_settings.items():
-            if value is not None and value != "":
-                os.environ[key] = str(value)
-                env_vars_applied += 1
-
-        logger.info(f"Applied {env_vars_applied} environment variables from database during startup")
-        return True
-    except Exception as e:
-        logger.error(f"Error loading environment settings from database: {e}")
-        return False
-
 @app.on_event("startup")
 async def startup_event():
     """Handle application startup, including service initialization and worker setup."""
     global worker_task, worker_instance
 
-    # Display startup banner with ASCII art
-    print_ascii_banner()
-    print_version_info(version="3.0.0", mode=mode_service.get_mode())
-
     # Initialize services status dashboard
     services_status = {
-        "MongoDB": {"status": "initializing", "message": "Connecting to database..."},
         "Prometheus": {"status": "initializing", "message": "Checking connection..."},
         "Gemini API": {"status": "initializing", "message": "Initializing..."},
         "Worker": {"status": "initializing", "message": "Not started"}
     }
 
     try:
-        # Initialize MongoDB spinner
-        mongo_spinner = start_spinner("Connecting to MongoDB...")
-
         logger.info("Starting application initialization...")
-        await database.connect_to_database()
-        db_instance = await get_database()
 
-        # Update MongoDB status and stop spinner
-        mongo_spinner.stop(True, "MongoDB connection successful")
-        services_status["MongoDB"] = {"status": "healthy", "message": "Connection established"}
+        # Initialize the Gemini service if API key is available
+        gemini_service_instance = None
+        if settings.GEMINI_API_KEY:
+            gemini_service_instance = GeminiService()
+            # Set the global Gemini service instance in service_factory
+            set_gemini_service(gemini_service_instance)
 
-        # Start environment settings spinner
-        env_spinner = start_spinner("Loading environment settings...")
-
-        # Load environment settings from database
-        await load_env_settings_from_db(db_instance)
-
-        env_spinner.stop(True, "Environment settings loaded")
-
-        # Create anomaly service
-        anomaly_event_service = AnomalyEventService(db_instance)
+        # Create anomaly service - with file-based storage instead of MongoDB
+        anomaly_event_service = AnomalyEventService()
 
         # Start health check spinner
         health_spinner = start_spinner("Performing dependency checks...")
@@ -199,15 +155,6 @@ async def startup_event():
         health_spinner.stop(True, "Dependency checks completed")
 
         # Update services status based on health checks
-        if health_status["mongo"]["status"] == "healthy":
-            services_status["MongoDB"]["status"] = "healthy"
-            services_status["MongoDB"]["message"] = "Connection successful"
-        else:
-            services_status["MongoDB"]["status"] = "error"
-            services_status["MongoDB"]["message"] = health_status["mongo"]["message"]
-            logger.error(f"MongoDB connection failed: {health_status['mongo']['message']}")
-            raise RuntimeError("MongoDB connection failed at startup. Aborting.")
-
         if "prometheus" in health_status:
             if health_status["prometheus"]["status"] == "healthy":
                 services_status["Prometheus"]["status"] = "healthy"
@@ -284,10 +231,6 @@ async def shutdown_event():
         else:
             shutdown_spinner.stop(True, "No active worker to cancel")
 
-        db_spinner = start_spinner("Closing database connections...")
-        await database.close_database_connection()
-        db_spinner.stop(True, "Database connections closed")
-
         logger.success("KubeWise shutdown completed successfully.")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
@@ -301,7 +244,7 @@ async def root():
     """Root endpoint providing basic application information."""
     return {
         "name": settings.PROJECT_NAME,
-        "version": "3.0.0",
+        "version": "3.1.0",
         "description": "AI-Powered Kubernetes Anomaly Detection and Remediation",
         "remediation_mode": mode_service.get_mode()
     }

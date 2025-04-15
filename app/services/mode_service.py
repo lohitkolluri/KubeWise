@@ -1,43 +1,47 @@
 from app.core.config import settings
 from loguru import logger
 from typing import Optional
-import asyncio
+import os
+import json
+import pathlib
 from datetime import datetime
 
 class ModeService:
     """
     Service to manage the operation mode of the system.
     Maintains the current mode (MANUAL/AUTO) and exposes methods to get/set it.
-    Now supports persistent storage in MongoDB.
+    Uses file-based storage for persistence.
     """
     def __init__(self):
         self._current_mode = settings.DEFAULT_REMEDIATION_MODE  # Default from config
-        self._db = None  # Will be set after service initialization
+        self._config_file = pathlib.Path("data/config/mode.json")
         self._initialized = False
+        self._initialize()
 
-    def set_db(self, db_instance):
-        """Set the database instance for persistence."""
-        self._db = db_instance
-
-    async def initialize(self):
-        """Initialize mode from database."""
-        if self._initialized or not self._db:
+    def _initialize(self):
+        """Initialize mode from file storage."""
+        if self._initialized:
             return
 
         try:
-            # Attempt to retrieve mode from database
-            config_doc = await self._db.system_config.find_one({"_id": "operation_mode"})
-            if config_doc and "mode" in config_doc:
-                self._current_mode = config_doc["mode"]
-                logger.info(f"Loaded operation mode from database: {self._current_mode}")
+            # Create directory if it doesn't exist
+            self._config_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Attempt to read mode from file
+            if self._config_file.exists():
+                with open(self._config_file, 'r') as file:
+                    config = json.load(file)
+                    if config and "mode" in config:
+                        self._current_mode = config["mode"]
+                        logger.info(f"Loaded operation mode from file: {self._current_mode}")
             else:
-                # Save default mode if not found
-                await self._persist_mode()
-                logger.info(f"Initialized operation mode in database: {self._current_mode}")
+                # Save default mode if file not found
+                self._persist_mode()
+                logger.info(f"Initialized operation mode in file: {self._current_mode}")
 
             self._initialized = True
         except Exception as e:
-            logger.error(f"Error initializing mode from database: {e}")
+            logger.error(f"Error initializing mode from file: {e}")
             # Fall back to default mode from settings
 
     def get_mode(self) -> str:
@@ -57,45 +61,28 @@ class ModeService:
         if self._current_mode != mode:
             self._current_mode = mode
             logger.info(f"Operation mode changed to: {mode}")
-
-            # Persist to database if available
-            if self._db:
-                await self._persist_mode()
+            self._persist_mode()
 
         return True
 
-    async def _persist_mode(self):
-        """Save the current mode to MongoDB for persistence."""
-        if not self._db:
-            return
-
+    def _persist_mode(self):
+        """Save the current mode to file for persistence."""
         try:
-            await self._db.system_config.update_one(
-                {"_id": "operation_mode"},
-                {"$set": {
-                    "mode": self._current_mode,
-                    "updated_at": datetime.utcnow()
-                }},
-                upsert=True
-            )
-            logger.debug(f"Persisted operation mode to database: {self._current_mode}")
+            # Ensure directory exists
+            self._config_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write mode to file
+            config = {
+                "mode": self._current_mode,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+
+            with open(self._config_file, 'w') as file:
+                json.dump(config, file, indent=2)
+
+            logger.debug(f"Persisted operation mode to file: {self._current_mode}")
         except Exception as e:
-            logger.error(f"Failed to persist mode to database: {e}")
-
-    async def wait_for_db(self, max_attempts: int = 5, retry_delay: int = 2):
-        """Wait for database to be available and then initialize."""
-        attempts = 0
-        while attempts < max_attempts:
-            if self._db:
-                await self.initialize()
-                return True
-
-            logger.warning(f"Database not yet available for mode service, retrying... ({attempts+1}/{max_attempts})")
-            attempts += 1
-            await asyncio.sleep(retry_delay)
-
-        logger.error("Failed to initialize mode service with database after maximum attempts")
-        return False
+            logger.error(f"Failed to persist mode to file: {e}")
 
 # Global instance
 mode_service = ModeService()

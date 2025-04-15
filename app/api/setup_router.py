@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from app.core.database import get_database
 from app.services.mode_service import mode_service
 from app.core.config import settings
 from loguru import logger
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 import os
+from typing import Dict, Any
 
 router = APIRouter(
     prefix="/setup",
@@ -45,7 +43,7 @@ async def get_current_mode():
         "message": f"Current operation mode is {current_mode}"
     }
 
-@router.post("/mode",
+@router.put("/mode",
             response_model=ModeResponse,
             summary="Update operation mode",
             description="Change the system's remediation mode between AUTO (automatic remediation) and MANUAL (suggested remediation)")
@@ -100,328 +98,48 @@ async def get_config():
             - config: Dictionary of configuration settings (sensitive values excluded)
     """
     # Filter out sensitive information
-    config = settings.dict(exclude={"MONGODB_ATLAS_URI", "GEMINI_API_KEY"})
+    config = settings.model_dump(exclude={"GEMINI_API_KEY"})
 
     return {
         "status": "success",
-        "config": config
+        "config": config,
+        "note": "Configuration is sourced from environment variables (.env file)"
     }
 
-@router.post("/settings/env",
-           summary="Store environment variables",
-           description="Store multiple environment variables in MongoDB for persistence between application restarts")
-async def store_env_settings(env_settings: Dict[str, Any], db=Depends(get_database)):
-    """
-    Store environment variables in MongoDB for persistence.
-
-    Parameters:
-        env_settings (Dict[str, Any]): Dictionary of environment variable key-value pairs
-        db: MongoDB database connection (injected)
-
-    Returns:
-        dict: Operation result containing:
-            - status: "success" or "error"
-            - message: Description of the operation result
-
-    Raises:
-        HTTPException: If no valid settings are provided or storage fails
-    """
-    try:
-        # Filter out empty values
-        filtered_settings = {k: v for k, v in env_settings.items() if v is not None and v != ""}
-
-        if not filtered_settings:
-            raise HTTPException(
-                status_code=400,
-                detail="No valid settings provided"
-            )
-
-        # Store settings in MongoDB
-        await db.system_config.update_one(
-            {"_id": "environment_settings"},
-            {"$set": {
-                "settings": filtered_settings,
-                "updated_at": datetime.utcnow()
-            }},
-            upsert=True
-        )
-
-        logger.info(f"Stored {len(filtered_settings)} environment settings")
-
-        return {
-            "status": "success",
-            "message": f"Successfully stored {len(filtered_settings)} environment settings"
-        }
-    except Exception as e:
-        logger.error(f"Error storing environment settings: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to store environment settings: {str(e)}"
-        )
-
-@router.patch("/settings/env",
-            summary="Update environment variables",
-            description="Update specific environment variables without affecting existing ones")
-async def update_env_settings(env_updates: Dict[str, Any], db=Depends(get_database)):
-    """
-    Update specific environment variables without affecting others.
-
-    Parameters:
-        env_updates (Dict[str, Any]): Dictionary of environment variable key-value pairs to update
-        db: MongoDB database connection (injected)
-
-    Returns:
-        dict: Operation result containing:
-            - status: "success" or "error"
-            - message: Description of the operation result
-            - updated_keys: List of keys that were updated
-
-    Raises:
-        HTTPException: If no valid updates are provided or update fails
-    """
-    try:
-        # Filter out empty values
-        filtered_updates = {k: v for k, v in env_updates.items() if v is not None}
-
-        if not filtered_updates:
-            raise HTTPException(
-                status_code=400,
-                detail="No valid updates provided"
-            )
-
-        # Get current settings
-        config_doc = await db.system_config.find_one({"_id": "environment_settings"})
-        current_settings = {}
-
-        if config_doc and "settings" in config_doc:
-            current_settings = config_doc["settings"]
-
-        # Update settings
-        updated_settings = {**current_settings, **filtered_updates}
-
-        # Store updated settings in MongoDB
-        await db.system_config.update_one(
-            {"_id": "environment_settings"},
-            {"$set": {
-                "settings": updated_settings,
-                "updated_at": datetime.utcnow()
-            }},
-            upsert=True
-        )
-
-        # Apply updates to current environment
-        for key, value in filtered_updates.items():
-            if value is not None and value != "":
-                os.environ[key] = str(value)
-
-        logger.info(f"Updated {len(filtered_updates)} environment settings")
-
-        return {
-            "status": "success",
-            "message": f"Successfully updated {len(filtered_updates)} environment settings",
-            "updated_keys": list(filtered_updates.keys())
-        }
-    except Exception as e:
-        logger.error(f"Error updating environment settings: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update environment settings: {str(e)}"
-        )
-
-@router.delete("/settings/env",
-             summary="Delete environment variables",
-             description="Remove specific environment variables from the stored settings")
-async def delete_env_settings(keys: List[str], db=Depends(get_database)):
-    """
-    Delete specific environment variables from the stored settings.
-
-    Parameters:
-        keys (List[str]): List of environment variable keys to delete
-        db: MongoDB database connection (injected)
-
-    Returns:
-        dict: Operation result containing:
-            - status: "success" or "warning"
-            - message: Description of the operation result
-            - deleted_keys: List of keys that were deleted
-
-    Raises:
-        HTTPException: If no keys are provided or deletion fails
-    """
-    try:
-        if not keys:
-            raise HTTPException(
-                status_code=400,
-                detail="No keys provided for deletion"
-            )
-
-        # Get current settings
-        config_doc = await db.system_config.find_one({"_id": "environment_settings"})
-        if not config_doc or "settings" not in config_doc:
-            return {
-                "status": "warning",
-                "message": "No environment settings found to delete from"
-            }
-
-        current_settings = config_doc["settings"]
-
-        # Remove specified keys
-        deleted_keys = []
-        for key in keys:
-            if key in current_settings:
-                del current_settings[key]
-                deleted_keys.append(key)
-
-        if not deleted_keys:
-            return {
-                "status": "warning",
-                "message": "None of the specified keys were found in stored settings"
-            }
-
-        # Store updated settings
-        await db.system_config.update_one(
-            {"_id": "environment_settings"},
-            {"$set": {
-                "settings": current_settings,
-                "updated_at": datetime.utcnow()
-            }}
-        )
-
-        logger.info(f"Deleted {len(deleted_keys)} environment variables from settings")
-
-        return {
-            "status": "success",
-            "message": f"Successfully deleted {len(deleted_keys)} environment variables",
-            "deleted_keys": deleted_keys,
-            "note": "Deleted variables may still be active in the current session until restart"
-        }
-    except Exception as e:
-        logger.error(f"Error deleting environment settings: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete environment settings: {str(e)}"
-        )
-
 @router.get("/settings/env",
-           summary="Get environment variables",
-           description="Retrieve the stored environment variables with sensitive information masked")
-async def get_env_settings(db=Depends(get_database)):
+           summary="Get current environment variables",
+           description="Retrieve the current environment variables with sensitive information masked")
+async def get_env_settings():
     """
-    Retrieve the stored environment variables from MongoDB.
-
-    Parameters:
-        db: MongoDB database connection (injected)
+    Retrieve the current environment variables.
 
     Returns:
         dict: Environment settings containing:
             - status: "success" or "error"
             - settings: Dictionary of environment variables (sensitive values masked)
-            - last_updated: Timestamp when settings were last updated
 
-    Raises:
-        HTTPException: If settings cannot be retrieved
+    Note:
+        To modify settings, please update your .env file directly.
     """
     try:
-        # Retrieve settings from MongoDB
-        config_doc = await db.system_config.find_one({"_id": "environment_settings"})
-
-        if not config_doc or "settings" not in config_doc:
-            return {
-                "status": "success",
-                "settings": {},
-                "message": "No environment settings found"
-            }
-
-        # Mask sensitive information
-        settings_dict = config_doc["settings"]
-        masked_settings = {}
-
-        for key, value in settings_dict.items():
-            if any(sensitive in key.upper() for sensitive in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "URI"]):
-                masked_settings[key] = "********"
-            else:
-                masked_settings[key] = value
+        # Get relevant environment variables (those used in settings)
+        env_vars = {}
+        for key in settings.model_fields.keys():
+            if key in os.environ:
+                # Mask sensitive information
+                if any(sensitive in key.upper() for sensitive in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "URI"]):
+                    env_vars[key] = "********"
+                else:
+                    env_vars[key] = os.environ[key]
 
         return {
             "status": "success",
-            "settings": masked_settings,
-            "last_updated": config_doc.get("updated_at", None)
+            "settings": env_vars,
+            "note": "To modify settings, please update your .env file and restart the application."
         }
-
     except Exception as e:
         logger.error(f"Error retrieving environment settings: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve environment settings: {str(e)}"
-        )
-
-@router.post("/settings/env/reload",
-            summary="Reload environment variables",
-            description="Reload stored environment variables and apply them to the current runtime without restarting")
-async def reload_env_settings(db=Depends(get_database)):
-    """
-    Reload environment variables from MongoDB and apply them to the current runtime.
-
-    Parameters:
-        db: MongoDB database connection (injected)
-
-    Returns:
-        dict: Operation result containing:
-            - status: "success" or "warning"
-            - message: Description of the operation result
-            - applied_variables: List of variables that were applied
-
-    Raises:
-        HTTPException: If settings cannot be reloaded
-    """
-    try:
-        # Retrieve stored environment settings
-        config_doc = await db.system_config.find_one({"_id": "environment_settings"})
-
-        if not config_doc or "settings" not in config_doc:
-            return {
-                "status": "warning",
-                "message": "No stored environment settings found to reload"
-            }
-
-        stored_settings = config_doc["settings"]
-        if not stored_settings:
-            return {
-                "status": "warning",
-                "message": "Empty environment settings document found"
-            }
-
-        # Apply environment variables
-        env_vars_applied = 0
-        applied_vars = []
-
-        for key, value in stored_settings.items():
-            # Skip if the value is None or empty string
-            if value is None or value == "":
-                continue
-
-            # Apply environment variable
-            os.environ[key] = str(value)
-            env_vars_applied += 1
-
-            # Track which variables were applied (mask sensitive values)
-            if any(sensitive in key.upper() for sensitive in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "URI"]):
-                applied_vars.append(f"{key}=********")
-            else:
-                applied_vars.append(f"{key}={value}")
-
-        logger.info(f"Reloaded {env_vars_applied} environment variables from database")
-
-        return {
-            "status": "success",
-            "message": f"Successfully reloaded {env_vars_applied} environment variables",
-            "applied_variables": applied_vars,
-            "note": "Some settings may require an application restart to take full effect"
-        }
-
-    except Exception as e:
-        logger.error(f"Error reloading environment settings: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to reload environment settings: {str(e)}"
         )

@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from typing import Dict, Any, List
-from app.utils.prometheus_scraper import prometheus_scraper
+from app.utils.prometheus_scraper import prometheus_scraper, PrometheusScraper
 from app.core.config import settings
 from app.models.anomaly_detector import anomaly_detector
+from app.worker import AutonomousWorker
 
 router = APIRouter(
     prefix="/metrics",
@@ -11,7 +12,9 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-def get_worker_instance():
+scraper = PrometheusScraper()
+
+def get_worker_instance() -> AutonomousWorker:
     """Helper to get worker instance from main app."""
     try:
         from app.main import worker_instance
@@ -110,3 +113,72 @@ async def get_model_info():
             status_code=500,
             detail=f"Error getting model info: {str(e)}"
         )
+
+@router.get("/verify",
+            summary="Verify PromQL queries",
+            description="Test the current set of PromQL queries to ensure they are working properly")
+async def verify_queries():
+    """
+    Verify the current set of PromQL queries by testing them against Prometheus.
+
+    Returns:
+        Dict containing verification results:
+            - status: str indicating overall status
+            - working_queries: List of queries that worked
+            - failed_queries: List of queries that failed with errors
+            - total_queries: int total number of queries tested
+            - success_rate: float percentage of successful queries
+    """
+    try:
+        # Get current queries from worker or use defaults
+        queries = worker.promql_queries if worker else settings.PROMQL_QUERIES
+
+        working_queries = []
+        failed_queries = []
+
+        for query_name, query in queries.items():
+            logger.info(f"Verifying query: {query_name}")
+
+            # First validate the query
+            validation = await scraper.validate_query(query)
+
+            if not validation["valid"]:
+                failed_queries.append({
+                    "name": query_name,
+                    "query": query,
+                    "error": validation["error"],
+                    "warnings": validation["warnings"]
+                })
+                continue
+
+            # If validation passed, try executing the query
+            try:
+                results = await scraper.query_prometheus(query, time_window_seconds=300)
+                working_queries.append({
+                    "name": query_name,
+                    "query": query,
+                    "warnings": validation["warnings"],
+                    "result_count": len(results)
+                })
+            except Exception as e:
+                failed_queries.append({
+                    "name": query_name,
+                    "query": query,
+                    "error": str(e),
+                    "warnings": validation["warnings"]
+                })
+
+        total_queries = len(queries)
+        success_rate = (len(working_queries) / total_queries) * 100 if total_queries > 0 else 0
+
+        return {
+            "status": "success" if success_rate > 0 else "failed",
+            "working_queries": working_queries,
+            "failed_queries": failed_queries,
+            "total_queries": total_queries,
+            "success_rate": success_rate
+        }
+
+    except Exception as e:
+        logger.error(f"Error verifying queries: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

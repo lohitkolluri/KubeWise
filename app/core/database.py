@@ -1,32 +1,81 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from loguru import logger
 from app.core.config import settings
+import os
+import pathlib
+
+# Create data directory if it doesn't exist
+data_dir = pathlib.Path("data")
+data_dir.mkdir(parents=True, exist_ok=True)
+
+# SQLite database URL
+SQLALCHEMY_DATABASE_URL = f"sqlite:///data/kubewise.db"
+ASYNC_SQLALCHEMY_DATABASE_URL = f"sqlite+aiosqlite:///data/kubewise.db"
+
+# Create the engine for synchronous operations
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+)
+
+# Create the async engine
+async_engine = create_async_engine(
+    ASYNC_SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+)
+
+# SessionLocal is a factory that produces new database session objects
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# AsyncSessionLocal is a factory for async sessions
+AsyncSessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, bind=async_engine, class_=AsyncSession
+)
+
+# Base class for SQLAlchemy models
+Base = declarative_base()
 
 class Database:
-    client: AsyncIOMotorClient = None
-    db = None
+    def __init__(self):
+        self.engine = engine
+        self.async_engine = async_engine
+        self.Base = Base
 
-    async def connect_to_database(self):
-        """Create database connection."""
+    def create_tables(self):
+        """Create all tables in the database."""
         try:
-            self.client = AsyncIOMotorClient(settings.MONGODB_ATLAS_URI)
-            self.db = self.client[settings.MONGODB_DB_NAME]
-            logger.info("Connected to MongoDB Atlas")
+            Base.metadata.create_all(bind=self.engine)
+            logger.info("Created SQLite database tables")
         except Exception as e:
-            logger.error(f"Could not connect to MongoDB: {e}")
+            logger.error(f"Could not create database tables: {e}")
             raise
 
-    async def close_database_connection(self):
-        """Close database connection."""
-        if self.client:
-            self.client.close()
-            logger.info("Closed MongoDB connection")
+    def get_db(self):
+        """Get database session."""
+        db = SessionLocal()
+        try:
+            return db
+        finally:
+            db.close()
+
+    async def get_async_db(self):
+        """Get async database session."""
+        async with AsyncSessionLocal() as session:
+            yield session
 
 # Create a global database instance
 database = Database()
 
-async def get_database():
-    """Get database instance."""
-    if database.db is None:
-        await database.connect_to_database()
-    return database.db
+def get_db():
+    """Get database session - sync version."""
+    db = SessionLocal()
+    try:
+        return db
+    finally:
+        db.close()
+
+async def get_async_db():
+    """Get database session - async version."""
+    async with AsyncSessionLocal() as session:
+        yield session

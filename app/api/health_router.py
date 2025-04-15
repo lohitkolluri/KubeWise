@@ -9,7 +9,7 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.get("/", summary="Health check endpoint", description="Performs a comprehensive health check of all dependent services including MongoDB, Prometheus, and Gemini API")
+@router.get("/", summary="Health check endpoint", description="Performs a comprehensive health check of all dependent services including Prometheus and Gemini API")
 async def health_check():
     """
     Health check endpoint that verifies all services.

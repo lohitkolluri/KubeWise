@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from app.services.anomaly_event_service import AnomalyEventService
 from app.utils.k8s_executor import k8s_executor
 from app.models.anomaly_event import AnomalyStatus, RemediationAttempt, AnomalyEventUpdate
-from app.core.database import get_database
+from app.core.dependencies.service_factory import get_anomaly_event_service
 from loguru import logger
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -19,7 +19,7 @@ router = APIRouter(
 async def list_events(
     status: Optional[str] = None,
     limit: int = 50,
-    db = Depends(get_database)
+    event_service: AnomalyEventService = Depends(get_anomaly_event_service)
 ):
     """
     List anomaly events with optional filtering by status.
@@ -27,6 +27,7 @@ async def list_events(
     Parameters:
         status (str, optional): Filter by event status (e.g., "DETECTED", "REMEDIATION_SUGGESTED", "RESOLVED")
         limit (int, default=50): Maximum number of events to return
+        event_service: Service for anomaly event management (injected)
 
     Returns:
         dict: List of anomaly events containing:
@@ -38,8 +39,6 @@ async def list_events(
         HTTPException: If status is invalid or events cannot be retrieved
     """
     try:
-        event_service = AnomalyEventService(db)
-
         # Convert string status to enum if provided
         status_filter = None
         if status:
@@ -70,13 +69,14 @@ async def list_events(
            description="Retrieve detailed information about a specific anomaly event")
 async def get_event(
     anomaly_id: str,
-    db = Depends(get_database)
+    event_service: AnomalyEventService = Depends(get_anomaly_event_service)
 ):
     """
     Get details of a specific anomaly event.
 
     Parameters:
         anomaly_id (str): ID of the anomaly event to retrieve
+        event_service: Service for anomaly event management (injected)
 
     Returns:
         dict: Anomaly event details containing:
@@ -87,7 +87,6 @@ async def get_event(
         HTTPException: If event is not found or cannot be retrieved
     """
     try:
-        event_service = AnomalyEventService(db)
         event = await event_service.get_event(anomaly_id)
 
         if not event:
@@ -115,7 +114,7 @@ async def get_event(
 async def remediate_event(
     anomaly_id: str,
     command: str = Body(..., embed=True),
-    db = Depends(get_database)
+    event_service: AnomalyEventService = Depends(get_anomaly_event_service)
 ):
     """
     Apply a remediation command to an anomaly.
@@ -124,6 +123,7 @@ async def remediate_event(
         anomaly_id (str): ID of the anomaly event to remediate
         command (str): Remediation command to execute
                       (e.g., "restart_deployment name=my-deployment namespace=default")
+        event_service: Service for anomaly event management (injected)
 
     Returns:
         dict: Remediation results containing:
@@ -137,7 +137,6 @@ async def remediate_event(
         HTTPException: If event is not found, command is invalid, or execution fails
     """
     try:
-        event_service = AnomalyEventService(db)
         event = await event_service.get_event(anomaly_id)
 
         if not event:
