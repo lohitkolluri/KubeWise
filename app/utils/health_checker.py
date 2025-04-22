@@ -1,43 +1,75 @@
-from loguru import logger
-from google import genai  # Updated import
-import requests
-from typing import Dict, Any
 import asyncio
+from typing import Any, Dict
+import enum
+
+from google import genai
+import requests
+from loguru import logger
+from pydantic import BaseModel
+
 from app.core.config import settings
+
+
+class HealthStatus(enum.Enum):
+    OK = "ok"
+    ERROR = "error"
+
+
+class HealthResponse(BaseModel):
+    status: HealthStatus
+    timestamp: str
+
 
 class HealthChecker:
     @staticmethod
     async def check_gemini(api_key: str) -> Dict[str, Any]:
-        """Check Gemini API connection using the new google-genai SDK."""
+        """Check Gemini API connection using the Google Gen AI SDK with structured output."""
         if not api_key:
             return {
                 "status": "disabled",
-                "message": "Gemini API is not configured (no API key)"
+                "message": "Gemini API is not configured (no API key)",
             }
 
         try:
+            # Initialize the client with the API key
             client = genai.Client(api_key=api_key)
-            # Use the latest recommended model
-            model_name = "gemini-1.5-pro"
-            # Test with a simple prompt
+
+            # Use the latest recommended model with structured output
             response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=model_name,
-                contents=["Test connection."]
+                lambda: client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents="Return a health status response with the current timestamp.",
+                    config={
+                        'response_mime_type': 'application/json',
+                        'response_schema': HealthResponse,
+                    }
+                )
             )
-            if response and hasattr(response, 'text') and response.text:
+
+            # Parse the structured response
+            if response and hasattr(response, "parsed"):
+                parsed_response = response.parsed
+                if parsed_response and parsed_response.status == HealthStatus.OK:
+                    return {
+                        "status": "healthy",
+                        "message": f"Successfully connected to Gemini API with structured output at {parsed_response.timestamp}",
+                    }
+
+            # Fall back to basic text validation if parsing failed
+            if response and hasattr(response, "text"):
                 return {
                     "status": "healthy",
-                    "message": "Successfully connected to Gemini API"
+                    "message": "Successfully connected to Gemini API (basic response)",
                 }
+
             return {
                 "status": "unhealthy",
-                "message": "Gemini API response validation failed"
+                "message": "Gemini API response validation failed",
             }
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "message": f"Gemini API connection failed: {str(e)}"
+                "message": f"Gemini API connection failed: {str(e)}",
             }
 
     @staticmethod
@@ -48,16 +80,16 @@ class HealthChecker:
             if response.status_code == 200:
                 return {
                     "status": "healthy",
-                    "message": f"Prometheus server is accessible at {prometheus_url}"
+                    "message": f"Prometheus server is accessible at {prometheus_url}",
                 }
             return {
                 "status": "unhealthy",
-                "message": f"Prometheus server returned status code {response.status_code}"
+                "message": f"Prometheus server returned status code {response.status_code}",
             }
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "message": f"Prometheus server check failed: {str(e)}"
+                "message": f"Prometheus server check failed: {str(e)}",
             }
 
     @staticmethod
@@ -65,17 +97,18 @@ class HealthChecker:
         """Check Kubernetes client configuration."""
         try:
             from kubernetes import client, config
+
             config.load_kube_config()
             v1 = client.CoreV1Api()
             nodes = v1.list_node()
             return {
                 "status": "healthy",
-                "message": f"Connected to Kubernetes cluster with {len(nodes.items)} nodes"
+                "message": f"Connected to Kubernetes cluster with {len(nodes.items)} nodes",
             }
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "message": f"Kubernetes connection failed: {str(e)}"
+                "message": f"Kubernetes connection failed: {str(e)}",
             }
 
     async def check_all(self) -> Dict[str, Dict[str, Any]]:
@@ -88,24 +121,38 @@ class HealthChecker:
         k8s_check = self.check_kubernetes()
 
         checks = await asyncio.gather(
-            gemini_check, prometheus_check, k8s_check,
-            return_exceptions=True
+            gemini_check, prometheus_check, k8s_check, return_exceptions=True
         )
 
         # Map results to named services
-        results["gemini"] = checks[0] if not isinstance(checks[0], Exception) else {"status": "unhealthy", "message": str(checks[0])}
-        results["prometheus"] = checks[1] if not isinstance(checks[1], Exception) else {"status": "unhealthy", "message": str(checks[1])}
-        results["kubernetes"] = checks[2] if not isinstance(checks[2], Exception) else {"status": "unhealthy", "message": str(checks[2])}
+        results["gemini"] = (
+            checks[0]
+            if not isinstance(checks[0], Exception)
+            else {"status": "unhealthy", "message": str(checks[0])}
+        )
+        results["prometheus"] = (
+            checks[1]
+            if not isinstance(checks[1], Exception)
+            else {"status": "unhealthy", "message": str(checks[1])}
+        )
+        results["kubernetes"] = (
+            checks[2]
+            if not isinstance(checks[2], Exception)
+            else {"status": "unhealthy", "message": str(checks[2])}
+        )
 
         # Add overall status
         critical_services = ["prometheus", "kubernetes"]  # These services are critical
         critical_healthy = all(
-            results[service]["status"] == "healthy"
-            for service in critical_services
+            results[service]["status"] == "healthy" for service in critical_services
         )
         results["overall"] = {
             "status": "healthy" if critical_healthy else "unhealthy",
-            "message": "All critical services healthy" if critical_healthy else "One or more critical services unhealthy"
+            "message": (
+                "All critical services healthy"
+                if critical_healthy
+                else "One or more critical services unhealthy"
+            ),
         }
 
         # Log results

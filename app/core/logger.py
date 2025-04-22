@@ -1,12 +1,15 @@
-from loguru import logger
-import sys
 import os
+import sys
 import threading
+
+from loguru import logger
+
 from app.core.config import settings
 
 # Global flag to control console logging
 _console_logging_enabled = True
 _console_logging_lock = threading.Lock()
+
 
 def enable_console_logging():
     """Enable console logging output - call this when CLI aesthetics are complete."""
@@ -14,15 +17,18 @@ def enable_console_logging():
     with _console_logging_lock:
         _console_logging_enabled = True
 
+
 def disable_console_logging():
     """Disable console logging output - call this before CLI aesthetics."""
     global _console_logging_enabled
     with _console_logging_lock:
         _console_logging_enabled = False
 
+
 def console_logging_filter(record):
     """Filter that controls whether a log record should go to console based on global flag."""
     return _console_logging_enabled
+
 
 def setup_logger() -> None:
     """
@@ -49,9 +55,7 @@ def setup_logger() -> None:
     )
 
     # Add console handler with enhanced format
-    logger.configure(
-        extra={"emoji": "ℹ️ "}  # Default emoji
-    )
+    logger.configure(extra={"emoji": "ℹ️ "})  # Default emoji
 
     # Function to dynamically set emoji based on log level
     def emoji_formatter(record):
@@ -62,7 +66,7 @@ def setup_logger() -> None:
             "SUCCESS": "✅",
             "WARNING": "⚠️ ",
             "ERROR": "❌",
-            "CRITICAL": "🔥"
+            "CRITICAL": "🔥",
         }
         record["extra"]["emoji"] = level_emoji.get(record["level"].name, "ℹ️ ")
         return record
@@ -73,8 +77,9 @@ def setup_logger() -> None:
         format=enhanced_log_format,
         level=settings.LOG_LEVEL,
         enqueue=True,
-        filter=lambda record: emoji_formatter(record) and console_logging_filter(record),
-        colorize=True
+        filter=lambda record: emoji_formatter(record)
+        and console_logging_filter(record),
+        colorize=True,
     )
 
     # File handler with standard format (no emojis for log files)
@@ -86,7 +91,7 @@ def setup_logger() -> None:
         retention="10 days",
         format=log_format,
         level=settings.LOG_LEVEL,
-        enqueue=True
+        enqueue=True,
     )
 
     logger.success("Logger configured successfully with enhanced formatting")

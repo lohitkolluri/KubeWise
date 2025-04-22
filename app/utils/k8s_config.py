@@ -1,14 +1,23 @@
+from typing import Dict, Optional
+
 from kubernetes import client, config
 from loguru import logger
-import os
-from typing import Optional, Dict, Any
 from pydantic import BaseModel
+
+
+# Add the missing load_kube_config function that prometheus_scraper.py is trying to import
+def load_kube_config():
+    """
+    Load kubernetes configuration from default location.
+    This function is imported by prometheus_scraper.py
+    """
+    return config.load_kube_config()
+
 
 class MonitoringConfig(BaseModel):
     prometheus_endpoint: str = "http://localhost:9090/api/v1/query"
-    grafana_endpoint: str = "http://localhost:3000"
     prometheus_namespace: str = "monitoring"
-    grafana_namespace: str = "monitoring"
+
 
 class KubernetesConfig:
     def __init__(self, monitoring_config: Optional[MonitoringConfig] = None):
@@ -31,25 +40,20 @@ class KubernetesConfig:
 
     def check_monitoring_status(self) -> Dict[str, bool]:
         """
-        Check if monitoring tools are properly installed and running.
+        Check if Prometheus is properly installed and running.
         """
         try:
             # Check prometheus pods
             prometheus_pods = self.v1.list_namespaced_pod(
                 namespace=self.monitoring_config.prometheus_namespace,
-                label_selector="app=prometheus"
-            )
-
-            # Check grafana pods
-            grafana_pods = self.v1.list_namespaced_pod(
-                namespace=self.monitoring_config.grafana_namespace,
-                label_selector="app=grafana"
+                label_selector="app=prometheus",
             )
 
             return {
-                "prometheus_ready": any(pod.status.phase == "Running" for pod in prometheus_pods.items),
-                "grafana_ready": any(pod.status.phase == "Running" for pod in grafana_pods.items)
+                "prometheus_ready": any(
+                    pod.status.phase == "Running" for pod in prometheus_pods.items
+                )
             }
         except Exception as e:
             logger.error(f"Failed to check monitoring status: {e}")
-            return {"prometheus_ready": False, "grafana_ready": False}
+            return {"prometheus_ready": False}

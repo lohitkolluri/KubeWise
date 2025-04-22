@@ -1,8 +1,20 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, JSON, Enum
-from sqlalchemy.orm import relationship
-from app.core.database import Base
-from datetime import datetime
 import enum
+from datetime import datetime
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+)
+from sqlalchemy.orm import relationship
+
+from app.core.database import Base
+
 
 class AnomalyStatusEnum(enum.Enum):
     DETECTED = "Detected"
@@ -15,8 +27,10 @@ class AnomalyStatusEnum(enum.Enum):
     CRITICAL_FAILURE = "CriticalFailure"
     PREDICTED_FAILURE = "PredictedFailure"
 
+
 class AnomalyEventDB(Base):
     """SQLAlchemy model for anomaly events."""
+
     __tablename__ = "anomaly_events"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -37,10 +51,16 @@ class AnomalyEventDB(Base):
     is_proactive = Column(Boolean, default=False)
 
     # Relationship with remediation attempts
-    remediation_attempts = relationship("RemediationAttemptDB", back_populates="anomaly_event", cascade="all, delete-orphan")
+    remediation_attempts = relationship(
+        "RemediationAttemptDB",
+        back_populates="anomaly_event",
+        cascade="all, delete-orphan",
+    )
+
 
 class RemediationAttemptDB(Base):
     """SQLAlchemy model for remediation attempts."""
+
     __tablename__ = "remediation_attempts"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -55,4 +75,6 @@ class RemediationAttemptDB(Base):
     is_proactive = Column(Boolean, default=False)
 
     # Relationship with anomaly event
-    anomaly_event = relationship("AnomalyEventDB", back_populates="remediation_attempts")
+    anomaly_event = relationship(
+        "AnomalyEventDB", back_populates="remediation_attempts"
+    )

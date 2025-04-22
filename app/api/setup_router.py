@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from app.services.mode_service import mode_service
-from app.core.config import settings
-from loguru import logger
 import os
-from typing import Dict, Any
+
+from fastapi import APIRouter, HTTPException
+from loguru import logger
+from pydantic import BaseModel
+
+from app.core.config import settings
+from app.services.mode_service import mode_service
 
 router = APIRouter(
     prefix="/setup",
@@ -12,20 +13,27 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+
 class ModeUpdateRequest(BaseModel):
     """Request model for updating operation mode."""
+
     mode: str
+
 
 class ModeResponse(BaseModel):
     """Response model containing system operation mode."""
+
     mode: str
     success: bool
     message: str
 
-@router.get("/mode",
-           response_model=ModeResponse,
-           summary="Get current operation mode",
-           description="Retrieve the current remediation mode (AUTO/MANUAL) of the system")
+
+@router.get(
+    "/mode",
+    response_model=ModeResponse,
+    summary="Get current operation mode",
+    description="Retrieve the current remediation mode (AUTO/MANUAL) of the system",
+)
 async def get_current_mode():
     """
     Get the current operating mode of the system.
@@ -40,13 +48,16 @@ async def get_current_mode():
     return {
         "mode": current_mode,
         "success": True,
-        "message": f"Current operation mode is {current_mode}"
+        "message": f"Current operation mode is {current_mode}",
     }
 
-@router.put("/mode",
-            response_model=ModeResponse,
-            summary="Update operation mode",
-            description="Change the system's remediation mode between AUTO (automatic remediation) and MANUAL (suggested remediation)")
+
+@router.put(
+    "/mode",
+    response_model=ModeResponse,
+    summary="Update operation mode",
+    description="Change the system's remediation mode between AUTO (automatic remediation) and MANUAL (suggested remediation)",
+)
 async def update_mode(request: ModeUpdateRequest):
     """
     Update the operating mode of the system.
@@ -68,7 +79,7 @@ async def update_mode(request: ModeUpdateRequest):
     if mode_upper not in ["AUTO", "MANUAL"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid mode: {request.mode}. Must be 'AUTO' or 'MANUAL'"
+            detail=f"Invalid mode: {request.mode}. Must be 'AUTO' or 'MANUAL'",
         )
 
     success = await mode_service.set_mode(mode_upper)
@@ -77,17 +88,17 @@ async def update_mode(request: ModeUpdateRequest):
         return {
             "mode": mode_upper,
             "success": True,
-            "message": f"Operation mode updated to {mode_upper}"
+            "message": f"Operation mode updated to {mode_upper}",
         }
     else:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to update operation mode"
-        )
+        raise HTTPException(status_code=500, detail="Failed to update operation mode")
 
-@router.get("/config",
-           summary="Get current configuration",
-           description="Retrieve the current application configuration settings (excluding sensitive information)")
+
+@router.get(
+    "/config",
+    summary="Get current configuration",
+    description="Retrieve the current application configuration settings (excluding sensitive information)",
+)
 async def get_config():
     """
     Get the current configuration settings.
@@ -103,12 +114,15 @@ async def get_config():
     return {
         "status": "success",
         "config": config,
-        "note": "Configuration is sourced from environment variables (.env file)"
+        "note": "Configuration is sourced from environment variables (.env file)",
     }
 
-@router.get("/settings/env",
-           summary="Get current environment variables",
-           description="Retrieve the current environment variables with sensitive information masked")
+
+@router.get(
+    "/settings/env",
+    summary="Get current environment variables",
+    description="Retrieve the current environment variables with sensitive information masked",
+)
 async def get_env_settings():
     """
     Retrieve the current environment variables.
@@ -127,7 +141,10 @@ async def get_env_settings():
         for key in settings.model_fields.keys():
             if key in os.environ:
                 # Mask sensitive information
-                if any(sensitive in key.upper() for sensitive in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "URI"]):
+                if any(
+                    sensitive in key.upper()
+                    for sensitive in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "URI"]
+                ):
                     env_vars[key] = "********"
                 else:
                     env_vars[key] = os.environ[key]
@@ -135,11 +152,10 @@ async def get_env_settings():
         return {
             "status": "success",
             "settings": env_vars,
-            "note": "To modify settings, please update your .env file and restart the application."
+            "note": "To modify settings, please update your .env file and restart the application.",
         }
     except Exception as e:
         logger.error(f"Error retrieving environment settings: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve environment settings: {str(e)}"
+            status_code=500, detail=f"Failed to retrieve environment settings: {str(e)}"
         )

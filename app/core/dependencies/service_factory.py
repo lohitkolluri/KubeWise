@@ -4,6 +4,7 @@ Service factory module for dependency injection.
 This module provides factory functions that can be used with FastAPI's
 dependency injection system to get service instances.
 """
+
 from app.services.anomaly_event_service import AnomalyEventService
 from app.services.gemini_service import GeminiService
 
@@ -11,15 +12,18 @@ from app.services.gemini_service import GeminiService
 _gemini_service_instance = None
 _anomaly_event_service_instance = None
 
+
 def set_gemini_service(gemini_service: GeminiService):
     """Set the global Gemini service instance."""
     global _gemini_service_instance
     _gemini_service_instance = gemini_service
 
+
 def set_anomaly_event_service(event_service: AnomalyEventService):
     """Set the global anomaly event service instance."""
     global _anomaly_event_service_instance
     _anomaly_event_service_instance = event_service
+
 
 def get_gemini_service():
     """
@@ -29,6 +33,7 @@ def get_gemini_service():
         The global Gemini service instance.
     """
     return _gemini_service_instance
+
 
 def get_anomaly_event_service():
     """

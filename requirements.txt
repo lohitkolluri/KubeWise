@@ -1,48 +1,60 @@
+# -------------------------------------
 # Web Framework and API
-fastapi>=0.95.0
-uvicorn>=0.22.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+# -------------------------------------
+fastapi==0.109.2
+uvicorn==0.22.0
+pydantic==2.6.4
+pydantic-settings==2.2.1
 
+# -------------------------------------
 # Database
-pymongo>=4.3.3
-motor>=3.1.1
-sqlalchemy>=2.0.0
-aiosqlite>=0.19.0
-alembic>=1.12.0
-greenlet>=2.0.0
+# -------------------------------------
+sqlalchemy==2.0.29
+aiosqlite==0.19.0
+alembic==1.12.0
+greenlet==1.1.3 
 
+# -------------------------------------
 # Kubernetes Integration
-kubernetes>=26.1.0
+# -------------------------------------
+kubernetes==26.1.0
 
+# -------------------------------------
 # Machine Learning and Data Processing
-scikit-learn>=1.2.0
-pandas>=1.5.3
-numpy>=1.24.0
-joblib>=1.3.0
+# -------------------------------------
+tensorflow==2.18.0
+numpy==2.0.2
+pandas==2.2.2
+scikit-learn==1.6.1
+scipy==1.13.0
+joblib==1.4.2
 
+# -------------------------------------
+# Visualization (Optional, used in training/analysis)
+# -------------------------------------
+matplotlib==3.10.0
+seaborn==0.13.2
+
+# -------------------------------------
 # AI Integration
-google-generativeai>=0.3.0
+# -------------------------------------
+google-genai
 
+# -------------------------------------
 # Monitoring and Metrics
-prometheus-client>=0.16.0
-httpx>=0.24.0
+# -------------------------------------
+prometheus-client==0.16.0
+httpx==0.24.1
 
+# -------------------------------------
 # Logging and Configuration
-python-dotenv>=1.0.0
-loguru>=0.7.0
-rich>=13.0.0
+# -------------------------------------
+loguru==0.7.2
 
-# Testing and Development
-pytest>=7.3.1
-pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
-black>=23.3.0
-isort>=5.12.0
-flake8>=6.0.0
-mypy>=1.3.0
-
+# -------------------------------------
 # Utils
-python-multipart>=0.0.6
-requests>=2.28.0
-aiohttp>=3.9.0
+# -------------------------------------
+python-multipart==0.0.6
+aiohttp==3.9.5
+tenacity==8.2.3
+requests==2.31.0

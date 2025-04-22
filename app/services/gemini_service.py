@@ -1,1682 +1,3191 @@
-from typing import Dict, Any, List, Optional, Type, Union, Callable
+import asyncio
 import json
-from loguru import logger
-from google import genai
-from pydantic import BaseModel, Field
-from datetime import datetime
 import re
-from app.core.config import settings
+import uuid
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+
+import aiohttp
+from google import genai
+from loguru import logger
+from pydantic import BaseModel, Field, ValidationError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+
+# Import RemediationAction from models
+from app.models.k8s_models import RemediationAction
+# Import k8s_executor to get command templates
+from app.utils.k8s_executor import k8s_executor
+
+T = TypeVar("T")
+
+
+# Define model types
+class ModelType(str, Enum):
+    PRO = "gemini-2.5-flash-preview-04-17"
+    FLASH = "gemini-2.5-flash-preview-04-17"
+    FLASH_LITE = "gemini-2.5-flash-preview-04-17"
+    PRO_VISION = "gemini-2.0-pro-vision"
+    PRO_THINKING = "gemini-2.5-pro-preview"
+
+
 
 # --- Pydantic Models for Function Calling ---
 
+
 class AnomalyAnalysis(BaseModel):
     """Model for anomaly analysis output."""
+
     root_cause: str = Field(..., description="Probable root cause of the anomaly")
-    impact: str = Field(..., description="Potential impact on the system or application")
-    severity: str = Field(..., description="Estimated severity (e.g., High, Medium, Low)")
-    confidence: float = Field(..., description="Confidence score (0.0-1.0) in the analysis")
-    recommendations: List[str] = Field(..., description="Specific recommendations for investigation")
+    impact: str = Field(
+        ..., description="Potential impact on the system or application"
+    )
+    severity: str = Field(
+        ..., description="Estimated severity (e.g., High, Medium, Low)"
+    )
+    confidence: float = Field(
+        ..., description="Confidence score (0.0-1.0) in the analysis"
+    )
+    recommendations: List[str] = Field(
+        ..., description="Specific recommendations for investigation"
+    )
+
 
 class RemediationSteps(BaseModel):
     """Model for remediation steps output."""
-    steps: List[str] = Field(..., description="Suggested remediation command strings (e.g., 'operation_name param1=value param2=value')")
-    risks: List[str] = Field(..., description="Potential risks associated with the steps")
-    expected_outcome: str = Field(..., description="What should happen if the steps are successful")
-    confidence: float = Field(..., description="Confidence score (0.0-1.0) in the suggested remediation")
+
+    steps: List[str] = Field(
+        ...,
+        description="Suggested remediation command strings (e.g., 'operation_name param1=value param2=value')",
+    )
+    risks: List[str] = Field(
+        ..., description="Potential risks associated with the steps"
+    )
+    expected_outcome: str = Field(
+        ..., description="What should happen if the steps are successful"
+    )
+    confidence: float = Field(
+        ..., description="Confidence score (0.0-1.0) in the suggested remediation"
+    )
+
 
 class MetricInsights(BaseModel):
     """Model for metric insights output."""
+
     patterns: List[str] = Field(..., description="Patterns observed in the metrics")
     anomalies: List[str] = Field(..., description="Potential anomalies detected")
     health_assessment: str = Field(..., description="Overall health assessment")
-    recommendations: List[str] = Field(..., description="Recommendations for improvement")
+    recommendations: List[str] = Field(
+        ..., description="Recommendations for improvement"
+    )
+
 
 # NEW Models for Query Generation and Verification
 class GeneratedPromqlQueries(BaseModel):
-    queries: List[str] = Field(..., description="List of generated PromQL query strings suitable for monitoring common Kubernetes issues.")
-    reasoning: str = Field(..., description="Explanation for why these queries were chosen based on the context.")
+    queries: List[str] = Field(
+        ...,
+        description="List of generated PromQL query strings suitable for monitoring common Kubernetes issues.",
+    )
+    reasoning: str = Field(
+        ...,
+        description="Explanation for why these queries were chosen based on the context.",
+    )
+
 
 class VerificationResult(BaseModel):
-    success: bool = Field(..., description="True if the remediation is assessed as successful, False otherwise.")
-    reasoning: str = Field(..., description="Explanation for the success/failure assessment based on the provided context.")
-    confidence: float = Field(..., description="Confidence score (0.0-1.0) in the verification assessment.")
+    success: bool = Field(
+        ...,
+        description="True if the remediation is assessed as successful, False otherwise.",
+    )  # Changed name from resolved to success
+    reasoning: str = Field(
+        ...,
+        description="Explanation for the success/failure assessment based on the provided context.",
+    )  # Changed name from reason to reasoning
+    confidence: float = Field(
+        ..., description="Confidence score (0.0-1.0) in the verification assessment."
+    )
+
+
+# Add missing Prometheus models
+class PrometheusQueryResponse(BaseModel):
+    """Model for Prometheus query generation output."""
+
+    query: str = Field(..., description="Generated Prometheus query string")
+    explanation: str = Field(..., description="Explanation of how the query works")
+    parameters: Optional[Dict[str, Any]] = Field(
+        None, description="Parameters used in the query"
+    )
+    estimated_cardinality: Optional[str] = Field(
+        None, description="Estimated cardinality/data points returned"
+    )
+    confidence: float = Field(
+        ..., description="Confidence score (0.0-1.0) in the generated query"
+    )
+
+
+class QueryVerificationResponse(BaseModel):
+    """Model for Prometheus query verification output."""
+
+    is_valid: bool = Field(..., description="Whether the query is valid")
+    issues: List[str] = Field(
+        default_factory=list, description="List of issues found in the query"
+    )
+    suggested_improvements: List[str] = Field(
+        default_factory=list, description="Suggested improvements for the query"
+    )
+    corrected_query: Optional[str] = Field(
+        None, description="Corrected query if original had issues"
+    )
+    performance_assessment: str = Field(
+        ..., description="Assessment of query performance"
+    )
+
 
 # NEW Models for Smart Remediation
-class RemediationAction(BaseModel):
-    """Structured template-based remediation action"""
-    action_type: str = Field(..., description="Type of remediation action (e.g., restart_deployment, scale_deployment)")
-    resource_type: str = Field(..., description="Resource type to act on (e.g., deployment, pod, node)")
-    resource_name: str = Field(..., description="Name of the resource to act on")
-    namespace: Optional[str] = Field(None, description="Kubernetes namespace of the resource")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Additional parameters for the action")
-
 class PrioritizedRemediation(BaseModel):
     """Model for prioritized remediation actions"""
-    actions: List[RemediationAction] = Field(..., description="Prioritized list of remediation actions")
+
+    actions: List[RemediationAction] = Field(
+        ..., description="Prioritized list of remediation actions"
+    )
     reasoning: str = Field(..., description="Explanation for the prioritization")
-    estimated_impact: Dict[str, str] = Field(..., description="Estimated impact of each action (e.g., performance, availability)")
-    phased_approach: bool = Field(..., description="Whether a phased/incremental approach is recommended")
-    phased_steps: Optional[List[str]] = Field(None, description="If phased, the recommended steps in sequence")
+    estimated_impact: Dict[str, str] = Field(
+        ...,
+        description="Estimated impact of each action (e.g., performance, availability)",
+    )
+    phased_approach: bool = Field(
+        ..., description="Whether a phased/incremental approach is recommended"
+    )
+    phased_steps: Optional[List[str]] = Field(
+        None, description="If phased, the recommended steps in sequence"
+    )
+
 
 class ResourceOptimizationSuggestion(BaseModel):
     """Model for resource optimization suggestions"""
-    resource_type: str = Field(..., description="Type of resource (e.g., deployment, statefulset)")
+
+    resource_type: str = Field(
+        ..., description="Type of resource (e.g., deployment, statefulset)"
+    )
     resource_name: str = Field(..., description="Name of the resource")
     namespace: str = Field(..., description="Namespace of the resource")
     current_cpu_request: Optional[str] = Field(None, description="Current CPU request")
     current_cpu_limit: Optional[str] = Field(None, description="Current CPU limit")
-    current_memory_request: Optional[str] = Field(None, description="Current memory request")
+    current_memory_request: Optional[str] = Field(
+        None, description="Current memory request"
+    )
     current_memory_limit: Optional[str] = Field(None, description="Current memory limit")
-    suggested_cpu_request: Optional[str] = Field(None, description="Suggested CPU request")
+    suggested_cpu_request: Optional[str] = Field(
+        None, description="Suggested CPU request"
+    )
     suggested_cpu_limit: Optional[str] = Field(None, description="Suggested CPU limit")
-    suggested_memory_request: Optional[str] = Field(None, description="Suggested memory request")
-    suggested_memory_limit: Optional[str] = Field(None, description="Suggested memory limit")
+    suggested_memory_request: Optional[str] = Field(
+        None, description="Suggested memory request"
+    )
+    suggested_memory_limit: Optional[str] = Field(
+        None, description="Suggested memory limit"
+    )
     reasoning: str = Field(..., description="Reasoning behind the suggestion")
     confidence: float = Field(..., description="Confidence in the suggestion (0.0-1.0)")
 
+
 class RootCauseAnalysisReport(BaseModel):
     """Model for detailed RCA reports"""
+
     title: str = Field(..., description="Title summarizing the issue")
     summary: str = Field(..., description="Executive summary of the incident")
     root_cause: str = Field(..., description="Identified root cause")
-    detection_details: Dict[str, Any] = Field(..., description="Details of how the issue was detected")
+    detection_details: Dict[str, Any] = Field(
+        ..., description="Details of how the issue was detected"
+    )
     timeline: List[Dict[str, str]] = Field(..., description="Timeline of the incident")
-    resolution_steps: List[str] = Field(..., description="Steps taken to resolve the issue")
+    resolution_steps: List[str] = Field(
+        ..., description="Steps taken to resolve the issue"
+    )
     metrics_analysis: str = Field(..., description="Analysis of relevant metrics")
-    recommendations: List[str] = Field(..., description="Recommendations to prevent recurrence")
-    related_resources: List[str] = Field(..., description="Related Kubernetes resources")
+    recommendations: List[str] = Field(
+        ..., description="Recommendations to prevent recurrence"
+    )
+    related_resources: List[str] = Field(
+        ..., description="Related Kubernetes resources"
+    )
+
+
+class MetricTrendAnalysis(BaseModel):
+    """Model for metric trend analysis output."""
+
+    overall_trend: str = Field(..., description="Overall trend of the metric")
+    rate_of_change: str = Field(..., description="Rate of change of the metric")
+    significant_patterns: List[str] = Field(
+        ..., description="Significant patterns observed in the metric"
+    )
+    implications: str = Field(
+        ..., description="Potential implications for the system health"
+    )
+    recommendation: str = Field(..., description="Recommendation based on the analysis")
+
+
+class ChatResponse(BaseModel):
+    """Model for chat responses."""
+
+    response: str = Field(..., description="The chat response text")
+    confidence: float = Field(0.9, description="Confidence in the response (0.0-1.0)")
+    suggested_actions: Optional[List[str]] = Field(
+        None, description="Suggested actions the user might want to take"
+    )
+    referenced_resources: Optional[List[str]] = Field(
+        None, description="Kubernetes resources referenced in the response"
+    )
+
 
 class GeminiService:
-    """
-    Service for interacting with Google's Gemini AI for metric analysis.
-    """
-    def __init__(self):
-        """Initialize the Gemini service with API key."""
+    """Service to interact with Google's Gemini AI using the latest Gemini API best practices."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_type: str = "gemini-1.5-pro",
+        core_metric_types: Optional[List[str]] = None,
+    ):
+        """Initialize the Gemini service using genai.Client.
+
+        Args:
+            api_key: Google AI API key
+            model_type: Type of Gemini model to use
+            core_metric_types: List of core metric types to analyze
+        """
+        self.api_key = api_key
+        self.model_type = model_type
+        self.enabled = False
+        self.core_metric_types = core_metric_types or []
         self.client = None
-        self.model = None
-        self._is_initialized = False
-        self._api_key_missing = False
-        self.generation_config = None
+        # Initialize chat_sessions dictionary
         self.chat_sessions = {}
 
-        if settings.GEMINI_API_KEY:
-            try:
-                # Initialize using the new Google Gen AI SDK pattern
-                self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        try:
+            if not api_key:
+                logger.warning("No Gemini API key provided, service will be disabled")
+                return
+            self.client = genai.Client(api_key=api_key)
 
-                # Using the latest model version
-                model_name = 'gemini-2.0-flash'  # Upgrading to newer model version
+            # Add model as a compatibility property
+            # This ensures backward compatibility with code that accesses the model attribute
+            self.model = self.client
 
-                # Set default generation configuration
-                self.generation_config = genai.types.GenerateContentConfig(
-                    temperature=0.2,
-                    top_p=0.95,
-                    top_k=40,
-                    max_output_tokens=4096
-                )
-
-                self._is_initialized = True
-                logger.info(f"Gemini service initialized successfully with model {model_name}")
-            except Exception as e:
-                logger.error(f"Failed to initialize Gemini service: {e}")
-        else:
-            self._api_key_missing = True
-            logger.warning("Gemini service disabled: GEMINI_API_KEY not set.")
+            logger.info("Gemini AI client initialized successfully")
+            self.enabled = True
+        except Exception as e:
+            logger.exception(f"Failed to initialize Gemini AI client: {e}")
+            self.enabled = False
 
     def is_api_key_missing(self) -> bool:
         """Check if the API key is missing."""
-        return self._api_key_missing
+        return not self.enabled
 
-    async def _call_gemini_with_function(self, prompt: str, output_model: BaseModel) -> Optional[Dict[str, Any]]:
-        """Helper to call Gemini API with function calling using the updated approach."""
-        if not self.model:
-            logger.warning("Gemini service not configured or unavailable.")
-            return {"error": "Gemini service not configured or unavailable."}
-
-        try:
-            model_name = output_model.__name__
-
-            # Create function declaration for Gemini
-            function_declaration = {
-                "name": f"extract_{model_name}",
-                "description": f"Extract information according to the {model_name} schema.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        field: {
-                            "type": self._pydantic_to_gemini_type(field_type),
-                            "description": field_info.description or f"The {field} of the response"
-                        }
-                        for field, field_info in output_model.model_fields.items()
-                        if (field_type := output_model.__annotations__.get(field)) is not None
-                    },
-                    "required": list(output_model.model_fields.keys())
-                }
-            }
-
-            # 1. Try with direct function calling approach
-            try:
-                # Fix: Use the correct tools structure format for the Gemini API
-                tools = [{
-                    "function_declarations": [function_declaration]
-                }]
-
-                # Create proper generation config
-                generation_config = {
-                    "temperature": 0.2,
-                    "max_output_tokens": 4096
-                }
-
-                # Fix: Pass tools as a list with a single item containing function_declarations
-                response = await self.model.generate_content_async(
-                    contents=prompt,
-                    generation_config=generation_config,
-                    tools=tools  # Fix: Pass tools as a list with proper structure
-                )
-
-                # Process the response for function calling
-                function_call_response = self._extract_function_response(response, f"extract_{model_name}")
-
-                if function_call_response and "error" not in function_call_response:
-                    # Validate with Pydantic
-                    try:
-                        validated_data = output_model(**function_call_response)
-                        logger.info(f"Gemini response validated successfully for {model_name}.")
-                        return validated_data.model_dump()
-                    except Exception as validation_error:
-                        logger.error(f"Validation error: {validation_error}")
-                        # Try to construct partial valid response
-                        return self._construct_partial_response(function_call_response, output_model)
-                else:
-                    logger.warning(f"No valid function call found in response")
-
-            except Exception as e:
-                logger.warning(f"Primary Gemini function call failed: {e}")
-
-                # 2. Fallback: try with simple text generation
-                try:
-                    # Fallback to simpler text response
-                    simple_generation_config = {
-                        "temperature": 0.2,
-                        "max_output_tokens": 4096
-                    }
-
-                    response = await self.model.generate_content_async(
-                        contents=f"{prompt}\n\nRespond with a JSON object in this exact format: {output_model.model_json_schema()}",
-                        generation_config=simple_generation_config
-                    )
-
-                    # Try to extract JSON from the text response
-                    if hasattr(response, 'text'):
-                        json_response = self._extract_json_from_text(response.text, output_model)
-                        if json_response and "error" not in json_response:
-                            return json_response
-                except Exception as fallback_error:
-                    logger.error(f"Fallback Gemini call also failed: {fallback_error}")
-
-            # 3. Create minimal response if all else fails
-            logger.warning(f"All Gemini API approaches failed. Creating minimal response for {model_name}")
-            return self._create_minimal_response(output_model)
-
-        except Exception as e:
-            logger.error(f"Error in Gemini function call: {e}", exc_info=True)
-            return {"error": f"Gemini API Error: {e}"}
-
-    def _extract_function_call(self, response) -> Optional[Dict[str, Any]]:
-        """Extract function call information from a response."""
-        try:
-            if not response or not hasattr(response, 'candidates') or not response.candidates:
-                return None
-
-            for candidate in response.candidates:
-                if not hasattr(candidate, 'content') or not candidate.content:
-                    continue
-
-                # Check for parts in the content
-                if hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'function_call') and part.function_call:
-                            return {
-                                "name": part.function_call.name,
-                                "args": part.function_call.args
-                            }
-
-                # Also check for direct function_call attribute (may vary by API version)
-                if hasattr(candidate.content, 'function_call') and candidate.content.function_call:
-                    return {
-                        "name": candidate.content.function_call.name,
-                        "args": candidate.content.function_call.args
-                    }
-
-            return None
-
-        except Exception as e:
-            logger.error(f"Error extracting function call: {e}")
-            return None
-
-    def _construct_partial_response(self, data: Dict[str, Any], output_model: BaseModel) -> Dict[str, Any]:
-        """Create a partial valid response from a partially invalid one."""
-        try:
-            partial_data = {}
-            for field, value in data.items():
-                if field in output_model.model_fields:
-                    try:
-                        # Basic type validation
-                        field_type = output_model.__annotations__.get(field)
-
-                        # Handle List types
-                        if hasattr(field_type, "__origin__") and field_type.__origin__ == list:
-                            if isinstance(value, list):
-                                partial_data[field] = value
-                        # Handle simple types
-                        elif field_type in (str, int, float, bool):
-                            if isinstance(value, field_type):
-                                partial_data[field] = value
-                        else:
-                            # Just include it and hope for the best
-                            partial_data[field] = value
-                    except:
-                        pass  # Skip this field
-
-            if partial_data:
-                logger.info(f"Created partial valid response with fields: {list(partial_data.keys())}")
-                return partial_data
-            else:
-                return {"error": "Could not create valid partial response"}
-        except Exception as e:
-            logger.error(f"Error creating partial response: {e}")
-            return {"error": f"Error creating partial response: {e}"}
-
-    def _create_minimal_response(self, output_model: BaseModel) -> Dict[str, Any]:
-        """Create a minimal valid response based on model requirements."""
-        try:
-            minimal_response = {}
-            for field, field_info in output_model.model_fields.items():
-                if field_info.is_required:
-                    field_type = output_model.__annotations__.get(field)
-
-                    # Set default values based on type
-                    if field_type == str:
-                        minimal_response[field] = "No information available"
-                    elif field_type == float:
-                        minimal_response[field] = 0.5  # Default confidence
-                    elif field_type == bool:
-                        minimal_response[field] = False
-                    elif hasattr(field_type, "__origin__") and field_type.__origin__ == list:
-                        minimal_response[field] = ["No data available"]
-                    elif field_type == Dict[str, Any] or field_type == Dict[str, str]:
-                        minimal_response[field] = {"info": "No data available"}
-                    else:
-                        minimal_response[field] = None
-
-            logger.info(f"Created minimal response with required fields")
-            return minimal_response
-        except Exception as e:
-            logger.error(f"Error creating minimal response: {e}")
-            return {"error": "Could not create minimal response", "details": str(e)}
-
-    def _extract_json_from_text(self, text: str, output_model: BaseModel) -> Dict[str, Any]:
-        """Extract and validate JSON from text response."""
-        if not text:
-            return {"error": "No text response available for JSON extraction"}
-
-        try:
-            # Look for JSON-like content in the response text
-            json_match = re.search(r'\{.*\}', text, re.DOTALL | re.MULTILINE)
-            if json_match:
-                json_str = json_match.group(0)
-                # Clean potential markdown
-                json_str = re.sub(r'^```json\s*', '', json_str, flags=re.IGNORECASE)
-                json_str = re.sub(r'\s*```$', '', json_str)
-                json_str = json_str.strip()
-
-                data = json.loads(json_str)
-
-                # Try to validate with our model
-                try:
-                    validated_data = output_model(**data)
-                    logger.info(f"Successfully extracted and validated JSON from text response")
-                    return validated_data.model_dump()
-                except Exception as e_pydantic:
-                    logger.warning(f"Extracted JSON couldn't be validated by Pydantic: {e_pydantic}")
-                    return {"error": f"Extracted JSON validation failed: {e_pydantic}", "extracted_json": data}
-            else:
-                logger.warning(f"No JSON block found in text response")
-
-        except json.JSONDecodeError as e_json:
-            logger.warning(f"Failed to parse extracted JSON from text: {e_json}")
-        except Exception as e_fallback:
-            logger.warning(f"Error during text JSON fallback: {e_fallback}")
-
-        return {"error": "Could not extract valid JSON from text response"}
-
-    def _pydantic_to_gemini_type(self, field_type: Any) -> str:
-        """Maps Pydantic/Python types to JSON Schema types."""
-        origin = getattr(field_type, "__origin__", None)
-        if origin == list or origin == List:
-            return "array"
-        elif field_type == str:
-            return "string"
-        elif field_type == int:
-            return "integer"
-        elif field_type == float:
-            return "number"
-        elif field_type == bool:
-            return "boolean"
-        else:
-            return "string" # Default fallback
-
-    def _extract_value_from_proto(self, proto_value) -> Any:
-        """Helper method to extract values from protobuf Value objects."""
-        if hasattr(proto_value, 'string_value') and proto_value.string_value is not None:
-            return proto_value.string_value
-        elif hasattr(proto_value, 'number_value') and proto_value.number_value is not None:
-            return proto_value.number_value
-        elif hasattr(proto_value, 'bool_value') and proto_value.bool_value is not None:
-            return proto_value.bool_value
-        elif hasattr(proto_value, 'list_value') and proto_value.list_value is not None:
-            return [self._extract_value_from_proto(item) for item in proto_value.list_value.values]
-        elif hasattr(proto_value, 'struct_value') and proto_value.struct_value is not None:
-            return {k: self._extract_value_from_proto(v) for k, v in proto_value.struct_value.items()}
-        else:
-            # Use string representation as a fallback
-            return str(proto_value)
-
-    async def create_chat_session(self,
-                                 system_instruction: Optional[str] = None,
-                                 history_id: Optional[str] = None) -> str:
+    @retry(
+        retry=retry_if_exception_type(
+            (ConnectionError, TimeoutError, aiohttp.ClientError)
+        ),
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+    )
+    async def _call_gemini_with_model(
+        self,
+        prompt: str,
+        output_model: Type[BaseModel],
+        model_type: Optional[ModelType] = None,
+        system_instruction: Optional[str] = None,
+        **kwargs,
+    ) -> dict:
         """
-        Create a new chat session with optional system instructions.
+        Call Gemini API with a specific output model using function calling.
 
         Args:
-            system_instruction: Optional system instruction to guide the conversation
-            history_id: Optional ID to use for the chat session
+            prompt: The prompt to send to Gemini
+            output_model: The Pydantic model class to parse the response into
+            model_type: The type of model to use (optional)
+            system_instruction: System instruction to include (optional)
+            **kwargs: Additional keyword arguments to pass to the model
 
         Returns:
-            Chat session ID
+            The parsed model response or an error dict
         """
-        if not self.model or not self._is_initialized:
+        try:
+            if not self.enabled or not self.client:
+                logger.error("Gemini client is not initialized.")
+                return {"error": "Gemini client is not initialized."}
+
+            model_name = model_type.value if model_type else self.model_type
+
+            # Create generation config
+            config_params = {
+                "temperature": kwargs.get("temperature", 0.2),
+                "top_p": kwargs.get("top_p", 0.95),
+                "top_k": kwargs.get("top_k", 64),
+                "max_output_tokens": kwargs.get("max_output_tokens", 4096),
+            }
+
+            # Include candidate_count if provided
+            if "candidate_count" in kwargs:
+                config_params["candidate_count"] = kwargs["candidate_count"]
+
+            # Add function calling tools if provided
+            if "tools" in kwargs:
+                config_params["tools"] = kwargs["tools"]
+
+            # Use structured JSON output for Pydantic models
+            if output_model:
+                config_params["response_mime_type"] = "application/json"
+                config_params["response_schema"] = output_model
+
+            config = genai.types.GenerateContentConfig(**config_params)
+
+            # Create content with system instruction if provided
+            contents = []
+            if system_instruction:
+                contents.append({
+                    "role": "system",
+                    "parts": [{"text": system_instruction}]
+                })
+
+            # Add user prompt
+            contents.append({
+                "role": "user",
+                "parts": [{"text": prompt}]
+            })
+
+            # Make the API call
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+
+            # Process the response to extract content
+            # Structured parsing: use SDK's parsed attribute if available
+            if hasattr(response, "parsed") and response.parsed is not None:
+                parsed = response.parsed
+                return parsed.model_dump() if isinstance(parsed, BaseModel) else parsed
+
+            # Fallback to manual JSON extraction
+            if response and hasattr(response, "text"):
+                return self._extract_json_from_text(response.text, output_model)
+
+            logger.error("Invalid response format from Gemini API")
+            return {"error": "Invalid response format from Gemini API"}
+
+        except Exception as e:
+            logger.error(f"Error calling Gemini API with model: {str(e)}", exc_info=True)
+            return {"error": f"Error calling Gemini API with model: {str(e)}"}
+
+    def _fix_validation_errors(self, data: dict, output_model: Type[BaseModel], validation_error: ValidationError) -> dict:
+        """
+        Attempt to fix common validation errors in function call responses.
+
+        Args:
+            data: The original data from the function call
+            output_model: The target Pydantic model
+            validation_error: The validation error that occurred
+
+        Returns:
+            Dict with fixed data that should pass validation
+        """
+        fixed_data = data.copy()
+
+        # Extract error information
+        for error in validation_error.errors():
+            field = error["loc"][0] if error["loc"] else None
+            error_type = error["type"]
+
+            if field:
+                # Handle missing field errors
+                if error_type == "missing":
+                    # Set default values
+                    field_info = output_model.model_fields.get(field)
+                    if field_info:
+                        annotation = field_info.annotation
+                        if annotation is str:
+                            fixed_data[field] = "unknown"
+                        elif annotation is float:
+                            fixed_data[field] = 0.0
+                        elif annotation is int:
+                            fixed_data[field] = 0
+                        elif annotation is bool:
+                            fixed_data[field] = False
+                        elif hasattr(annotation, "__origin__") and annotation.__origin__ is list:
+                            fixed_data[field] = []
+                        elif hasattr(annotation, "__origin__") and annotation.__origin__ is dict:
+                            fixed_data[field] = {}
+
+                # Handle type conversion errors
+                elif error_type in ("float_parsing", "int_parsing", "bool_parsing"):
+                    field_info = output_model.model_fields.get(field)
+                    if field_info and field in fixed_data:
+                        value = fixed_data[field]
+                        annotation = field_info.annotation
+
+                        if annotation is float and isinstance(value, (str, int)):
+                            try:
+                                fixed_data[field] = float(value)
+                            except (ValueError, TypeError):
+                                fixed_data[field] = 0.0
+                        elif annotation is int and isinstance(value, (str, float)):
+                            try:
+                                fixed_data[field] = int(float(value))
+                            except (ValueError, TypeError):
+                                fixed_data[field] = 0
+                        elif annotation is bool and isinstance(value, str):
+                            fixed_data[field] = value.lower() in ("true", "yes", "1")
+
+        # Try to validate the fixed data
+        try:
+            validated = output_model(**fixed_data)
+            return validated.model_dump()
+        except ValidationError:
+            # If still failing, use minimal valid response
+            return self._create_minimal_response(output_model).model_dump()
+
+    async def _extract_function_response(
+        self, result, model_class: Type[T]
+    ) -> Union[Dict[str, Any], T]:
+        """Extract the function response from a Gemini result."""
+        try:
+            # Extract the function response
+            if not result.candidates:
+                logger.error("No candidates in Gemini response")
+                response = self._create_minimal_response(model_class)
+                return (
+                    response.model_dump()
+                    if isinstance(response, BaseModel)
+                    else response
+                )
+
+            candidate = result.candidates[0]
+            content = (
+                candidate.content.parts[0].text
+                if hasattr(candidate, "content") and candidate.content.parts
+                else "{}"
+            )
+            logger.debug(f"Raw response: {content}")
+
+            # Try to extract JSON from the text response
+            try:
+                # Try to find JSON in the response
+                matches = re.findall(r"```json\n(.*?)\n```", content, re.DOTALL)
+                data = {}
+                if matches:
+                    data = json.loads(matches[0])
+                else:
+                    # Try to parse the entire content as JSON
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError:
+                        # Try to extract JSON-like structure from text
+                        data = self._extract_json_from_text(content, model_class)
+                        if not data:
+                            response = self._create_minimal_response(model_class)
+                            return (
+                                response.model_dump()
+                                if isinstance(response, BaseModel)
+                                else response
+                            )
+
+                # Fix fields manually if needed based on model class
+                if model_class == AnomalyAnalysis:
+                    # Map fields from Gemini's response format (case-insensitive)
+                    field_mappings = {
+                        "root_cause": ["Root cause", "RootCause", "root_cause"],
+                        "impact": ["Impact", "impact"],
+                        "severity": ["Severity", "severity"],
+                        "confidence": ["Confidence", "confidence"],
+                        "recommendations": [
+                            "Recommendations",
+                            "recommendations",
+                            "Suggested actions",
+                            "Actions",
+                        ],
+                    }
+
+                    processed_data = {}
+
+                    # Try to find each field using various possible keys
+                    for target_field, possible_keys in field_mappings.items():
+                        # Try each possible key
+                        for key in possible_keys:
+                            if key in data:
+                                value = data[key]
+                                # Handle recommendations specially
+                                if target_field == "recommendations":
+                                    if isinstance(value, str):
+                                        processed_data[target_field] = [value]
+                                    elif isinstance(value, list):
+                                        processed_data[target_field] = value
+                                    else:
+                                        processed_data[target_field] = []
+                                else:
+                                    processed_data[target_field] = value
+                                break
+
+                        # If field not found, set default value
+                        if target_field not in processed_data:
+                            if target_field == "recommendations":
+                                processed_data[target_field] = []
+                            elif target_field == "confidence":
+                                processed_data[target_field] = 0.0
+                            else:
+                                processed_data[target_field] = "unknown"
+
+                    # Try to extract recommendations from text if not found in JSON
+                    if not processed_data["recommendations"]:
+                        # Look for bullet points or numbered lists in the text
+                        recommendations = []
+                        lines = content.split("\n")
+                        for line in lines:
+                            line = line.strip()
+                            if (
+                                line.startswith("- ")
+                                or line.startswith("* ")
+                                or re.match(r"^\d+\.", line)
+                            ):
+                                recommendations.append(line.lstrip("- *").strip())
+                        if recommendations:
+                            processed_data["recommendations"] = recommendations
+
+                    data = processed_data
+
+                elif model_class == RemediationSteps:
+                    # Handle steps field
+                    steps = data.get("steps", data.get("Steps", []))
+                    if isinstance(steps, str):
+                        data["steps"] = [steps]
+                    elif steps is None:
+                        data["steps"] = []
+
+                    # Handle risks field
+                    risks = data.get("risks", data.get("Risks", []))
+                    if isinstance(risks, str):
+                        data["risks"] = [risks]
+                    elif risks is None:
+                        data["risks"] = []
+
+                    # Set default values only if fields are missing or empty
+                    if not data.get("expected_outcome"):
+                        data["expected_outcome"] = "unknown"
+                    if "confidence" not in data or not isinstance(
+                        data["confidence"], (int, float)
+                    ):
+                        data["confidence"] = 0.0
+
+                try:
+                    # Create the model instance
+                    model_instance = model_class(**data)
+                    return (
+                        model_instance.model_dump()
+                        if isinstance(model_instance, BaseModel)
+                        else model_instance
+                    )
+                except ValidationError as ve:
+                    logger.warning(f"Validation error with processed data: {ve}")
+                    # Try to construct a partial response
+                    response = self._construct_partial_response(data, model_class)
+                    return (
+                        response.model_dump()
+                        if isinstance(response, BaseModel)
+                        else response
+                    )
+
+            except Exception as e:
+                logger.warning(f"Failed to extract JSON from text response: {e}")
+                response = self._create_minimal_response(model_class)
+                return (
+                    response.model_dump()
+                    if isinstance(response, BaseModel)
+                    else response
+                )
+
+        except Exception as e:
+            logger.error(f"Error extracting function response: {e}", exc_info=True)
+            response = self._create_minimal_response(model_class)
+            return (
+                response.model_dump() if isinstance(response, BaseModel) else response
+            )
+
+    def _extract_json_from_text(
+        self, text: str, output_model: BaseModel
+    ) -> Optional[Dict[str, Any]]:
+        """Extract and validate JSON from text response."""
+        try:
+            # If the text is a simple error message or doesn't contain JSON-like structures,
+            # create a minimal valid response
+            if not any(char in text for char in "{[]}"):
+                logger.debug(
+                    f"Text does not contain JSON-like structures: {text[:100]}..."
+                )
+                return self._create_minimal_response(output_model).model_dump()
+
+            # Pattern to match JSON within triple backticks, markdown code blocks, or standalone
+            json_pattern = (
+                r"```(?:json)?\s*([\s\S]*?)```|`([\s\S]*?)`|([\{\[][\s\S]*?[\}\]])"
+            )
+            matches = re.findall(json_pattern, text)
+
+            # Try different extraction methods
+            json_candidates = []
+
+            # Process matches from regex
+            for match in matches:
+                for group in match:
+                    if group.strip():
+                        json_candidates.append(group.strip())
+
+            # If no matches, try the whole text if it looks like JSON
+            if not json_candidates and (
+                text.strip().startswith("{") or text.strip().startswith("[")
+            ):
+                json_candidates.append(text.strip())
+
+            # Try each candidate
+            for json_str in json_candidates:
+                try:
+                    # Clean up common issues
+                    json_str = json_str.replace("\n", " ").replace("\r", "")
+
+                    # Fix common JSON formatting errors
+                    json_str = re.sub(
+                        r'(?<!")(\w+)(?=":)', r'"\1"', json_str
+                    )  # Add quotes to unquoted keys
+                    json_str = re.sub(r",\s*}", "}", json_str)  # Remove trailing commas
+
+                    # Parse the JSON
+                    data = json.loads(json_str)
+
+                    # Validate with Pydantic
+                    try:
+                        validated_data = output_model(**data)
+                        logger.info(
+                            f"Successfully validated extracted JSON against {output_model.__name__}"
+                        )
+                        return validated_data.model_dump()
+                    except ValidationError as ve:
+                        logger.debug(f"Validation error for extracted JSON: {ve}")
+                        continue
+                except json.JSONDecodeError:
+                    continue
+
+            logger.warning(f"Could not extract valid JSON from text: {text[:200]}...")
+            # Return a minimal valid response instead of None
+            return self._create_minimal_response(output_model).model_dump()
+        except Exception as e:
+            logger.error(f"Error extracting JSON from text: {e}", exc_info=True)
+            # Return a minimal valid response instead of None
+            return self._create_minimal_response(output_model).model_dump()
+
+    def _pydantic_to_gemini_type(self, field_type: Any) -> str:
+        """Convert Pydantic type to Gemini schema type."""
+        if field_type is str:
+            return "string"
+        elif field_type is int:
+            return "integer"
+        elif field_type is float:
+            return "number"
+        elif field_type is bool:
+            return "boolean"
+        elif hasattr(field_type, "__origin__") and field_type.__origin__ is list:
+            return "array"
+        elif hasattr(field_type, "__origin__") and field_type.__origin__ is dict:
+            return "object"
+        else:
+            # Default to string for complex types
+            return "string"
+
+    def _construct_partial_response(
+        self, response_data: Dict[str, Any], output_model: BaseModel
+    ) -> Dict[str, Any]:
+        """Attempt to construct a partially valid response when full validation fails."""
+        try:
+            # Start with a minimal valid response
+            minimal_response = self._create_minimal_response(output_model)
+
+            # Only update with fields that don't cause validation errors
+            for field, value in response_data.items():
+                if field in minimal_response:
+                    try:
+                        # Try to validate just this field
+                        test_data = minimal_response.copy()
+                        test_data[field] = value
+                        output_model(**test_data)
+                        minimal_response[field] = value
+                    except (ValidationError, Exception):
+                        # If validation fails, keep the default value
+                        pass
+
+            logger.info(
+                f"Constructed partial valid response for {output_model.__name__}"
+            )
+            return minimal_response
+        except Exception as e:
+            logger.error(f"Error constructing partial response: {e}", exc_info=True)
+            return self._create_minimal_response(output_model)
+
+    def _create_minimal_response(self, model_class: Type[T]) -> T:
+        """Create a minimal valid response for the given Pydantic model class."""
+        try:
+            defaults = {}
+
+            # Get model fields
+            for name, field in model_class.model_fields.items():
+                typ = field.annotation
+                if typ is str:
+                    defaults[name] = "unknown"
+                elif typ is float:
+                    defaults[name] = 0.0
+                elif typ is int:
+                    defaults[name] = 0
+                elif typ is bool:
+                    defaults[name] = False
+                elif typ is list or getattr(typ, "__origin__", None) is list:
+                    defaults[name] = []
+                elif typ is dict or getattr(typ, "__origin__", None) is dict:
+                    defaults[name] = {}
+                else:
+                    defaults[name] = None
+
+            return model_class(**defaults)
+        except Exception as e:
+            logger.error(
+                f"Error creating minimal response for {model_class.__name__}: {e}"
+            )
+            # Last resort - try with empty dict
+            try:
+                return model_class()
+            except Exception:
+                # If even that fails, raise the original error
+                raise
+
+    def _safely_handle_response(self, response, output_model=None, default_return=None):
+        """
+        Safely handle responses from Gemini API and check for errors in a consistent way.
+
+        This centralizes error handling logic to prevent KeyError issues when checking for errors.
+
+        Args:
+            response: The response from Gemini API (could be None, dict, BaseModel, or string)
+            output_model: The expected Pydantic model class (optional)
+            default_return: What to return if response is invalid (defaults to minimal response of output_model)
+
+        Returns:
+            The original response if valid, or a standardized error response
+        """
+        # Set up default return value if not provided
+        if default_return is None and output_model is not None:
+            default_return = self._create_minimal_response(output_model)
+            if isinstance(default_return, BaseModel):
+                default_return = default_return.model_dump()
+        elif default_return is None:
+            default_return = {"error": "Invalid response", "details": "No data returned"}
+
+        # Handle None responses
+        if response is None:
+            logger.warning("Received None response from Gemini API")
+            return default_return
+
+        # Handle string responses
+        if isinstance(response, str):
+            logger.warning(f"Received string response instead of structured data: {response[:100]}...")
+            return default_return
+
+        # Handle BaseModel responses - convert to dict
+        if isinstance(response, BaseModel):
+            try:
+                response = response.model_dump()
+            except Exception as e:
+                logger.error(f"Error converting BaseModel to dict: {e}")
+                return default_return
+
+        # Now handle dict responses and check for error conditions
+        if isinstance(response, dict):
+            # Check for explicit error key
+            if "error" in response:
+                error_msg = str(response.get("error", "Unknown error"))
+                details = str(response.get("details", "No additional details"))
+                logger.error(f"Error in Gemini response: {error_msg} - {details}")
+                return {"error": error_msg, "details": details}
+
+            # Check for other error indicators
+            if response.get("status") == "failed":
+                error_msg = "API request failed"
+                details = str(response.get("message", "No error message provided"))
+                logger.error(f"Failed API response: {error_msg} - {details}")
+                return {"error": error_msg, "details": details}
+
+            # No error found, return the response
+            return response
+
+        # If we get here, the response is an unhandled type
+        logger.warning(f"Unhandled response type: {type(response)}")
+        return default_return
+
+    # --- Chat Methods ---
+    # (Keep chat methods as they were, assuming they function correctly)
+    async def create_chat_session(
+        self, system_instruction: Optional[str] = None, history_id: Optional[str] = None
+    ) -> Optional[str]:  # Added Optional return type hint
+        """
+        Create a new chat session with Gemini.
+
+        Args:
+            system_instruction: Optional system instructions to include
+            history_id: Optional history ID to use (will generate one if not provided)
+
+        Returns:
+            The history ID for this chat session or None on failure
+        """
+        if not self.model or not self.enabled:
             logger.warning("Gemini service not initialized")
             return None
 
         try:
             # Generate a random ID if none provided
             if not history_id:
-                history_id = f"chat_{datetime.now().strftime('%Y%m%d%H%M%S')}_{id(self):x}"
+                # Use UUID for more robust unique IDs
+                history_id = f"chat_{uuid.uuid4()}"
 
             # Initialize a new chat session
-            # For Google Generative AI 0.3.2, we use a simpler chat session tracking
             self.chat_sessions[history_id] = {
-                "created_at": datetime.now().isoformat(),
+                "created_at": datetime.now().isoformat(),  # noqa: F821
+
                 "messages": [],
-                "system_instruction": system_instruction
+                "system_instruction": system_instruction,
             }
 
             logger.info(f"Created chat session with ID: {history_id}")
             return history_id
 
         except Exception as e:
-            logger.error(f"Failed to create chat session: {e}")
+            logger.error(
+                f"Failed to create chat session: {e}", exc_info=True
+            )  # Added exc_info
             return None
 
-    async def chat_message(self,
-                          message: str,
-                          history_id: str = None,
-                          system_instruction: Optional[str] = None) -> Dict[str, Any]:
+    async def chat_message(
+        self,
+        session_id: str,
+        message: str,
+        chat_history: List[Dict[str, Any]],
+        context_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Process a user chat message and generate a response."""
+        logger.debug(f"Processing chat message for session {session_id}")
+
+        if not self.model or not self.enabled:
+            return self._create_minimal_response(ChatResponse)
+
+        # Format the chat history
+        formatted_history = []
+        for entry in chat_history:
+            role = entry.get("role", "unknown")
+            content = entry.get("content", "")
+            formatted_history.append(f"{role}: {content}")
+
+        # Format context data if available
+        context_str = ""
+        if context_data:
+            context_sections = []
+
+            # Cluster information
+            if "cluster" in context_data:
+                cluster_info = context_data["cluster"]
+                context_sections.append("## Cluster Information:")
+                for key, value in cluster_info.items():
+                    context_sections.append(f"- {key}: {value}")
+
+            # Anomalies information
+            if "recent_anomalies" in context_data:
+                anomalies = context_data["recent_anomalies"]
+                context_sections.append(f"\n## Recent Anomalies ({len(anomalies)}):")
+                for i, anomaly in enumerate(anomalies[:5]):  # Limit to 5 most recent
+                    context_sections.append(f"### Anomaly {i+1}:")
+                    for key, value in anomaly.items():
+                        if isinstance(value, dict):
+                            context_sections.append(f"- {key}: {json.dumps(value)}")
+                        else:
+                            context_sections.append(f"- {key}: {value}")
+
+            # Resource metrics
+            if "resource_metrics" in context_data:
+                metrics = context_data["resource_metrics"]
+                context_sections.append("\n## Resource Metrics:")
+                for resource, resource_metrics in metrics.items():
+                    context_sections.append(f"### {resource}:")
+                    for metric_name, metric_value in resource_metrics.items():
+                        context_sections.append(f"- {metric_name}: {metric_value}")
+
+            context_str = "\n".join(context_sections)
+
+        prompt = f"""
+        # Kubernetes Assistant Chat Session
+
+        ## Chat History:
+        {chr(10).join(formatted_history) if formatted_history else "This is a new conversation."}
+
+        ## Available Context Information:
+        {context_str if context_str else "No additional context information available."}
+
+        ## Current User Message:
+        {message}
+
+        ## Task:
+        Respond to the user message in a helpful, informative, and concise manner.
+        When referring to specific Kubernetes resources or metrics, cite the relevant information
+        from the context if available.
+        If asked about specific recommendations, provide practical advice based on Kubernetes best practices.
+        If you don't have enough information, clearly state what additional details would be helpful.
+
+        Provide your response using the 'ChatResponse' Pydantic model.
         """
-        Send a message in a chat session and get a response.
 
-        Args:
-            message: The user message to send
-            history_id: The chat session ID
-            system_instruction: Optional system instruction (if creating a new chat)
-
-        Returns:
-            Dictionary containing the response text and metadata
-        """
-        if not self.model or not self._is_initialized:
-            return {"error": "Gemini service not initialized"}
-
-        try:
-            # Create a new chat session if none exists or ID not found
-            if not history_id or history_id not in self.chat_sessions:
-                history_id = await self.create_chat_session(system_instruction)
-                if not history_id:
-                    return {"error": "Failed to create chat session"}
-
-            chat_history = self.chat_sessions[history_id]
-
-            # Build the full conversation context
-            chat_context = []
-            for msg in chat_history["messages"]:
-                chat_context.append({"role": msg["role"], "parts": [{"text": msg["content"]}]})
-
-            # Add the new message
-            chat_context.append({"role": "user", "parts": [{"text": message}]})
-
-            # Get system instruction if present
-            system_instruction_text = chat_history.get("system_instruction")
-
-            # Generate the response
-            generation_config = genai.types.GenerationConfig(
-                temperature=0.2,
-                top_p=0.95,
-                top_k=40,
-                max_output_tokens=2048
-            )
-
-            safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                }
-            ]
-
-            if system_instruction_text:
-                response = await self.model.generate_content_async(
-                    contents=chat_context,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                    system_instruction=system_instruction_text
-                )
-            else:
-                response = await self.model.generate_content_async(
-                    contents=chat_context,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings
-                )
-
-            response_text = response.text if hasattr(response, 'text') else "No response text available"
-
-            # Add to history
-            self.chat_sessions[history_id]["messages"].append({
-                "role": "user",
-                "content": message,
-                "timestamp": datetime.now().isoformat()
-            })
-
-            self.chat_sessions[history_id]["messages"].append({
-                "role": "model",
-                "content": response_text,
-                "timestamp": datetime.now().isoformat()
-            })
-
-            return {
-                "text": response_text,
-                "history_id": history_id,
-                "message_count": len(self.chat_sessions[history_id]["messages"])
-            }
-
-        except Exception as e:
-            logger.error(f"Error in chat message: {e}")
-            return {"error": f"Failed to process chat message: {str(e)}"}
+        logger.debug(f"Calling Gemini for chat response for session {session_id}")
+        # Use flash-lite model for this lightweight conversation task
+        return await self._call_gemini_with_model(
+            prompt, ChatResponse, ModelType.FLASH_LITE
+        )
 
     async def get_chat_history(self, history_id: str) -> List[Dict[str, Any]]:
         """Get the history of a chat session."""
-        if history_id not in self.chat_sessions:
+        if (history_id not in self.chat_sessions):
+            logger.warning(f"Chat history not found for ID: {history_id}")
             return []
 
-        return self.chat_sessions[history_id]["messages"]
+        return self.chat_sessions[history_id].get("messages", [])  # Safely get messages
 
-    async def analyze_kubernetes_logs(self, logs: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def analyze_kubernetes_logs(
+        self, logs: str, context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:  # Added Optional hint
         """
         Analyze Kubernetes logs for anomalies and issues.
 
         Args:
-            logs: The logs to analyze
-            context: Additional context about the resource
+            logs: The logs to analyze (potentially large string).
+            context: Additional context about the resource (e.g., pod name, namespace).
 
         Returns:
-            Analysis results
+            Analysis results or an error dictionary.
         """
-        if not self.model or not self._is_initialized:
+        if not self.model or not self.enabled:
             return {"error": "Gemini service not initialized"}
 
-        # Truncate logs if too long (to avoid token limits)
-        max_log_lines = 100  # Adjust based on your needs
+        # Truncate logs if too long to avoid token limits and costs
+        from app.core import config as settings  # noqa: F821
+        max_log_lines = getattr(settings, "GEMINI_MAX_LOG_LINES", 100)  # Use setting
         logs_truncated = False
 
-        if logs.count('\n') > max_log_lines:
-            logs_lines = logs.splitlines()
-            logs = '\n'.join(logs_lines[-max_log_lines:])
+        log_lines = logs.splitlines()
+        if len(log_lines) > max_log_lines:
+            # Take the last N lines
+            logs_to_analyze = "\n".join(log_lines[-max_log_lines:])
             logs_truncated = True
+            logger.debug(f"Truncated logs to last {max_log_lines} lines for analysis.")
+        else:
+            logs_to_analyze = logs
 
         system_instruction = """
-        You are a Kubernetes log analysis expert with deep expertise in identifying issues in
-        container logs, system logs, and application logs. Analyze the provided logs for:
-        1. Error patterns and exceptions
-        2. Resource constraints (OOM, CPU throttling)
-        3. Connectivity issues
-        4. Security concerns
-        5. Performance bottlenecks
-
-        Provide concise, actionable analysis. Focus on what's most important.
+        You are an expert Kubernetes Site Reliability Engineer (SRE). Analyze the provided logs
+        from a Kubernetes resource. Identify critical errors, warning patterns, potential root causes
+        for failures (like OOMKilled, CrashLoopBackOff, network issues), and any security concerns.
+        Focus on actionable insights. If logs appear normal, state that clearly.
         """
 
         prompt = f"""
         # Kubernetes Log Analysis Request
 
         ## Resource Context:
+        ```json
         {json.dumps(context or {}, indent=2, default=str)}
-
-        ## Logs{' (truncated to last 100 lines)' if logs_truncated else ''}:
-        ```
-        {logs}
         ```
 
-        Analyze these logs for potential issues and anomalies.
-        Identify errors, warnings, and patterns that may indicate problems.
-        If the logs look normal, say so.
+        ## Logs{' (Truncated - Last ' + str(max_log_lines) + ' Lines)' if logs_truncated else ''}:
+        ```
+        {logs_to_analyze}
+        ```
+
+        ## Analysis Task:
+        Analyze these logs for potential issues and anomalies based on your SRE expertise.
+        Highlight errors, warnings, and recurring patterns.
+        Suggest possible root causes if problems are detected.
+        If the logs look normal, state that clearly.
+        Provide a concise summary of findings.
         """
 
         try:
-            response = await self.model.generate_content_async(
+            # Use the default generation config
+            response = await asyncio.to_thread(
+                self.client.models.generate_content, # Corrected: Use client.models.generate_content
                 contents=prompt,
-                generation_config=self.generation_config,
-                system_instruction=system_instruction
+                config=genai.types.GenerateContentConfig( # Changed: 'generation_config' to 'config'
+                    temperature=0.2,
+                    top_p=0.95,
+                    top_k=64,
+                    candidate_count=1,
+                    max_output_tokens=4096,
+                ),
+                system_instruction=system_instruction,
             )
 
-            return {
-                "analysis": response.text if hasattr(response, 'text') else "Analysis not available",
-                "logs_truncated": logs_truncated
-            }
+            analysis_text = (
+                response.text if hasattr(response, "text") else "Analysis not available"
+            )
+
+            return {"analysis": analysis_text, "logs_truncated": logs_truncated}
 
         except Exception as e:
-            logger.error(f"Error analyzing logs: {e}")
+            logger.error(f"Error analyzing logs: {e}", exc_info=True)  # Added exc_info
             return {"error": f"Failed to analyze logs: {str(e)}"}
 
-    async def execute_code_for_kubernetes_analysis(self,
-                                                 query: str,
-                                                 context_data: Dict[str, Any],
-                                                 include_libraries: bool = True) -> Dict[str, Any]:
+    async def execute_code_for_kubernetes_analysis(
+        self, query: str, context_data: Dict[str, Any], include_libraries: bool = True
+    ) -> Dict[str, Any]:
         """
-        Generate and execute Python code to analyze Kubernetes data.
+        Execute code (via Gemini Tool) to analyze Kubernetes data.
 
         Args:
-            query: The user's query or analysis request
-            context_data: Dictionary of relevant Kubernetes data
-            include_libraries: Whether to include Python libraries for analysis
+            query: The query prompting code generation (e.g., "Find pods with high restart counts").
+            context_data: The Kubernetes context data (e.g., list of pods, deployments) to analyze.
+            include_libraries: Whether to hint common libraries for the generated code.
 
         Returns:
-            Results of code execution and analysis
+            Results of the code execution including summary, code, output, and visualizations.
         """
-        if not self.model or not self._is_initialized:
+        if not self.enabled or not self.client:
             return {"error": "Gemini service not initialized"}
 
-        # Format context data for code execution
-        context_json = json.dumps(context_data, indent=2, default=str)
+        # Check if Code Execution tool is enabled in settings (optional)
+        if not getattr(settings, "GEMINI_ENABLE_CODE_EXECUTION", True):
+            return {"error": "Code execution tool is disabled in settings."}
 
-        libraries_prompt = """
-        You can use the following libraries in your analysis:
-        - pandas and numpy for data manipulation
-        - matplotlib for plotting
-        - seaborn for enhanced visualizations
-        - sklearn for anomaly detection and clustering
-        """ if include_libraries else ""
+        # Format context data for code execution
+        # Use default=str for non-serializable types like datetime
+        try:
+            context_json = json.dumps(context_data, indent=2, default=str)
+        except Exception as json_err:
+            logger.error(
+                f"Failed to serialize context data for code execution: {json_err}",
+                exc_info=True,
+            )
+            return {"error": f"Failed to serialize context data: {str(json_err)}"}
+
+        libraries_prompt = (
+            """
+        You can use standard Python libraries, including pandas, numpy, matplotlib, seaborn, and scikit-learn for analysis and visualization.
+        Assume the input data is loaded into a variable named `k8s_data`.
+        """
+            if include_libraries
+            else "Use standard Python libraries. Assume the input data is loaded into a variable named `k8s_data`."
+        )
 
         prompt = f"""
-        # Kubernetes Data Analysis Task
+        # Kubernetes Data Analysis Task (Code Execution)
 
-        I need you to analyze the following Kubernetes data:
+        Analyze the following Kubernetes data using Python code:
+
+        Input Data (`k8s_data` variable in your code):
         ```json
         {context_json}
         ```
 
-        Specific request: {query}
+        Analysis Request: {query}
 
         {libraries_prompt}
 
-        Please generate Python code to:
-        1. Load and parse the data
-        2. Perform the requested analysis
-        3. Generate visualizations if appropriate
-        4. Provide clear insights
+        Generate Python code to perform the requested analysis on the `k8s_data`.
+        Your code should:
+        1. Process the `k8s_data`.
+        2. Perform the analysis as requested.
+        3. Print key findings or results.
+        4. Optionally, generate simple plots (e.g., histograms, bar charts) if useful, using matplotlib or seaborn.
 
-        I'll execute your code automatically with the code execution tool.
+        I will execute your generated Python code using the Gemini code execution tool.
+        Ensure your code outputs the analysis results clearly.
         """
 
         try:
             # Code execution tool setup
-            tool = {"code_execution": {}}
+            # Ensure the tool configuration is correct for the API version
+            import glm  # noqa: F821
 
-            response = await self.model.generate_content_async(
+            tool = glm.Tool(code_execution=glm.CodeExecution())  # Using glm structure
+
+            response = await asyncio.to_thread(
+                self.client.models.generate_content, # Corrected: Use client.models.generate_content
                 contents=prompt,
-                generation_config=self.generation_config,
-                tools=[tool]
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.2,
+                    top_p=0.95,
+                    top_k=64,
+                    candidate_count=1,
+                    max_output_tokens=4096,
+                ),
+                tools=[tool],  # Pass tool configuration
             )
 
             # Extract results and code from the response
             results = {
-                "summary": "",
-                "code": "",
-                "execution_result": "",
-                "visualizations": []
+                "summary": "",  # Text summary from the model
+                "code": "",  # The generated Python code
+                "execution_result": "",  # Output from the executed code
+                "visualizations": [],  # Any generated plots/images
             }
 
-            if response and hasattr(response, 'candidates') and response.candidates:
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and candidate.content:
-                        if hasattr(candidate.content, 'parts'):
-                            for part in candidate.content.parts:
-                                if hasattr(part, 'text') and part.text:
-                                    results["summary"] += part.text
-                                if hasattr(part, 'executable_code') and part.executable_code:
-                                    results["code"] += part.executable_code.code
-                                if hasattr(part, 'code_execution_result') and part.code_execution_result:
-                                    results["execution_result"] += part.code_execution_result.output
-                                if hasattr(part, 'inline_data') and part.inline_data:
-                                    results["visualizations"].append({
-                                        "mime_type": part.inline_data.mime_type,
-                                        "data": part.inline_data.data
-                                    })
+            # Safely extract parts from the response
+            if response and hasattr(response, "candidates") and response.candidates:
+                # Usually process the first candidate
+                candidate = response.candidates[0]
+                if (
+                    hasattr(candidate, "content")
+                    and candidate.content
+                    and hasattr(candidate.content, "parts")
+                ):
+                    for part in candidate.content.parts:
+                        # Extract text summary
+                        if hasattr(part, "text") and part.text:
+                            results["summary"] += part.text + "\n"
+                        # Extract executable code
+                        if hasattr(part, "executable_code") and part.executable_code:
+                            results["code"] = (
+                                part.executable_code.code
+                            )  # Overwrite if multiple code blocks? Usually one.
+                        # Extract code execution result (output)
+                        if (
+                            hasattr(part, "code_execution_result")
+                            and part.code_execution_result
+                        ):
+                            results["execution_result"] = (
+                                part.code_execution_result.output
+                            )
+                        # Extract inline data (e.g., images) - Requires checking mime_type and decoding data
+                        # This part needs careful handling based on expected output types
+                        # if hasattr(part, 'inline_data') and part.inline_data:
+                        #    results["visualizations"].append({
+                        #        "mime_type": part.inline_data.mime_type,
+                        #        "data": part.inline_data.data # May need base64 decoding depending on mime_type
+                        #    })
 
+            results["summary"] = results["summary"].strip()
             return results
 
         except Exception as e:
-            logger.error(f"Error in code execution: {e}")
+            logger.error(
+                f"Error in code execution analysis: {e}", exc_info=True
+            )  # Added exc_info
             return {"error": f"Failed to execute code analysis: {str(e)}"}
 
-    # Enhance existing methods with system instructions and structured output
-
-    async def analyze_anomaly(self, anomaly_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze an anomaly or failure event."""
-        logger.debug(f"Analyzing anomaly for {anomaly_context.get('entity_type')}/{anomaly_context.get('entity_id')}")
-
-        if not self.model or not self._is_initialized:
-            return {"error": "Gemini service not initialized"}
-
-        is_critical = anomaly_context.get("is_critical", False)
-        event_type = "critical failure" if is_critical else "anomaly"
-
-        # Optimize metric data to reduce token usage
-        metrics_snapshot = anomaly_context.get('metrics_snapshot', [])
-        optimized_metrics = []
-
-        # Check if we have prediction data to include in the analysis
-        prediction_data = anomaly_context.get('prediction_data', None)
-        has_predictions = prediction_data is not None and len(prediction_data) > 0
-
-        # Add system instruction for better context
-        system_instruction = """
-        You are a Kubernetes anomaly analysis expert with deep expertise in:
-        1. Root cause analysis of container and pod failures
-        2. Performance troubleshooting for Kubernetes workloads
-        3. Resource constraint identification
-        4. Detection of cascading failures
-        5. Security incident analysis
-        6. Network and storage issues
-        7. API server and etcd performance problems
-        8. Pod scheduling and resource allocation issues
-
-        Analyze Kubernetes anomalies or critical failures with precision and depth.
-        Focus on actionable insights rather than generic statements.
-        Prioritize urgent remediation steps for critical failures.
-
-        When analyzing metrics:
-        1. Look for patterns across multiple metrics
-        2. Consider temporal relationships between events
-        3. Check for resource constraints and limits
-        4. Analyze network and storage performance
-        5. Consider API server and etcd health
-        6. Look for pod scheduling issues
-        7. Check for container lifecycle problems
-        8. Analyze node conditions and resource pressure
+    async def analyze_anomaly(
+        self,
+        anomaly_data: Dict[str, Any],
+        entity_info: Dict[str, Any],
+        related_metrics: Dict[str, List[Dict[str, Any]]],
+        additional_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
+        Perform root cause analysis on an anomaly using structured metric data.
 
-        # Prepare prediction context if available
-        prediction_context = ""
-        if has_predictions:
-            prediction_context = f"""
-            ## Prediction Data:
-            - Predicted Failures: {prediction_data.get('predicted_failures', [])}
-            - Forecast: {prediction_data.get('forecast', {})}
-            - Recommendation: {prediction_data.get('recommendation', 'monitor')}
-            """
+        Args:
+            anomaly_data: Information about the anomaly event
+            entity_info: Information about the affected entity
+            related_metrics: Related metrics data around the time of the anomaly
+            additional_context: Additional cluster context including historical metrics
 
-        # Group metrics by category for better analysis
-        metrics_by_category = {
-            "resource_usage": [],
-            "container_status": [],
-            "node_conditions": [],
-            "network": [],
-            "storage": [],
-            "api_server": [],
-            "scheduling": []
-        }
-
-        for metric in metrics_snapshot:
-            query = metric.get("query", "").lower()
-            if any(term in query for term in ["cpu", "memory", "resource"]):
-                metrics_by_category["resource_usage"].append(metric)
-            elif any(term in query for term in ["container", "pod", "phase"]):
-                metrics_by_category["container_status"].append(metric)
-            elif "node" in query:
-                metrics_by_category["node_conditions"].append(metric)
-            elif any(term in query for term in ["network", "receive", "transmit"]):
-                metrics_by_category["network"].append(metric)
-            elif any(term in query for term in ["disk", "fs", "volume"]):
-                metrics_by_category["storage"].append(metric)
-            elif "apiserver" in query:
-                metrics_by_category["api_server"].append(metric)
-            elif any(term in query for term in ["scheduling", "unschedulable"]):
-                metrics_by_category["scheduling"].append(metric)
-
-        # Format metrics by category
-        formatted_metrics = []
-        for category, metrics in metrics_by_category.items():
-            if metrics:
-                formatted_metrics.append(f"\n### {category.replace('_', ' ').title()} Metrics:")
-                for metric in metrics:
-                    query = metric.get("query", "")
-                    values = metric.get("values", [])
-                    if values:
-                        last_value = values[-1][1] if isinstance(values[-1], list) else values[-1]
-                        formatted_metrics.append(f"- {query}: {last_value}")
-
-        prompt = f"""
-        # Kubernetes {event_type.upper()} Analysis Task
-
-        ## Context:
-        Entity Type: {anomaly_context['entity_type']}
-        Entity ID: {anomaly_context['entity_id']}
-        Namespace: {anomaly_context.get('namespace', 'default')}
-        Anomaly Score: {anomaly_context.get('anomaly_score', 'N/A')}
-        Is Critical: {is_critical}
-
-        ## Metrics Analysis:
-        {chr(10).join(formatted_metrics)}
-
-        {prediction_context}
-
-        Analyze this {event_type} considering:
-        1. Root cause analysis across all metric categories
-        2. Potential impact on the system and dependencies
-        3. Severity assessment based on multiple indicators
-        4. Immediate recommendations with priority
-        5. Assessment of prediction reliability (if prediction data is provided)
-        6. Resource constraints and limits
-        7. Network and storage performance
-        8. API server and etcd health
-        9. Pod scheduling and resource allocation
-        10. Container lifecycle issues
-
-        If this is a critical failure, focus on:
-        - Immediate service impact
-        - Potential cascading failures
-        - Time-critical actions needed
-        - Data loss risks
-        - System stability concerns
-
-        Provide your analysis using the AnomalyAnalysis structure.
+        Returns:
+            Dictionary with anomaly analysis details including root cause and recommendations
         """
+        logger.info(f"Analyzing anomaly for {entity_info.get('entity_id', 'unknown')}")
 
-        logger.debug(f"Calling Gemini for anomaly analysis of {anomaly_context.get('entity_id')}")
-
-        # Try with structured output first
-        try:
-            response = await self.model.generate_content_async(
-                model=self.model.name,
-                contents=prompt,
-                generation_config=self.generation_config,
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                response_schema=AnomalyAnalysis
-            )
-
-            if hasattr(response, 'text'):
-                try:
-                    data = json.loads(response.text)
-                    validated_data = AnomalyAnalysis(**data)
-                    logger.info(f"Structured output approach succeeded for anomaly analysis")
-                    return validated_data.model_dump()
-                except Exception as json_error:
-                    logger.warning(f"Failed to parse JSON response: {json_error}")
-        except Exception as e:
-            logger.warning(f"Structured output approach failed: {e}")
-
-        # Fall back to function calling approach
-        return await self._call_gemini_with_function(prompt, AnomalyAnalysis)
-
-    async def suggest_remediation(self, anomaly_context: Dict[str, Any], prioritize_critical: bool = False) -> Dict[str, Any]:
-        """Suggest remediation actions with structured output."""
-        if not self.model or not self._is_initialized:
-            return {"error": "Gemini service not initialized"}
-
-        # Enhance prompt based on criticality
-        failure_context = "CRITICAL FAILURE" if prioritize_critical else "anomaly"
-        priority_context = "This is a CRITICAL failure requiring immediate remediation." if prioritize_critical else ""
-
-        # Group metrics by category for better analysis
-        metrics_by_category = {
-            "resource_usage": [],
-            "container_status": [],
-            "node_conditions": [],
-            "network": [],
-            "storage": [],
-            "api_server": [],
-            "scheduling": []
-        }
-
-        for metric in anomaly_context.get('metrics_snapshot', []):
-            query = metric.get("query", "").lower()
-            if any(term in query for term in ["cpu", "memory", "resource"]):
-                metrics_by_category["resource_usage"].append(metric)
-            elif any(term in query for term in ["container", "pod", "phase"]):
-                metrics_by_category["container_status"].append(metric)
-            elif "node" in query:
-                metrics_by_category["node_conditions"].append(metric)
-            elif any(term in query for term in ["network", "receive", "transmit"]):
-                metrics_by_category["network"].append(metric)
-            elif any(term in query for term in ["disk", "fs", "volume"]):
-                metrics_by_category["storage"].append(metric)
-            elif "apiserver" in query:
-                metrics_by_category["api_server"].append(metric)
-            elif any(term in query for term in ["scheduling", "unschedulable"]):
-                metrics_by_category["scheduling"].append(metric)
-
-        # Format metrics by category
-        formatted_metrics = []
-        for category, metrics in metrics_by_category.items():
-            if metrics:
-                formatted_metrics.append(f"\n### {category.replace('_', ' ').title()} Metrics:")
-                for metric in metrics:
-                    query = metric.get("query", "")
-                    values = metric.get("values", [])
-                    if values:
-                        last_value = values[-1][1] if isinstance(values[-1], list) else values[-1]
-                        formatted_metrics.append(f"- {query}: {last_value}")
-
-        prompt = f"""
-        # Kubernetes {failure_context} Remediation Task
-
-        ## Context:
-        {priority_context}
-        Entity Type: {anomaly_context['entity_type']}
-        Entity ID: {anomaly_context['entity_id']}
-        Namespace: {anomaly_context.get('namespace', 'default')}
-        Anomaly Score: {anomaly_context.get('anomaly_score', 'N/A')}
-
-        ## Metrics Analysis:
-        {chr(10).join(formatted_metrics)}
-
-        ## Task:
-        Suggest specific remediation commands to address this {failure_context}.
-        For each suggested command, provide:
-        1. The exact kubectl command to execute
-        2. The expected outcome
-        3. Potential risks
-        4. Confidence level in the suggestion
-
-        If the root cause is unclear, suggest diagnostic commands first:
-        - kubectl describe pod/namespace
-        - kubectl logs
-        - kubectl get events
-        - kubectl top pod/node
-        - kubectl get pod -o wide
-
-        For critical failures, prioritize:
-        1. Immediate stability restoration
-        2. Prevention of cascading failures
-        3. Data preservation
-        4. Service recovery
-
-        For non-critical issues, consider:
-        1. Root cause investigation
-        2. Gradual remediation
-        3. Performance optimization
-        4. Resource efficiency
-
-        Provide your suggestions using the RemediationSteps structure.
-        """
-
-        return await self._call_gemini_with_function(prompt, RemediationSteps)
-
-    # NEW METHODS
-
-    async def prioritize_remediation_actions(self, anomaly_context: Dict[str, Any], suggested_commands: List[str],
-                                            available_templates: Dict[str, Dict[str, Any]],
-                                            dependency_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Prioritize remediation actions based on impact, dependencies, and effectiveness."""
-        if not self.model:
-            return {"error": "Gemini service disabled"}
-
-        prompt = f"""
-        Analyze the following Kubernetes anomaly and suggested remediation commands to prioritize them based on:
-        1. Potential impact (minimize disruption)
-        2. Effectiveness for the issue
-        3. Speed of resolution
-        4. Dependencies between services
-        5. Criticality of affected components
-
-        When relevant, convert raw commands to template-based actions (in RemediationAction format) and suggest phased/incremental
-        approaches when appropriate (e.g., for scaling operations, suggest incremental steps with verification).
-
-        Anomaly Context:
-        {json.dumps(anomaly_context, indent=2, default=str)}
-
-        Available Command Templates:
-        {json.dumps(available_templates, indent=2, default=str)}
-
-        Raw Suggested Commands:
-        {json.dumps(suggested_commands, indent=2, default=str)}
-
-        Dependencies Information (if available):
-        {json.dumps(dependency_info or {}, indent=2, default=str)}
-
-        Provide your prioritized remediation plan using the 'PrioritizedRemediation' structure.
-        Favor incremental/phased approaches when dealing with scaling or resource-intensive changes.
-        """
-
-        result = await self._call_gemini_with_function(prompt, PrioritizedRemediation)
-        return result or {"error": "Gemini prioritization failed or service unavailable."}
-
-    async def generate_promql_queries(self, cluster_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get PromQL queries directly from Prometheus based on available metrics."""
-        logger.info(f"Getting PromQL queries for cluster with {cluster_context.get('nodes', {}).get('count', 0)} nodes " +
-                    f"and {sum(cluster_context.get('workloads', {}).values())} workloads")
-
-        # Skip Gemini completely and go directly to Prometheus
-        return await self._fetch_prometheus_example_queries(cluster_context)
-
-    async def _fetch_prometheus_example_queries(self, cluster_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Fetch example queries directly from Prometheus to use as fallbacks."""
-        import aiohttp
-        from urllib.parse import quote
-        import asyncio
-
-        logger.info("Fetching queries from Prometheus")
-
-        # Try to connect to Prometheus at localhost:9090
-        # These are common and useful Prometheus queries for Kubernetes monitoring
-        prometheus_queries = []
+        if not self.model or not self.enabled:
+            error_msg = "AI analysis is not available - Gemini service is not initialized."
+            logger.error(error_msg)
+            return {"error": error_msg, "status": "failed"}
 
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                # First, try to get the list of metrics from Prometheus
-                async with session.get("http://localhost:9090/api/v1/label/__name__/values") as response:
-                    if response.status == 200:
-                        metrics_data = await response.json()
-                        available_metrics = metrics_data.get("data", [])
-                        logger.info(f"Found {len(available_metrics)} metrics in Prometheus")
+            # Extract historical metrics from additional_context if available
+            historical_metrics = []
+            metric_window = additional_context.get("metric_window", []) if additional_context else []
+            if metric_window:
+                historical_metrics = metric_window
+                logger.info(f"Using {len(historical_metrics)} historical metric snapshots for analysis")
 
-                        # Build queries based on available metrics
-                        kubernetes_metric_patterns = [
-                            "container_cpu", "container_memory", "kube_pod",
-                            "kube_deployment", "kube_node", "node_cpu",
-                            "node_memory", "apiserver", "etcd", "kubelet",
-                            "container_network", "kube_hpa", "kube_statefulset",
-                            "kube_daemonset", "kube_service", "kube_ingress",
-                            "kube_persistentvolume", "container_fs"
-                        ]
+            # Format metrics in a more AI-friendly structured way with clear timestamps
+            structured_metrics = {}
+            for metric_name, metric_data in related_metrics.items():
+                structured_values = []
+                for data_point in metric_data:
+                    if isinstance(data_point, dict) and "timestamp" in data_point and "value" in data_point:
+                        structured_values.append({
+                            "timestamp": data_point["timestamp"],
+                            "value": data_point["value"]
+                        })
+                    elif isinstance(data_point, dict) and "values" in data_point:
+                        for val in data_point["values"]:
+                            if isinstance(val, list) and len(val) >= 2:
+                                try:
+                                    timestamp = datetime.fromtimestamp(val[0]).isoformat()
+                                    structured_values.append({
+                                        "timestamp": timestamp,
+                                        "value": val[1]
+                                    })
+                                except Exception:
+                                    pass
+                structured_metrics[metric_name] = structured_values
 
-                        # Filter metrics that match Kubernetes patterns
-                        k8s_metrics = [m for m in available_metrics if any(pattern in m for pattern in kubernetes_metric_patterns)]
-                        logger.info(f"Found {len(k8s_metrics)} Kubernetes-related metrics in Prometheus")
-
-                        # Define categories for organizing queries
-                        query_categories = {
-                            "pod_resource_usage": [],
-                            "node_resource_usage": [],
-                            "deployment_health": [],
-                            "pod_health": [],
-                            "node_health": [],
-                            "network": [],
-                            "storage": [],
-                            "control_plane": []
-                        }
-
-                        # Check for specific important metrics and build appropriate queries
-                        # Pod CPU usage
-                        if any("container_cpu_usage_seconds_total" in m for m in k8s_metrics):
-                            query_categories["pod_resource_usage"].extend([
-                                "sum(rate(container_cpu_usage_seconds_total{container!='POD',container!=''}[5m])) by (namespace, pod)",
-                                "sum(rate(container_cpu_usage_seconds_total{container!='POD',container!=''}[5m])) by (namespace)",
-                                "topk(10, sum(rate(container_cpu_usage_seconds_total{container!='POD',container!=''}[5m])) by (namespace, pod))"
-                            ])
-
-                        # Pod Memory usage
-                        if any("container_memory_usage_bytes" in m for m in k8s_metrics):
-                            query_categories["pod_resource_usage"].extend([
-                                "sum(container_memory_usage_bytes{container!='POD',container!=''}) by (namespace, pod)",
-                                "sum(container_memory_usage_bytes{container!='POD',container!=''}) by (namespace)",
-                                "topk(10, sum(container_memory_usage_bytes{container!='POD',container!=''}) by (namespace, pod))"
-                            ])
-
-                        # Node CPU usage
-                        if any("node_cpu_seconds_total" in m for m in k8s_metrics):
-                            query_categories["node_resource_usage"].extend([
-                                "sum(rate(node_cpu_seconds_total{mode!='idle'}[5m])) by (instance)",
-                                "1 - avg(rate(node_cpu_seconds_total{mode='idle'}[5m])) by (instance)",
-                                "sum(rate(node_cpu_seconds_total{mode!='idle'}[5m]))"
-                            ])
-
-                        # Node memory usage
-                        if any("node_memory_MemTotal_bytes" in m for m in k8s_metrics):
-                            query_categories["node_resource_usage"].extend([
-                                "sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) by (instance)",
-                                "(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100",
-                                "sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes) * 100"
-                            ])
-
-                        # Deployment status
-                        if any("kube_deployment_status_replicas" in m for m in k8s_metrics):
-                            query_categories["deployment_health"].extend([
-                                "sum(kube_deployment_status_replicas_unavailable) by (namespace, deployment)",
-                                "kube_deployment_status_replicas_available / kube_deployment_status_replicas",
-                                "sum(kube_deployment_status_replicas_unavailable) > 0"
-                            ])
-
-                        # Pod status
-                        if any("kube_pod_status_phase" in m for m in k8s_metrics):
-                            query_categories["pod_health"].extend([
-                                "sum(kube_pod_status_phase{phase='Failed'}) by (namespace)",
-                                "sum(kube_pod_status_phase{phase='Pending'}) by (namespace)",
-                                "sum(kube_pod_status_phase{phase!='Running',phase!='Succeeded'}) by (namespace)"
-                            ])
-
-                        # Container restarts
-                        if any("kube_pod_container_status_restarts_total" in m for m in k8s_metrics):
-                            query_categories["pod_health"].extend([
-                                "sum(rate(kube_pod_container_status_restarts_total[1h])) by (namespace, pod)",
-                                "topk(10, sum(rate(kube_pod_container_status_restarts_total[1h])) by (namespace, pod))",
-                                "sum(changes(kube_pod_container_status_restarts_total[24h])) by (namespace, pod) > 5"
-                            ])
-
-                        # Disk usage
-                        if any("node_filesystem_avail_bytes" in m for m in k8s_metrics):
-                            query_categories["storage"].extend([
-                                "sum(node_filesystem_size_bytes - node_filesystem_avail_bytes) by (instance, mountpoint)",
-                                "(node_filesystem_size_bytes - node_filesystem_avail_bytes) / node_filesystem_size_bytes * 100 > 80",
-                                "sum by(instance) ((node_filesystem_size_bytes - node_filesystem_avail_bytes) / node_filesystem_size_bytes * 100)"
-                            ])
-
-                        # Network
-                        if any("container_network_receive_bytes_total" in m for m in k8s_metrics):
-                            query_categories["network"].extend([
-                                "sum(rate(container_network_receive_bytes_total[5m])) by (namespace, pod)",
-                                "sum(rate(container_network_transmit_bytes_total[5m])) by (namespace, pod)",
-                                "sum(rate(container_network_receive_errors_total[5m])) by (namespace, pod) > 0"
-                            ])
-
-                        # Control plane metrics
-                        if any("apiserver_request_duration_seconds_bucket" in m for m in k8s_metrics):
-                            query_categories["control_plane"].extend([
-                                "histogram_quantile(0.99, sum(rate(apiserver_request_duration_seconds_bucket[5m])) by (le, verb, resource))",
-                                "sum(rate(apiserver_request_total{code=~\"5..\"}[5m]))",
-                                "sum(rate(apiserver_request_total[5m])) by (resource, verb, code)"
-                            ])
-
-                        if any("etcd_server_leader_changes_seen_total" in m for m in k8s_metrics):
-                            query_categories["control_plane"].extend([
-                                "rate(etcd_server_leader_changes_seen_total[1h])",
-                                "histogram_quantile(0.99, sum(rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])) by (le))",
-                                "etcd_server_has_leader"
-                            ])
-
-                        # HPA metrics
-                        if any("kube_hpa_status_current_replicas" in m for m in k8s_metrics):
-                            query_categories["deployment_health"].extend([
-                                "kube_hpa_status_current_replicas / kube_hpa_spec_max_replicas",
-                                "kube_hpa_status_current_replicas / kube_hpa_spec_min_replicas",
-                                "kube_hpa_status_current_replicas != kube_hpa_spec_target_replicas"
-                            ])
-
-                        # Node health
-                        if any("kube_node_status_condition" in m for m in k8s_metrics):
-                            query_categories["node_health"].extend([
-                                "sum(kube_node_status_condition{status='true',condition='Ready'}) / count(kube_node_info) * 100",
-                                "kube_node_status_condition{status='true',condition='DiskPressure'}",
-                                "kube_node_status_condition{status='true',condition='MemoryPressure'}"
-                            ])
-
-                        # Create flatten list of all queries to validate
-                        queries_to_try = []
-                        for category, category_queries in query_categories.items():
-                            queries_to_try.extend(category_queries)
-
-                        # Test each query to see if it returns results
-                        for query in queries_to_try:
-                            try:
-                                # URL encode the query
-                                encoded_query = quote(query)
-                                async with session.get(f"http://localhost:9090/api/v1/query?query={encoded_query}") as query_response:
-                                    if query_response.status == 200:
-                                        query_data = await query_response.json()
-                                        if query_data.get("status") == "success" and query_data.get("data", {}).get("result"):
-                                            # This query returned actual data
-                                            prometheus_queries.append(query)
-                                            logger.info(f"Query validated in Prometheus: {query}")
-                            except Exception as query_error:
-                                logger.warning(f"Error testing query {query}: {query_error}")
-
-                # If we couldn't get any queries from Prometheus, use fallback queries
-                if not prometheus_queries:
-                    logger.warning("No queries could be validated in Prometheus, using standard fallbacks")
-        except Exception as e:
-            logger.warning(f"Failed to connect to Prometheus: {e}")
-
-        # If we couldn't get any queries from Prometheus, use fallback queries
-        if not prometheus_queries:
-            # Define comprehensive fallback queries by category
-            fallback_queries = {
-                "pod_resource_usage": [
-                    'sum(rate(container_cpu_usage_seconds_total{container!="POD",container!=""}[5m])) by (namespace, pod)',
-                    'sum(container_memory_usage_bytes{container!="POD",container!=""}) by (namespace, pod)',
-                    'topk(10, sum(rate(container_cpu_usage_seconds_total{container!="POD",container!=""}[5m])) by (namespace, pod))'
-                ],
-                "node_resource_usage": [
-                    'sum(rate(node_cpu_seconds_total{mode!="idle"}[5m])) by (instance)',
-                    'sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) by (instance)',
-                    '(node_filesystem_size_bytes - node_filesystem_avail_bytes) / node_filesystem_size_bytes * 100 > 80'
-                ],
-                "deployment_health": [
-                    'sum(kube_deployment_status_replicas_unavailable) by (namespace, deployment) > 0',
-                    'kube_deployment_status_replicas_available / kube_deployment_status_replicas < 1',
-                    'sum(kube_deployment_status_replicas_unavailable) by (deployment)'
-                ],
-                "pod_health": [
-                    'sum(kube_pod_status_phase{phase="Failed"}) by (namespace) > 0',
-                    'sum(rate(kube_pod_container_status_restarts_total[1h])) by (namespace, pod) > 0',
-                    'sum(kube_pod_status_phase{phase!="Running",phase!="Succeeded"}) by (namespace)'
-                ],
-                "network": [
-                    'sum(rate(container_network_receive_bytes_total[5m])) by (namespace, pod)',
-                    'sum(rate(container_network_transmit_bytes_total[5m])) by (namespace, pod)'
-                ]
+            # Create a clear context object with entity status and anomaly details
+            context_obj = {
+                "entity": {
+                    "id": entity_info.get("entity_id", "unknown"),
+                    "type": entity_info.get("entity_type", "unknown"),
+                    "namespace": entity_info.get("namespace", "default"),
+                },
+                "anomaly": {
+                    "score": anomaly_data.get("anomaly_score", 0),
+                    "detection_time": datetime.utcnow().isoformat(),
+                    "is_critical": anomaly_data.get("is_critical", False),
+                },
+                "metrics": structured_metrics,
+                "historical_data_available": len(historical_metrics) > 0
             }
 
-            # Flatten the fallback queries
-            prometheus_queries = []
-            for category, queries in fallback_queries.items():
-                prometheus_queries.extend(queries)
+            # Add prediction data if available
+            if anomaly_data.get("predicted_failures"):
+                context_obj["predictions"] = anomaly_data.get("predicted_failures")
 
-        # Structure the response
-        categorized_queries = {}
+            # Format for prompt
+            context_str = json.dumps(context_obj, indent=2)
 
-        # Attempt to categorize the queries for better organization
-        for query in prometheus_queries:
-            category = "other"
+            # Create a system instruction for better results
+            system_instruction = """
+            You are an expert Kubernetes SRE with deep experience in troubleshooting and root cause analysis.
+            Analyze the anomaly data, metrics, and context to determine the likely root cause of the issue.
+            Focus on operational insights and actionable recommendations based on Kubernetes best practices.
+            Consider all the metrics together to find patterns and correlations.
+            """
 
-            if "container_cpu" in query or "container_memory" in query:
-                category = "pod_resource_usage"
-            elif "node_cpu" in query or "node_memory" in query:
-                category = "node_resource_usage"
-            elif "kube_deployment" in query or "kube_hpa" in query:
-                category = "deployment_health"
-            elif "kube_pod" in query or "container_status" in query:
-                category = "pod_health"
-            elif "node_filesystem" in query or "persistentvolume" in query:
-                category = "storage"
-            elif "container_network" in query:
-                category = "network"
-            elif "apiserver" in query or "etcd" in query:
-                category = "control_plane"
-            elif "kube_node" in query:
-                category = "node_health"
+            # Build a comprehensive prompt with historical context
+            prompt = f"""
+            # Kubernetes Anomaly Root Cause Analysis Request
 
-            if category not in categorized_queries:
-                categorized_queries[category] = []
+            ## Entity Information
+            - Type: {entity_info.get("entity_type", "unknown")}
+            - ID: {entity_info.get("entity_id", "unknown")}
+            - Namespace: {entity_info.get("namespace", "default")}
 
-            categorized_queries[category].append(query)
+            ## Anomaly Details
+            - Detection Time: {datetime.utcnow().isoformat()}
+            - Anomaly Score: {anomaly_data.get("anomaly_score", 0)}
+            - Is Critical: {anomaly_data.get("is_critical", False)}
 
-        return {
-            "queries": prometheus_queries,
-            "query_categories": categorized_queries,
-            "reasoning": "Generated PromQL queries based on available metrics in the local Prometheus instance",
-            "generation_timestamp": datetime.utcnow().isoformat(),
-            "is_prometheus_sourced": True,
-            "cluster_context": cluster_context
+            ## Structured Context (Including Metrics)
+            ```json
+            {context_str}
+            ```
+
+            ## Analysis Instructions:
+            1. Analyze patterns across all metrics together, not just individual metrics
+            2. Identify likely root cause of this anomaly considering the full context
+            3. Assess the impact on the broader system, not just this component
+            4. Rate the severity as High, Medium, or Low based on potential impact
+            5. Provide specific recommendations for investigation and resolution
+            6. Assign a confidence score (0.0-1.0) to your analysis
+
+            Present your analysis as a structured JSON response with the following fields:
+            - root_cause: The identified probable root cause of the anomaly
+            - impact: The potential impact on the system or application
+            - severity: Estimated severity (High, Medium, Low)
+            - confidence: Confidence score (0.0-1.0) in the analysis
+            - recommendations: List of specific recommendations for investigation
+            """
+
+            # Implement robust retry logic for API calls with progressive backoff
+            max_retries = 3
+            retry_delay = 2  # starting backoff in seconds
+
+            for attempt in range(max_retries):
+                try:
+                    # Call Gemini API with structured output
+                    raw_response = await asyncio.to_thread(
+                        self.client.models.generate_content,
+                        model=ModelType.PRO.value,
+                        contents=[
+                            {
+                                "role": "system",
+                                "parts": [{"text": system_instruction}]
+                            },
+                            {
+                                "role": "user",
+                                "parts": [{"text": prompt}]
+                            }
+                        ],
+                        config=genai.types.GenerateContentConfig(
+                            temperature=0.2,
+                            top_p=0.95,
+                            top_k=64,
+                            max_output_tokens=2048,
+                            response_mime_type="application/json",
+                            response_schema=AnomalyAnalysis
+                        ),
+                    )
+
+                    # Check if we got a valid response
+                    if raw_response and hasattr(raw_response, "parsed") and raw_response.parsed is not None:
+                        # Use the parsed structured output directly if available
+                        parsed_response = raw_response.parsed
+                        logger.info(f"Successfully parsed structured AnomalyAnalysis response")
+                        return parsed_response.model_dump()
+                    elif raw_response and hasattr(raw_response, "text") and raw_response.text.strip():
+                        # Try to extract JSON from text if .parsed is not available
+                        return self._extract_json_from_text(raw_response.text, AnomalyAnalysis)
+
+                    # If we got here, we don't have a good response
+                    logger.warning(f"Attempt {attempt+1}: No valid response from Gemini API")
+
+                    if attempt < max_retries - 1:
+                        # Implement exponential backoff
+                        backoff_time = retry_delay * (2 ** attempt)
+                        logger.info(f"Retrying in {backoff_time} seconds...")
+                        await asyncio.sleep(backoff_time)
+                        continue
+                    else:
+                        logger.error("Max retries exceeded, returning minimal response")
+                        return self._create_minimal_response(AnomalyAnalysis).model_dump()
+
+                except Exception as api_error:
+                    logger.error(f"API call to Gemini failed in analyze_anomaly (attempt {attempt+1}): {str(api_error)}")
+
+                    # Check for rate limiting errors
+                    error_msg = str(api_error).lower()
+                    if any(err in error_msg for err in ["quota", "rate limit", "429", "too many requests"]):
+                        if attempt < max_retries - 1:
+                            backoff_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                            logger.info(f"Rate limited. Backing off for {backoff_time} seconds...")
+                            await asyncio.sleep(backoff_time)
+                            continue
+
+                    # For other errors, also try to retry with backoff
+                    if attempt < max_retries - 1:
+                        backoff_time = retry_delay * (2 ** attempt)
+                        logger.info(f"Retrying after error in {backoff_time} seconds...")
+                        await asyncio.sleep(backoff_time)
+                    else:
+                        logger.error("Max retries exceeded after errors, returning minimal response")
+                        return self._create_minimal_response(AnomalyAnalysis).model_dump()
+
+            # Fallback response if all retries failed but we somehow got here
+            return self._create_minimal_response(AnomalyAnalysis).model_dump()
+
+        except Exception as e:
+            logger.error(f"Error during anomaly analysis: {e}", exc_info=True)
+            return self._create_minimal_response(AnomalyAnalysis).model_dump()
+
+    async def suggest_remediation(
+        self,
+        anomaly_context: Union[AnomalyAnalysis, Dict[str, Any]],
+        failure_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Suggest remediation steps for an anomaly.
+
+        Args:
+            anomaly_context: The anomaly analysis or context dictionary
+            failure_context: Optional failure context dictionary
+
+        Returns:
+            Dictionary containing remediation steps and explanations (conforming to RemediationSteps model)
+        """
+        # Define a fallback response upfront
+        fallback_response = {
+            "steps": [], # Return an empty list of steps if generation fails
+            "risks": ["Manual intervention may be required."],
+            "expected_outcome": "Resolution of the identified issue",
+            "confidence": 0.0,
+            "error": "Failed to generate specific remediation steps." # Add an error field for clarity
         }
 
-    def _extract_function_call_result(self, response, expected_function_name: str) -> Optional[Dict[str, Any]]:
-        """Helper method to extract function call results from Gemini response."""
         try:
-            # Check if we have valid candidates
-            if not hasattr(response, 'candidates') or not response.candidates:
-                return None
+            # Check if input is missing
+            if not anomaly_context:
+                logger.warning("Missing anomaly context for remediation suggestion")
+                return fallback_response
 
-            for candidate in response.candidates:
-                # Check for content and parts
-                if not hasattr(candidate, 'content') or not candidate.content or not hasattr(candidate.content, 'parts'):
-                    continue
-
-                # Look for function call in parts
-                for part in candidate.content.parts:
-                    # Check if this part has a function call
-                    if not hasattr(part, 'function_call') or not part.function_call:
-                        continue
-
-                    # Extract the function call
-                    function_call = part.function_call
-
-                    # Verify it's the function we expect
-                    if hasattr(function_call, 'name') and function_call.name != expected_function_name:
-                        logger.warning(f"Expected function {expected_function_name} but got {function_call.name}")
-                        continue
-
-                    # Extract arguments
-                    if not hasattr(function_call, 'args'):
-                        continue
-
-                    args = function_call.args
-                    result = {}
-
-                    # Process different types of args
-                    if hasattr(args, 'items'):  # Handle Struct type
-                        for key, value in args.items():
-                            result[key] = self._extract_value_from_proto(value)
-                    elif isinstance(args, dict):  # Handle dict
-                        result = args
+            # Convert dictionary to AnomalyAnalysis if needed
+            if isinstance(anomaly_context, dict):
+                try:
+                    # Try to convert to AnomalyAnalysis if it has the right fields
+                    if "root_cause" in anomaly_context:
+                        analysis_for_prompt = anomaly_context
                     else:
-                        # Try to convert to string and parse as JSON as last resort
-                        try:
-                            result = json.loads(str(args))
-                        except:
-                            logger.error(f"Could not parse function call args: {args}")
-                            return None
+                        # Use the raw context as is
+                        analysis_for_prompt = anomaly_context
+                except Exception as e:
+                    logger.warning(f"Could not convert context to AnomalyAnalysis: {e}")
+                    analysis_for_prompt = anomaly_context
+            else:
+                # Use the existing AnomalyAnalysis model
+                analysis_for_prompt = anomaly_context.model_dump() if hasattr(anomaly_context, "model_dump") else anomaly_context.__dict__
 
+            # Extract metrics if available (this is useful for the prompt)
+            metrics_summary = "No specific metrics provided."
+            if isinstance(anomaly_context, dict) and "metrics_snapshot" in anomaly_context:
+                try:
+                    metrics = anomaly_context.get("metrics_snapshot", [])
+                    if metrics and len(metrics) > 0:
+                        metrics_summary = f"Metrics snapshot contains {len(metrics)} data points."
+                except Exception:
+                    pass
+
+            # Get available command templates from k8s_executor
+            available_commands_info = k8s_executor.get_command_templates_info()
+            command_list_str = "\n".join([
+                f"- **{name}**: {info['description']} (Required: {', '.join(info['required_params'])}, Optional: {', '.join(info['optional_params'])})"
+                for name, info in available_commands_info.items()
+            ])
+
+            # Build the prompt - **Significantly revised structure**
+            prompt = f"""
+            # Kubernetes Remediation Suggestion Request
+
+            Analyze the following anomaly or failure context and provide highly relevant remediation steps using the provided COMMAND TEMPLATES.
+
+            ## Context Information:
+            ```json
+            {json.dumps(analysis_for_prompt, indent=2, default=str)}
+            ```"""
+
+            # Add metrics summary if available
+            if metrics_summary:
+                prompt += f"\n\n## Metrics Summary:\n{metrics_summary}"
+
+            # Add failure context if provided
+            if failure_context:
+                prompt += f"\n\n## Failure Context:\n```json\n{json.dumps(failure_context, indent=2, default=str)}\n```"
+
+            # Continue with the rest of the prompt
+            prompt += f"""
+
+            ## Available Remediation Command Templates:
+            Use ONLY these specific action types and their parameters:
+            {command_list_str}
+
+            ## Your Task:
+            1. Identify the best 1-3 remediation actions from the "Available Remediation Command Templates" that are most likely to resolve the issue described in the "Context Information".
+            2. Prioritize the actions from most recommended to least recommended.
+            3. For each recommended action, create a structured object using the `RemediationAction` format described below.
+            4. Carefully populate the `action_type`, `resource_type`, `resource_name`, `namespace`, and `parameters` fields based on the context and the chosen template.
+            5. Provide potential risks associated with the suggested actions.
+            6. Describe the expected outcome if the remediation is successful.
+            7. Estimate your confidence (0.0-1.0) in these suggestions.
+
+            ## Required JSON Output Format:
+            Your entire response MUST be a JSON object matching the `RemediationSteps` model.
+            The `steps` field MUST be a list of objects, where EACH object is a `RemediationAction` model.
+            Do NOT provide steps as simple strings.
+
+            ```json
+            // RemediationSteps Model Structure
+            {{
+              "steps": [
+                {{ // RemediationAction Model Structure
+                  "action_type": "string", // Must be one of the Available Remediation Command Templates
+                  "resource_type": "string", // e.g., "pod", "deployment", "node"
+                  "resource_name": "string", // Name of the resource
+                  "namespace": "string | null", // Namespace (if applicable)
+                  "parameters": {{ // Dictionary matching the requirements of the chosen action_type
+                    // parameter_name: value
+                  }}
+                }}
+                // ... more RemediationAction objects
+              ],
+              "risks": ["string"],
+              "expected_outcome": "string",
+              "confidence": "float" // Overall confidence
+            }}
+            ```
+
+            ## Example (if the issue was a pod CrashLoopBackOff):
+            ```json
+            {{
+              "steps": [
+                {{
+                  "action_type": "delete_pod",
+                  "resource_type": "pod",
+                  "resource_name": "my-pod-name",
+                  "namespace": "default",
+                  "parameters": {{}}, // delete_pod needs no extra parameters in its template
+                  "confidence": 0.9
+                }},
+                {{
+                  "action_type": "restart_deployment",
+                  "resource_type": "deployment",
+                  "resource_name": "my-deployment-name",
+                  "namespace": "default",
+                  "parameters": {{}},
+                  "confidence": 0.7
+                }}
+              ],
+              "risks": [
+                "Deleting a pod will cause a brief interruption.",
+                "Scaling up may consume more resources."
+              ],
+              "expected_outcome": "The problematic pod should be recreated and become healthy.",
+              "confidence": 0.85
+            }}
+            ```
+            Now, provide the JSON response for the given context:
+            """
+
+            # Implement robust retry logic for API calls
+            max_retries = 3
+            retry_delay = 2  # seconds
+
+            for attempt in range(max_retries):
+                try:
+                    # Call Gemini with appropriate config for the JSON generation task
+                    response = await asyncio.to_thread(
+                        self.client.models.generate_content,
+                        contents=prompt,
+                        generation_config=genai.types.GenerateContentConfig(
+                            temperature=0.2,
+                            top_p=0.9,
+                            top_k=64,
+                            response_mime_type="application/json",
+                            candidate_count=1,
+                            max_output_tokens=4096,
+                        ),
+                    )
+                    
+                    if response and hasattr(response, "text") and response.text:
+                        break
+                    else:
+                        logger.warning(f"Empty or invalid response from Gemini API on attempt {attempt+1}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"Retrying in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                except Exception as api_error:
+                    logger.warning(f"API error on attempt {attempt+1}: {str(api_error)}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+
+            # Check if we have a response after retries
+            if not response or not hasattr(response, "text"):
+                logger.error("All API attempts failed, returning fallback response")
+                return fallback_response
+
+            response_text = response.text
+            if not response_text or response_text.strip() == "":
+                logger.error("Empty response text from Gemini API")
+                return fallback_response
+
+            # Enhanced JSON extraction with multiple fallback mechanisms
+            try:
+                # First, try to parse as direct JSON
+                try:
+                    result = json.loads(response_text)
+                    logger.debug("Successfully parsed response as direct JSON")
+                    
+                    # Validate the structure matches what we need
+                    if not self._validate_remediation_response(result):
+                        logger.warning("Response JSON didn't validate, attempting fixes")
+                        # Try to add missing fields or fix structure issues
+                        if "steps" not in result or not isinstance(result["steps"], list):
+                            result["steps"] = []
+                        if "risks" not in result or not isinstance(result["risks"], list):
+                            result["risks"] = ["Potential service disruption during remediation"]
+                        if "expected_outcome" not in result:
+                            result["expected_outcome"] = "Resolution of the identified issue"
+                        if "confidence" not in result or not isinstance(result["confidence"], (int, float)):
+                            result["confidence"] = 0.5
+                    
                     return result
+                
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse direct JSON, trying to extract JSON from text")
+                    
+                    # Try to extract JSON from code blocks
+                    json_pattern = r'```(?:json)?\s*([\s\S]*?)```'
+                    matches = re.findall(json_pattern, response_text)
+                    
+                    for match in matches:
+                        try:
+                            extracted_json = json.loads(match)
+                            if self._validate_remediation_response(extracted_json):
+                                logger.debug("Successfully extracted valid JSON from code block")
+                                return extracted_json
+                        except json.JSONDecodeError:
+                            continue
+                    
+                    # Try to find anything that looks like a JSON object in the text
+                    object_pattern = r'\{\s*"[^"]+"\s*:'
+                    obj_matches = re.findall(object_pattern, response_text)
+                    if obj_matches:
+                        # Find the start of the first match
+                        start_idx = response_text.find(obj_matches[0])
+                        # Try to parse from there to the end
+                        try:
+                            from_obj_start = response_text[start_idx:]
+                            # Count braces to find the end of the object
+                            brace_count = 0
+                            end_idx = 0
+                            for i, char in enumerate(from_obj_start):
+                                if char == '{':
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        end_idx = i + 1
+                                        break
+                            
+                            if end_idx > 0:
+                                json_str = from_obj_start[:end_idx]
+                                extracted_json = json.loads(json_str)
+                                if self._validate_remediation_response(extracted_json):
+                                    logger.debug("Successfully extracted valid JSON from object pattern")
+                                    return extracted_json
+                        except Exception:
+                            pass
+                    
+                    logger.warning("Could not find valid JSON in response, trying to extract structured data")
+                    # As a last resort, try to parse the text to find actions, risks, etc.
+                    parsed_remediation = self._parse_remediation_text(response_text)
+                    return parsed_remediation
+            
+            except Exception as e:
+                # Log the error but provide a fallback response
+                logger.error(f"Error parsing remediation response: {str(e)}", exc_info=True)
+                return fallback_response
 
-            return None
         except Exception as e:
-            logger.error(f"Error extracting function call result: {e}")
-            return None
-
-    async def suggest_resource_optimizations(self, resource_metrics_history: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze resource usage patterns and suggest optimizations."""
-        if not self.model:
-            return {"error": "Gemini service disabled"}
-
-        prompt = f"""
-        Analyze the historical resource usage patterns for this Kubernetes workload and suggest optimal
-        resource requests and limits. Consider:
-
-        1. Peak usage vs. typical usage patterns
-        2. Daily/weekly patterns if visible
-        3. Growth trends
-        4. Application requirements
-        5. Safety margins for spikes
-
-        Avoid over-provisioning while ensuring stability.
-
-        Resource Metrics History:
-        {json.dumps(resource_metrics_history, indent=2, default=str)}
-
-        Provide your optimization suggestion using the 'ResourceOptimizationSuggestion' structure.
-        """
-
-        result = await self._call_gemini_with_function(prompt, ResourceOptimizationSuggestion)
-        return result or {"error": "Gemini resource optimization suggestion failed or service unavailable."}
-
-    async def generate_rca_report(self, anomaly_event: Dict[str, Any], remediation_attempts: List[Dict[str, Any]],
-                                 all_metrics: Dict[str, List[Dict[str, Any]]], logs: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        """Generate a detailed Root Cause Analysis report for a resolved issue."""
-        if not self.model:
-            return {"error": "Gemini service disabled"}
-
-        prompt = f"""
-        Generate a comprehensive Root Cause Analysis (RCA) report for this resolved Kubernetes incident.
-
-        Include:
-        - A clear summary of the issue
-        - Detailed analysis of the root cause
-        - Timeline from detection to resolution
-        - Metrics analysis
-        - Remediation steps taken and their effectiveness
-        - Recommendations to prevent recurrence
-
-        Anomaly Event:
-        {json.dumps(anomaly_event, indent=2, default=str)}
-
-        Remediation Attempts:
-        {json.dumps(remediation_attempts, indent=2, default=str)}
-
-        Metrics Data:
-        {json.dumps(all_metrics, indent=2, default=str)}
-
-        Logs (if available):
-        {json.dumps(logs or {}, indent=2, default=str)}
-
-        Provide your report using the 'RootCauseAnalysisReport' structure.
-        """
-
-        result = await self._call_gemini_with_function(prompt, RootCauseAnalysisReport)
-        return result or {"error": "Gemini RCA report generation failed or service unavailable."}
+            # Log any errors but never crash
+            logger.error(f"Error generating remediation: {str(e)}", exc_info=True)
+            return {**fallback_response, "error": f"Unexpected error: {str(e)}"}
 
     async def verify_remediation_success(
         self,
-        anomaly_event: Dict[str, Any],
-        remediation_attempt: Dict[str, Any],
-        current_metrics: List[Dict[str, Any]],
-        current_k8s_status: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Verify remediation success using Gemini."""
-        if not self.model:
-            return {"error": "Gemini service disabled"}
-
-        was_critical = anomaly_event.get("status") == "CriticalFailure"
-        verification_context = {
-            "original_issue": {
-                "entity_id": anomaly_event.get("entity_id"),
-                "entity_type": anomaly_event.get("entity_type"),
-                "namespace": anomaly_event.get("namespace"),
-                "detected_at": anomaly_event.get("detection_timestamp"),
-                "original_score": anomaly_event.get("anomaly_score"),
-                "was_critical": was_critical,
-                "original_analysis": anomaly_event.get("ai_analysis"),
-                "triggering_metrics": anomaly_event.get("metric_snapshot", [])[-1] if anomaly_event.get("metric_snapshot") else {}
-            },
-            "remediation_action": {
-                "command": remediation_attempt.get("command"),
-                "parameters": remediation_attempt.get("parameters"),
-                "executor": remediation_attempt.get("executor"),
-                "timestamp": remediation_attempt.get("timestamp")
-            },
-            "current_state": {
-                "timestamp": datetime.utcnow().isoformat(),
-                "metrics": current_metrics[-1] if current_metrics else None,
-                "kubernetes_status": current_k8s_status
-            }
-        }
-
-        prompt = f"""
-        Assess if the attempted remediation action resolved the original {'critical failure' if was_critical else 'anomaly'}.
-
-        ## Original Issue
-        Type: {'CRITICAL FAILURE' if was_critical else 'Anomaly'}
-        Entity: {verification_context['original_issue']['entity_type']}/{verification_context['original_issue']['entity_id']}
-        Namespace: {verification_context['original_issue']['namespace']}
-
-        ## Detailed Context:
-        {json.dumps(verification_context, indent=2, default=str)}
-
-        Consider:
-        1. Has the immediate issue been resolved?
-        2. Are the metrics showing healthy patterns?
-        3. Is the Kubernetes resource in a stable state?
-        4. For critical failures: Are there any signs of lingering instability?
-
-        Provide your verification using the VerificationResult structure.
+        anomaly_analysis: dict,
+        remediation_steps: dict,
+        cluster_info: dict,
+        metric_name: str,
+        before_query_result: dict,
+        after_query_result: dict,
+    ) -> dict:
         """
-
-        return await self._call_gemini_with_function(prompt, VerificationResult)
-
-    async def batch_process_anomaly(self, anomaly_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process anomaly analysis and remediation suggestions in a single API call to reduce latency.
+        Use AI to verify if a remediation attempt was successful by comparing before and after states.
 
         Args:
-            anomaly_context: Dictionary containing anomaly data including metrics, entity info, etc.
+            anomaly_analysis: Analysis of the original anomaly
+            remediation_steps: Steps that were performed to remediate the issue
+            cluster_info: Information about the Kubernetes cluster
+            metric_name: Name of the primary metric being monitored
+            before_query_result: State of resources/metrics before remediation
+            after_query_result: State of resources/metrics after remediation
 
         Returns:
-            Dictionary containing both analysis and remediation suggestions.
+            Dictionary containing verification results with success status, reasoning, and confidence
         """
         try:
-            if not self.model or not self._is_initialized:
-                return {"error": "Gemini service not initialized"}
+            if not self.model or not self.enabled:
+                logger.warning("Gemini service not initialized or disabled")
+                return self._create_minimal_verification_response(False)
 
-            # Construct a prompt that asks for both analysis and remediation in one call
+            # Format the verification prompt with all the context
             prompt = f"""
-            # Kubernetes Anomaly Analysis and Remediation Task
+            # Kubernetes Remediation Verification Request
 
-            ## Anomaly Context:
-            - Entity Type: {anomaly_context['entity_type']}
-            - Entity ID: {anomaly_context['entity_id']}
-            - Namespace: {anomaly_context.get('namespace', 'default')}
-            - Anomaly Score: {anomaly_context.get('anomaly_score', 'N/A')}
-            - Timestamp: {anomaly_context.get('timestamp', datetime.utcnow().isoformat())}
-
-            ## Metrics at Time of Anomaly:
-            {json.dumps(anomaly_context.get('metrics_snapshot', []), indent=2)}
-
-            # Task:
-            1. Analyze the anomaly and identify the probable root cause
-            2. Suggest specific remediation steps for this anomaly (provide executable Kubernetes commands)
-
-            Return your response in the following JSON format:
+            ## Original Anomaly:
             ```json
-            {
-              "analysis": {
-                "probable_cause": "string",
-                "severity": "LOW|MEDIUM|HIGH|CRITICAL",
-                "description": "string"
-              },
-              "remediation": {
-                "steps": [
-                  "kubectl command 1",
-                  "kubectl command 2"
-                ],
-                "reasoning": "string"
-              }
-            }
+            {json.dumps(anomaly_analysis, default=str, indent=2)}
             ```
-            Ensure all remediation commands are valid kubectl or k8s management commands for the specific issue.
+
+            ## Remediation Steps Performed:
+            ```json
+            {json.dumps(remediation_steps, default=str, indent=2)}
+            ```
+
+            ## Cluster Information:
+            ```json
+            {json.dumps(cluster_info, default=str, indent=2)}
+            ```
+
+            ## Primary Metric:
+            {metric_name}
+
+            ## Before Remediation State:
+            ```json
+            {json.dumps(before_query_result, default=str, indent=2)}
+            ```
+
+            ## After Remediation State:
+            ```json
+            {json.dumps(after_query_result, default=str, indent=2)}
+            ```
+
+            ## Verification Task:
+            1. Compare the before and after states to determine if the remediation was successful
+            2. Look for evidence of improvement in the primary metric
+            3. Check for resolution of the original anomaly
+            4. Identify any outstanding issues that might still need attention
+            5. Consider whether the root cause (from the anomaly analysis) has been addressed
+
+            Provide your verification assessment as a structured response with:
+            - Success status (true/false)
+            - Detailed reasoning for your assessment
+            - Confidence score (0.0-1.0) in your verification
             """
 
-            response = await self._generate_response(
-                prompt,
-                response_format={"type": "json_object"},
-                temperature=0.2
+            # Use structured output capability for more reliable response
+            response = await asyncio.to_thread(
+                lambda: self.client.models.generate_content(
+                    model=self.model_type,
+                    contents=prompt,
+                    config={
+                        'response_mime_type': 'application/json',
+                        'response_schema': VerificationResult,
+                    }
+                )
             )
 
-            if not response or not response.parts or not response.parts[0].text:
-                return {"error": "Empty response from Gemini"}
+            # Process the structured response
+            if response and hasattr(response, "parsed"):
+                parsed_response = response.parsed
+                if parsed_response:
+                    logger.info(
+                        f"Successfully verified remediation with confidence: {parsed_response.confidence}"
+                    )
+                    return parsed_response.model_dump()
 
-            response_text = response.parts[0].text
-            response_data = json.loads(response_text)
+            # Fall back to text extraction if structured output fails
+            if response and hasattr(response, "text"):
+                logger.warning(
+                    "Structured verification failed, extracting from text response"
+                )
+                verification_result = self._extract_json_from_text(
+                    response.text, VerificationResult
+                )
+                if verification_result:
+                    return verification_result
 
-            # Extract and format results
-            result = {
-                "analysis": response_data.get("analysis", {}),
-                "remediation": {
-                    "steps": response_data.get("remediation", {}).get("steps", []),
-                    "reasoning": response_data.get("remediation", {}).get("reasoning", "")
+            # Return a minimal valid response as last resort
+            logger.error("Failed to extract verification result, using minimal response")
+            return self._create_minimal_verification_response(False)
+
+        except Exception as e:
+            logger.error(f"Error in remediation verification: {str(e)}", exc_info=True)
+            return self._create_minimal_verification_response(False)
+
+    def _create_minimal_verification_response(self, success: bool) -> dict:
+        """Create a minimal valid verification response.
+
+        Args:
+            success: Whether the verification succeeded
+
+        Returns:
+            Dictionary with minimal verification result
+        """
+        return {
+            "success": success,
+            "reasoning": "Automated verification could not be completed"
+            if not success
+            else "Verification succeeded",
+            "confidence": 0.0 if not success else 0.5,
+        }
+
+    async def batch_process_anomaly(
+        self, anomalies: List[Dict[str, Any]], cluster_info: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Process multiple anomalies in batch to improve efficiency.
+
+        Args:
+            anomalies: List of anomaly data dictionaries
+            cluster_info: Information about the Kubernetes cluster
+
+        Returns:
+            List of processed anomalies with analysis and remediation
+        """
+        processed_anomalies = []
+
+        for anomaly in anomalies:
+            try:
+                # Extract required information
+                metric_name = anomaly.get("metric_name", "unknown_metric")
+                query_result = anomaly.get("query_result", {})
+
+                # Analyze the anomaly and safely handle the response
+                raw_analysis = await self.analyze_anomaly(
+                    anomaly_data=anomaly,
+                    entity_info={
+                        "entity_id": metric_name,
+                        "entity_type": anomaly.get("entity_type", "unknown"),
+                    },
+                    related_metrics=anomaly.get("related_metrics", {}),
+                    additional_context={"cluster_info": cluster_info},
+                )
+
+                # Safely handle the analysis response
+                analysis = self._safely_handle_response(
+                    response=raw_analysis,
+                    output_model=AnomalyAnalysis,
+                    default_return=self._create_minimal_response(
+                        AnomalyAnalysis
+                    ).model_dump(),
+                )
+
+                # Convert to AnomalyAnalysis object if it's a dict
+                analysis_obj = analysis
+                if isinstance(analysis, dict):
+                    try:
+                        # If there's an error key, don't try to create the object
+                        if "error" not in analysis:
+                            analysis_obj = AnomalyAnalysis(**analysis)
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not convert analysis dict to object: {e}"
+                        )
+
+                # Only generate remediation if severity is medium or higher
+                remediation = None
+                severity = (
+                    analysis.get("severity")
+                    if isinstance(analysis, dict)
+                    else getattr(analysis_obj, "severity", "low")
+                )
+
+                if severity in ["medium", "high", "critical"]:
+                    raw_remediation = await self.suggest_remediation(
+                        anomaly_context=analysis_obj
+                        if not isinstance(analysis_obj, dict)
+                        else analysis,
+                        failure_context=anomaly.get("failure_context", {}),
+                    )
+
+                    # Safely handle the remediation response
+                    remediation = self._safely_handle_response(
+                        response=raw_remediation,
+                        output_model=RemediationSteps,
+                        default_return={
+                            "steps": ["No remediation steps could be generated"],
+                            "risks": ["Unknown risks"],
+                            "expected_outcome": "Unknown",
+                            "confidence": 0.0,
+                        },
+                    )
+
+                # Add to processed results
+                processed_anomalies.append(
+                    {
+                        "original_data": anomaly,
+                        "analysis": analysis
+                        if isinstance(analysis, dict)
+                        else analysis_obj.model_dump(),
+                        "remediation": remediation,
+                    }
+                )
+
+                logger.info(f"Successfully processed anomaly for {metric_name}")
+
+            except Exception as e:
+                logger.error(f"Error processing anomaly: {e}", exc_info=True)
+                # Add the original anomaly with error information
+                processed_anomalies.append(
+                    {
+                        "original_data": anomaly,
+                        "error": str(e),
+                        "analysis": None,
+                        "remediation": None,
+                    }
+                )
+
+        return processed_anomalies
+
+    async def analyze_metrics(self, metrics_context: Dict[str, Any]) -> MetricInsights:
+        """Analyze metric data and provide insights.
+
+        Args:
+            metrics_context: Dictionary containing metric data and context.
+
+        Returns:
+            MetricInsights object with analysis and insights.
+        """
+        logger.debug(
+            f"Analyzing metrics: {metrics_context.get('metric_name', 'unknown')}"
+        )
+
+        if not self.model or not self.enabled:
+            return self._create_minimal_response(MetricInsights)
+
+        try:
+            # Format the metric data for the prompt
+            prompt = self._format_metrics_prompt(metrics_context)
+
+            # Add system instruction
+
+            # Call Gemini with function calling to get structured response
+            return await self._call_gemini_with_model(
+                prompt, MetricInsights, ModelType.FLASH
+            )
+
+        except Exception as e:
+            logger.error(f"Error analyzing metrics: {e}", exc_info=True)
+            return self._create_minimal_response(MetricInsights)
+
+    async def get_remediation_steps(
+        self, anomaly_analysis: AnomalyAnalysis, entity_info: Dict[str, Any]
+    ) -> RemediationSteps:
+        """Get recommended remediation steps for an anomaly.
+
+        Args:
+            anomaly_analysis: The analysis of the anomaly.
+            entity_info: Information about the entity with the anomaly.
+
+        Returns:
+            RemediationSteps object with recommended actions.
+        """
+        logger.debug(
+            f"Getting remediation for {entity_info.get('entity_id', 'unknown')}"
+        )
+
+        if not self.model or not self.enabled:
+            return self._create_minimal_response(RemediationSteps)
+
+        try:
+            # Format the prompt for remediation
+            prompt = self._format_remediation_prompt(anomaly_analysis, entity_info)
+
+            # Add system instruction
+
+            # Call Gemini with function calling to get structured response
+            return await self._call_gemini_with_model(
+                prompt, RemediationSteps, ModelType.FLASH
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting remediation steps: {e}", exc_info=True)
+            return self._create_minimal_response(RemediationSteps)
+
+    async def generate_prometheus_query(
+        self, query_context: Dict[str, Any]
+    ) -> PrometheusQueryResponse:
+        """Generate an optimized Prometheus query based on the provided context.
+
+        Args:
+            query_context: Dictionary containing query generation context.
+
+        Returns:
+            PrometheusQueryResponse with the generated query and explanation.
+        """
+        logger.debug(
+            f"Generating Prometheus query for: {query_context.get('purpose', 'unknown')}"
+        )
+
+        if not self.model or not self.enabled:
+            return self._create_minimal_response(PrometheusQueryResponse)
+
+        try:
+            # Format the prompt for query generation
+            prompt = self._format_query_generation_prompt(query_context)
+
+            # Add system instruction
+
+            # Call Gemini with function calling to get structured response
+            return await self._call_gemini_with_model(
+                prompt, PrometheusQueryResponse, ModelType.PRO
+            )
+
+        except Exception as e:
+            logger.error(f"Error generating Prometheus query: {e}", exc_info=True)
+            return self._create_minimal_response(PrometheusQueryResponse)
+
+    async def verify_prometheus_query(
+        self, query_verification_context: Dict[str, Any]
+    ) -> QueryVerificationResponse:
+        """Verify a Prometheus query and suggest improvements if needed.
+
+        Args:
+            query_verification_context: Dictionary containing the query and verification context.
+
+        Returns:
+            QueryVerificationResponse with verification results and suggestions.
+        """
+        logger.debug(
+            f"Verifying Prometheus query: {query_verification_context.get('query', 'unknown')}"
+        )
+
+        if not self.model or not self.enabled:
+            return self._create_minimal_response(QueryVerificationResponse)
+
+        try:
+            # Format the prompt for query verification
+            prompt = self._format_query_verification_prompt(query_verification_context)
+
+            # Add system instruction
+
+            # Call Gemini with function calling to get structured response
+            return await self._call_gemini_with_model(
+                prompt, QueryVerificationResponse, ModelType.FLASH
+            )
+
+        except Exception as e:
+            logger.error(f"Error verifying Prometheus query: {e}", exc_info=True)
+            return self._create_minimal_response(QueryVerificationResponse)
+
+    def get_smart_remediation(self, context: Dict[str, Any]) -> RemediationSteps:
+        """Generate smart remediation steps using Gemini.
+
+        Args:
+            context: Dictionary containing remediation context including entity information,
+                   anomaly details, available resources, and cluster context
+
+        Returns:
+            RemediationSteps object with recommended remediation steps
+        """
+        if not self.model or not self.enabled:
+            raise ValueError("Gemini service not initialized")
+
+        try:
+            # Format the prompt using helper function
+            prompt = self._format_smart_remediation_prompt(context)
+
+            # System instruction for remediation
+            system_instruction = """You are an expert Kubernetes SRE with deep knowledge of Kubernetes internals, \
+container orchestration, and system troubleshooting. Your task is to generate precise remediation steps \
+for Kubernetes issues using kubectl commands or YAML manifests. Focus on practical, executable solutions \
+that follow best practices for Kubernetes operations. Always consider the potential impact of your \
+recommended actions on system stability and application availability."""
+
+            # Create async function to call model and run it
+            async def call_model():
+                return await self._call_gemini_with_model(
+                    prompt,
+                    RemediationSteps,
+                    model_type=ModelType.PRO,
+                    system_instruction=system_instruction,
+                    temperature=0.2,
+                    top_k=40,
+                    top_p=0.95,
+                    max_output_tokens=2048,
+                )
+
+            # Run the async function in the event loop
+            response = asyncio.run(call_model())
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in smart remediation generation: {str(e)}")
+            # Return fallback remediation steps
+            return RemediationSteps(
+                steps=[
+                    "Unable to generate specific remediation steps due to an error.",
+                    "Please check system logs and Kubernetes status manually.",
+                ],
+                commands=[],
+                notes="Error occurred during remediation generation. Please consult with a Kubernetes administrator.",
+            )
+
+    def _format_metrics_prompt(
+        self, metric_name: str, metric_data: Dict[str, Any], entity_info: Dict[str, Any]
+    ) -> str:
+        """Format the prompt for metric analysis.
+
+        Args:
+            metric_name: Name of the metric to analyze
+            metric_data: Dictionary containing metric values and timeframes
+            entity_info: Dictionary containing entity details
+
+        Returns:
+            Formatted prompt string
+        """
+        # Extract metric details
+        metric_values = metric_data.get("values", [])
+        metric_timestamps = metric_data.get("timestamps", [])
+
+        # Format metric data for display
+        metric_data_str = ""
+        for i in range(min(len(metric_values), len(metric_timestamps))):
+            metric_data_str += f"{metric_timestamps[i]}: {metric_values[i]}\n"
+
+        # Limit data points if too many
+        if len(metric_values) > 20:
+            sample_indices = list(
+                range(0, len(metric_values), len(metric_values) // 20)
+            )
+            sample_data_str = ""
+            for idx in sample_indices:
+                if idx < len(metric_values) and idx < len(metric_timestamps):
+                    sample_data_str += (
+                        f"{metric_timestamps[idx]}: {metric_values[idx]}\n"
+                    )
+            metric_data_str = sample_data_str
+
+        # Extract entity details
+        entity_id = entity_info.get("id", "unknown")
+        entity_type = entity_info.get("type", "unknown")
+        namespace = entity_info.get("namespace", "default")
+
+        # Build the prompt
+        prompt = f"""
+        # Kubernetes Metric Analysis Request
+
+        ## Metric Information:
+        - Name: {metric_name}
+        - Entity ID: {entity_id}
+        - Entity Type: {entity_type}
+        - Namespace: {namespace}
+
+        ## Metric Data:
+        ```
+        {metric_data_str}
+        ```
+
+        ## Analysis Tasks:
+        1. Analyze the pattern in the metric data
+        2. Identify any anomalies or concerning trends
+        3. Interpret what this means for the Kubernetes {entity_type}
+        4. Provide possible explanations for any unusual patterns
+        5. Suggest what actions might be appropriate
+
+        Please provide a detailed analysis focusing on operational implications.
+        """
+
+        return prompt
+
+    def _format_remediation_prompt(
+        self, anomaly_analysis: Dict[str, Any], entity_info: Dict[str, Any]
+    ) -> str:
+        """Format the prompt for remediation generation.
+
+        Args:
+            anomaly_analysis: Dictionary containing anomaly analysis
+            entity_info: Dictionary containing entity details
+
+        Returns:
+            Formatted prompt string
+        """
+        # Extract anomaly details
+        root_cause = anomaly_analysis.get("root_cause", "Unknown")
+        impact = anomaly_analysis.get("impact", "Unknown")
+        severity = anomaly_analysis.get("severity", "medium")
+        confidence = anomaly_analysis.get("confidence", 0.5)
+
+        # Extract entity details
+        entity_id = entity_info.get("id", "unknown")
+        entity_type = entity_info.get("type", "unknown")
+        namespace = entity_info.get("namespace", "default")
+
+        # Build the prompt
+        prompt = f"""
+        # Kubernetes Remediation Request
+
+        ## Anomaly Information:
+        - Root Cause: {root_cause}
+        - Impact: {impact}
+        - Severity: {severity}
+        - Confidence: {confidence}
+
+        ## Entity Information:
+        - ID: {entity_id}
+        - Type: {entity_type}
+        - Namespace: {namespace}
+
+        ## Remediation Requirements:
+        1. Provide specific steps to address the root cause
+        2. Consider immediate actions to mitigate the impact
+        3. Suggest preventive measures for future occurrences
+        4. Prioritize steps based on severity and effectiveness
+        5. Include command examples when applicable
+
+        Please provide a comprehensive remediation plan with clear, actionable steps.
+        """
+
+        return prompt
+
+    def _format_query_generation_prompt(
+        self,
+        purpose: str,
+        metric_info: Dict[str, Any],
+        filters: Dict[str, Any],
+        timeframe: str,
+    ) -> str:
+        """Format the prompt for Prometheus query generation.
+
+        Args:
+            purpose: The purpose of the query
+            metric_info: Dictionary containing metric information
+            filters: Dictionary containing filter criteria
+            timeframe: String describing the timeframe for the query
+
+        Returns:
+            Formatted prompt string
+        """
+        # Extract metric information
+        metric_name = metric_info.get("name", "unknown")
+        metric_type = metric_info.get("type", "unknown")
+        metric_description = metric_info.get("description", "No description available")
+
+        # Format filters for display
+        filters_str = ""
+        for key, value in filters.items():
+            filters_str += f"- {key}: {value}\n"
+
+        # Build the prompt
+        prompt = f"""
+        # Prometheus Query Generation Request
+
+        ## Query Purpose:
+        {purpose}
+
+        ## Metric Information:
+        - Name: {metric_name}
+        - Type: {metric_type}
+        - Description: {metric_description}
+
+        ## Filter Criteria:
+        {filters_str if filters_str else "No specific filters provided"}
+
+        ## Timeframe:
+        {timeframe}
+
+        ## Query Requirements:
+        1. Generate a precise PromQL query that meets the stated purpose
+        2. Incorporate the specified filters appropriately
+        3. Apply the correct aggregation method for the metric type
+        4. Include appropriate rate/increase functions if needed for counter metrics
+        5. Apply the specified timeframe correctly
+        6. Ensure the query is optimized for performance
+
+        Please provide a valid PromQL query with a brief explanation of how it works.
+        """
+
+        return prompt
+
+    def _format_query_verification_prompt(
+        self,
+        query: str,
+        purpose: str,
+        available_metrics: List[str],
+        sample_data: Dict[str, Any],
+    ) -> str:
+        """Format the prompt for Prometheus query verification.
+
+        Args:
+            query: The Prometheus query to verify
+            purpose: The purpose of the query
+            available_metrics: List of available metrics
+            sample_data: Sample data for verification
+
+        Returns:
+            Formatted prompt string
+        """
+        # Format available metrics for display
+        metrics_str = "\n".join([f"- {m}" for m in available_metrics[:20]])
+        if len(available_metrics) > 20:
+            metrics_str += (
+                f"\n- ... {len(available_metrics) - 20} more metrics available"
+            )
+
+        # Format sample data for display
+        sample_data_str = (
+            json.dumps(sample_data, indent=2)
+            if sample_data
+            else "No sample data provided"
+        )
+
+        # Build the prompt
+        prompt = f"""
+        # Prometheus Query Verification Request
+
+        ## Query to Verify:
+        ```
+        {query}
+        ```
+
+        ## Query Purpose:
+        {purpose}
+
+        ## Available Metrics (sample):
+        {metrics_str}
+
+        ## Sample Data:
+        ```json
+        {sample_data_str}
+        ```
+
+        ## Verification Tasks:
+        1. Verify that the query is syntactically correct
+        2. Check if the query uses metrics that are available
+        3. Confirm that the query will fulfill its stated purpose
+        4. Identify any potential performance issues
+        5. Suggest improvements if needed
+
+        Please provide a detailed verification analysis and corrected query if necessary.
+        """
+
+        return prompt
+
+    def _format_smart_remediation_prompt(self, context: Dict[str, Any]) -> str:
+        """Format the prompt for smart remediation generation.
+
+        Args:
+            context: Dictionary containing remediation context including entity information,
+                   anomaly details, available resources, and cluster context
+
+        Returns:
+            Formatted prompt string
+        """
+        # Extract entity information
+        entity_info = context.get("entity_info", {})
+        entity_type = entity_info.get("type", "unknown")
+        entity_id = entity_info.get("id", "unknown")
+        namespace = entity_info.get("namespace", "default")
+
+        # Extract anomaly details
+        anomaly = context.get("anomaly", {})
+        metric_name = anomaly.get("metric_name", "unknown")
+        root_cause = anomaly.get("root_cause", "Unknown")
+        severity = anomaly.get("severity", "medium")
+
+        # Extract available resources
+        resources = context.get("resources", {})
+        resource_str = (
+            json.dumps(resources, indent=2)
+            if resources
+            else "No resource information available"
+        )
+
+        # Extract cluster context if available
+        cluster_context = context.get("cluster_context", {})
+        context_str = (
+            json.dumps(cluster_context, indent=2)
+            if cluster_context
+            else "No additional cluster context available"
+        )
+
+        # Build the prompt
+        prompt = f"""
+        # Kubernetes Smart Remediation Request
+
+        ## Entity Information:
+        - Type: {entity_type}
+        - ID: {entity_id}
+        - Namespace: {namespace}
+
+        ## Anomaly Details:
+        - Metric: {metric_name}
+        - Root Cause: {root_cause}
+        - Severity: {severity}
+
+        ## Available Resources:
+        ```json
+        {resource_str}
+        ```
+
+        ## Cluster Context:
+        ```json
+        {context_str}
+        ```
+
+        ## Remediation Requirements:
+        1. Generate specific kubectl commands or YAML manifests to remediate the issue
+        2. Prioritize actions based on severity and effectiveness
+        3. Consider both immediate fixes and long-term solutions
+        4. Include verification steps to confirm the remediation was successful
+        5. Add safety precautions where necessary (e.g., adding --dry-run first)
+        6. Consider potential impact on other services
+
+        Please provide a comprehensive remediation plan with specific, executable commands.
+        """
+
+        return prompt
+
+    async def verify_remediation(self, verification_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Verify if remediation steps were successful by examining the current state.
+
+        Args:
+            verification_context: Dictionary with entity info, remediation details,
+                                 original issue, and current state
+
+        Returns:
+            Dictionary with verification result including success status, reasoning, and confidence
+        """
+        logger.debug(f"Verifying remediation for {verification_context.get('entity', {}).get('entity_id', 'unknown')}")
+
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized.")
+            return {
+                "success": False,
+                "reasoning": "Verification failed: Gemini service is not available",
+                "confidence": 0.0
+            }
+
+        try:
+            # Format the context for the prompt
+            entity = verification_context.get("entity", {})
+            entity_id = entity.get("entity_id", "unknown")
+            entity_type = entity.get("entity_type", "unknown")
+
+            remediation = verification_context.get("remediation", {})
+            action = remediation.get("action", "unknown")
+
+            original_issue = verification_context.get("original_issue", {})
+            current_state = verification_context.get("current_state", {})
+
+            # Build the prompt
+            prompt = f"""
+            # Kubernetes Remediation Verification Request
+
+            ## Entity Details:
+            - Type: {entity_type}
+            - ID: {entity_id}
+            - Namespace: {entity.get('namespace', 'default')}
+
+            ## Remediation Performed:
+            - Action: {action}
+            - Output: {remediation.get('output', 'No output available')}
+            - Status: {remediation.get('status', 'unknown')}
+
+            ## Original Issue:
+            - Status: {original_issue.get('status', 'unknown')}
+            - Anomaly Score: {original_issue.get('anomaly_score', 0)}
+            - Notes: {original_issue.get('notes', 'No notes available')}
+
+            ## Current State:
+            - Resource Exists: {current_state.get('resource_exists', 'unknown')}
+            - Current Issues: {current_state.get('issues_detected', [])}
+            - Current Status: {json.dumps(current_state.get('k8s_status', {}), default=str)[:500]}
+
+            ## Verification Task:
+            Determine if the remediation action resolved the original issue by comparing the original issue
+            with the current state. Consider whether:
+            1. The original symptoms are gone
+            2. The resource is in a healthy state
+            3. No new issues have been introduced
+            4. The action performed matches what was needed for the reported problem
+
+            Provide your verification assessment as a structured response in JSON format with these fields:
+            - success: boolean indicating if remediation was successful
+            - reasoning: detailed explanation of your assessment
+            - confidence: your confidence score (0.0-1.0) in this assessment
+            """
+
+            # Use the Flash model for faster response on this task
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=ModelType.FLASH_LITE.value,
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.2,
+                    top_p=0.95,
+                    top_k=64,
+                    max_output_tokens=2048,
+                    response_mime_type="application/json",
+                ),
+            )
+
+            # Process the response text
+            if not response or not hasattr(response, "text"):
+                logger.warning("Received empty response from Gemini API")
+                return {
+                    "success": False,
+                    "reasoning": "Verification failed: Unable to get assessment from Gemini",
+                    "confidence": 0.0
+                }
+
+            # Try to extract JSON from the response text
+            try:
+                # First try to extract JSON from code blocks
+                matches = re.findall(r"```(?:json)?\s*([\s\S]*?)```", response.text, re.DOTALL)
+
+                if matches:
+                    # Take the first match that parses as valid JSON
+                    for match in matches:
+                        try:
+                            result = json.loads(match)
+                            if set(result.keys()) >= {"success", "reasoning", "confidence"}:
+                                return result
+                        except json.JSONDecodeError:
+                            continue
+
+                # If no valid JSON in code blocks, try the whole response
+                try:
+                    result = json.loads(response.text)
+                    if set(result.keys()) >= {"success", "reasoning", "confidence"}:
+                        return result
+                except json.JSONDecodeError:
+                    pass
+
+                # If we still don't have a valid response, extract info manually
+                return self._parse_verification_result(response.text)
+
+            except Exception as e:
+                logger.warning(f"Error extracting verification results from response: {e}")
+                return {
+                    "success": False,
+                    "reasoning": f"Verification processing error: {str(e)}",
+                    "confidence": 0.0
+                }
+
+        except Exception as e:
+            logger.error(f"Error in remediation verification: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "reasoning": f"Verification error: {str(e)}",
+                "confidence": 0.0
+            }
+
+    def _parse_verification_result(self, text: str) -> Dict[str, Any]:
+        """
+        Parse verification result from unstructured text when JSON extraction fails.
+
+        Args:
+            text: Response text from the model
+
+        Returns:
+            Dictionary with parsed verification results
+        """
+        result = {
+            "success": False,
+            "reasoning": "Could not determine verification status from response",
+            "confidence": 0.0
+        }
+
+        # Look for success indicators
+        success_indicators = [
+            "remediation was successful",
+            "issue has been resolved",
+            "successfully resolved",
+            "action was effective",
+            "problem has been fixed"
+        ]
+
+        failure_indicators = [
+            "remediation was unsuccessful",
+            "issue persists",
+            "not successfully resolved",
+            "action was ineffective",
+            "problem remains"
+        ]
+
+        # Check for success or failure patterns
+        text_lower = text.lower()
+        for indicator in success_indicators:
+            if indicator in text_lower:
+                result["success"] = True
+                break
+
+        for indicator in failure_indicators:
+            if indicator in text_lower:
+                result["success"] = False
+                break
+
+        # Try to extract reasoning - look for explanation sections
+        reasoning_sections = re.findall(r"(?:reasoning|explanation|assessment|analysis):\s*(.*?)(?:\n\n|\n#|\Z)",
+                                       text, re.IGNORECASE | re.DOTALL)
+        if reasoning_sections:
+            result["reasoning"] = reasoning_sections[0].strip()
+        else:
+            # If no section headers, use the whole text but limit size
+            result["reasoning"] = text[:500] + ("..." if len(text) > 500 else "")
+
+        # Try to extract confidence - look for numbers
+        confidence_matches = re.findall(r"(?:confidence|certainty):\s*(0\.\d+|1\.0)", text, re.IGNORECASE)
+        if confidence_matches:
+            try:
+                result["confidence"] = float(confidence_matches[0])
+            except ValueError:
+                pass
+
+        return result
+
+    def _validate_remediation_response(self, response: Dict[str, Any]) -> bool:
+        """
+        Validate if a remediation response has the required fields and structure.
+
+        Args:
+            response: The response dictionary to validate
+
+        Returns:
+            Boolean indicating if the response is valid
+        """
+        required_fields = ["steps", "expected_outcome", "confidence"]
+
+        # Check that all required fields are present
+        for field in required_fields:
+            if field not in response:
+                return False
+
+        # Check specific field types
+        if not isinstance(response["steps"], list):
+            return False
+
+        if not isinstance(response["expected_outcome"], str):
+            return False
+
+        if not isinstance(response["confidence"], (int, float)):
+            return False
+
+        # Ensure steps is not empty
+        if len(response["steps"]) == 0:
+            return False
+
+        # Add risks field if not present
+        if "risks" not in response:
+            response["risks"] = ["No specific risks identified"]
+        elif not isinstance(response["risks"], list):
+            response["risks"] = [str(response["risks"])]
+
+        return True
+
+    def _parse_remediation_text(self, text: str) -> Dict[str, Any]:
+        """
+        Parse remediation steps from unstructured text response when JSON extraction fails.
+
+        Args:
+            text: Response text from the model
+
+        Returns:
+            Dictionary with parsed remediation steps
+        """
+        result = {
+            "steps": ["No specific remediation steps could be extracted"],
+            "risks": ["Manual intervention may be required"],
+            "expected_outcome": "Resolution of the identified issue",
+            "confidence": 0.0
+        }
+
+        # Look for steps (numbered or bulleted lists)
+        steps = []
+        risks = []
+        expected_outcome = ""
+
+        # Try to extract steps section first
+        steps_section_match = re.search(r"(?:steps|commands|remediation steps|actions)[:]\s*(.*?)(?:\n\n|#|\Z)",
+                                       text, re.IGNORECASE | re.DOTALL)
+
+        if steps_section_match:
+            steps_text = steps_section_match.group(1)
+            # Split into lines and look for numbered or bulleted items
+            for line in steps_text.split('\n'):
+                line = line.strip()
+                if re.match(r"^\d+[\.)]", line) or line.startswith('-') or line.startswith('*'):
+                    # Remove the bullet/number and add to steps
+                    step = re.sub(r"^\d+[\.)]|^[-*]\s*", "", line).strip()
+                    if step:
+                        steps.append(step)
+
+        # If no structured steps found, try to extract kubectl commands
+        if not steps:
+            kubectl_commands = re.findall(r"kubectl\s+\w+\s+[\w\-\./]+(?:\s+(?:--\w+(?:=[\w\-\./:]+)?|\w+))*",
+                                         text, re.IGNORECASE)
+            if kubectl_commands:
+                steps = kubectl_commands
+
+        # If still no steps, try to find any commands that look like shell commands
+        if not steps:
+            potential_commands = re.findall(r"^(?!#)[a-z]+(?:\s+(?:-{1,2}[a-z\-]+(?:=\S+)?|\S+))+",
+                                          text, re.MULTILINE | re.IGNORECASE)
+            if potential_commands:
+                steps = [cmd.strip() for cmd in potential_commands if len(cmd) > 10]  # Longer commands only
+
+        # Extract risks
+        risks_section_match = re.search(r"(?:risks|potential issues|considerations)[:]\s*(.*?)(?:\n\n|#|\Z)",
+                                       text, re.IGNORECASE | re.DOTALL)
+
+        if risks_section_match:
+            risks_text = risks_section_match.group(1)
+            # Split into lines and look for numbered or bulleted items
+            for line in risks_text.split('\n'):
+                line = line.strip()
+                if re.match(r"^\d+[\.)]", line) or line.startswith('-') or line.startswith('*'):
+                    # Remove the bullet/number and add to risks
+                    risk = re.sub(r"^\d+[\.)]|^[-*]\s*", "", line).strip()
+                    if risk:
+                        risks.append(risk)
+
+        # If no structured risks found, try to extract sentences containing risk keywords
+        if not risks:
+            risk_sentences = re.findall(r"[^.!?]*(?:risk|caution|careful|warning|impact)[^.!?]*[.!?]",
+                                      text, re.IGNORECASE)
+            if risk_sentences:
+                risks = [s.strip() for s in risk_sentences]
+
+        # Extract expected outcome
+        outcome_match = re.search(r"(?:expected outcome|result|expected result|outcome)[:]\s*(.*?)(?:\n\n|#|\Z)",
+                                 text, re.IGNORECASE | re.DOTALL)
+
+        if outcome_match:
+            expected_outcome = outcome_match.group(1).strip()
+
+        # Try to extract confidence
+        confidence_match = re.search(r"(?:confidence|certainty)[:]\s*(0\.\d+|1\.0)",
+                                    text, re.IGNORECASE)
+        confidence = 0.0
+        if confidence_match:
+            try:
+                confidence = float(confidence_match.group(1))
+            except ValueError:
+                pass
+
+        # Update the result dictionary with extracted information
+        if steps:
+            result["steps"] = steps
+
+        if risks:
+            result["risks"] = risks
+
+        if expected_outcome:
+            result["expected_outcome"] = expected_outcome
+
+        if confidence > 0:
+            result["confidence"] = confidence
+
+        return result
+
+    async def create_context_cache(
+        self,
+        content: Union[str, Dict, List],
+        ttl_seconds: int = 3600,
+        system_instruction: Optional[str] = None,
+        cache_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a context cache for efficient reuse of large context data.
+
+        Args:
+            content: The content to cache (text or structured data)
+            ttl_seconds: Time-to-live for the cache in seconds (default 1 hour)
+            system_instruction: Optional system instruction to include in the cache
+            cache_name: Optional name for the cache (will be generated if not provided)
+
+        Returns:
+            Dictionary with cache details including name and expiry time
+        """
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized")
+            return {"error": "Gemini service not initialized"}
+
+        try:
+            # Format TTL as string in the format required by the API
+            ttl = f"{ttl_seconds}s"
+
+            # Generate a name if not provided
+            if not cache_name:
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                cache_name = f"kubewise_cache_{timestamp}"
+
+            # Prepare content (ensure it's properly formatted for the API)
+            if isinstance(content, str):
+                cache_content = content
+            else:
+                try:
+                    cache_content = json.dumps(content, default=str)
+                except Exception as e:
+                    logger.error(f"Failed to serialize content for caching: {e}")
+                    return {"error": f"Failed to serialize cache content: {str(e)}"}
+
+            # Prepare cache config
+            cache_config = {
+                "ttl": ttl
+            }
+
+            if system_instruction:
+                cache_config["system_instructions"] = [{"content": system_instruction}]
+
+            # Create the cache
+            logger.info(f"Creating context cache with TTL: {ttl}")
+            cache = await asyncio.to_thread(
+                lambda: self.client.caches.create(
+                    name=cache_name,
+                    contents=cache_content,
+                    metadata=cache_config
+                )
+            )
+
+            logger.info(f"Successfully created context cache: {cache.name}")
+            return {
+                "name": cache.name,
+                "expire_time": cache.expire_time,
+                "status": "created"
+            }
+
+        except Exception as e:
+            logger.error(f"Error creating context cache: {e}", exc_info=True)
+            return {"error": f"Failed to create context cache: {str(e)}"}
+
+    async def use_cached_context(
+        self,
+        cache_name: str,
+        query: str,
+        output_model: Optional[Type[BaseModel]] = None,
+        model_type: Optional[ModelType] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate content using a previously created context cache.
+
+        Args:
+            cache_name: The name of the cache to use
+            query: The query to send with the cached context
+            output_model: Optional Pydantic model for structured output
+            model_type: Optional specific model to use
+
+        Returns:
+            Generated content using the cached context
+        """
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized")
+            return {"error": "Gemini service not initialized"}
+
+        try:
+            model_name = model_type.value if model_type else self.model_type
+
+            # Create config with cached content reference
+            config = genai.types.GenerateContentConfig(
+                temperature=0.2,
+                top_p=0.95,
+                top_k=64,
+                max_output_tokens=4096,
+                cached_content=cache_name
+            )
+
+            # Add structured output config if a model is provided
+            if output_model:
+                config.response_mime_type = "application/json"
+                config.response_schema = output_model
+
+            # Generate content using the cache
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=model_name,
+                contents=[{"role": "user", "parts": [{"text": query}]}],
+                config=config
+            )
+
+            # Process response (similar to _call_gemini_with_model)
+            if hasattr(response, "parsed") and response.parsed is not None:
+                parsed = response.parsed
+                return parsed.model_dump() if isinstance(parsed, BaseModel) else parsed
+
+            # Fallback to text response
+            if hasattr(response, "text"):
+                if output_model:
+                    return self._extract_json_from_text(response.text, output_model)
+                else:
+                    return {"response": response.text}
+
+            logger.error("Invalid response format from Gemini API")
+            return {"error": "Invalid response format from Gemini API"}
+
+        except Exception as e:
+            logger.error(f"Error using cached context: {e}", exc_info=True)
+            return {"error": f"Error using cached context: {str(e)}"}
+
+    async def list_context_caches(self) -> List[Dict[str, Any]]:
+        """
+        List all available context caches.
+
+        Returns:
+            List of cache information dictionaries
+        """
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized")
+            return [{"error": "Gemini service not initialized"}]
+
+        try:
+            caches = await asyncio.to_thread(
+                lambda: self.client.caches.list()
+            )
+
+            cache_info = []
+            for cache in caches:
+                cache_info.append({
+                    "name": cache.name,
+                    "create_time": cache.create_time,
+                    "expire_time": cache.expire_time,
+                    "size_bytes": getattr(cache, "size_bytes", "unknown")
+                })
+
+            return cache_info
+
+        except Exception as e:
+            logger.error(f"Error listing context caches: {e}", exc_info=True)
+            return [{"error": f"Error listing context caches: {str(e)}"}]
+
+    async def delete_context_cache(self, cache_name: str) -> Dict[str, Any]:
+        """
+        Delete a context cache.
+
+        Args:
+            cache_name: Name of the cache to delete
+
+        Returns:
+            Status dictionary
+        """
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized")
+            return {"error": "Gemini service not initialized"}
+
+        try:
+            await asyncio.to_thread(
+                lambda: self.client.caches.delete(name=cache_name)
+            )
+
+            logger.info(f"Successfully deleted context cache: {cache_name}")
+            return {"status": "deleted", "name": cache_name}
+
+        except Exception as e:
+            logger.error(f"Error deleting context cache: {e}", exc_info=True)
+            return {"error": f"Error deleting context cache: {str(e)}"}
+
+    async def analyze_with_thinking(
+        self,
+        prompt: str,
+        output_model: Optional[Type[BaseModel]] = None,
+        thinking_budget: int = 8192,
+        system_instruction: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Analyze a problem using Gemini 2.5's advanced thinking capabilities.
+
+        This method leverages Gemini 2.5's thinking process for improved reasoning and
+        multi-step planning, which is beneficial for complex K8s root cause analysis.
+
+        Args:
+            prompt: The prompt to analyze
+            output_model: Optional Pydantic model for structured output
+            thinking_budget: Thinking token budget (0-24576, 0 disables thinking)
+            system_instruction: Optional system instruction to guide thinking
+            **kwargs: Additional keyword arguments for generation config
+
+        Returns:
+            Dictionary with analysis results
+        """
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized")
+            return {"error": "Gemini service not initialized"}
+
+        try:
+            # Use the PRO_THINKING model with appropriate config
+            model = ModelType.PRO_THINKING.value
+
+            # Create generation config with thinking budget
+            config = genai.types.GenerateContentConfig(
+                temperature=kwargs.get("temperature", 0.2),
+                top_p=kwargs.get("top_p", 0.95),
+                top_k=kwargs.get("top_k", 64),
+                max_output_tokens=kwargs.get("max_output_tokens", 4096),
+                thinking_budget=thinking_budget  # Add thinking budget for enhanced reasoning
+            )
+
+            # Add structured output if output model is provided
+            if output_model:
+                config.response_mime_type = "application/json"
+                config.response_schema = output_model
+
+            # Add tools if provided
+            if "tools" in kwargs:
+                config.tools = kwargs["tools"]
+
+            # Create content
+            contents = []
+
+            # Add system instruction if provided
+            if system_instruction:
+                contents.append({
+                    "role": "system",
+                    "parts": [{"text": system_instruction}]
+                })
+
+            # Add user prompt
+            contents.append({
+                "role": "user",
+                "parts": [{"text": prompt}]
+            })
+
+            # Implement robust retry logic
+            max_retries = 3
+            retry_delay = 2  # seconds
+
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Calling Gemini thinking model (attempt {attempt+1}/{max_retries})")
+
+                    response = await asyncio.to_thread(
+                        self.client.models.generate_content,
+                        model=model,
+                        contents=contents,
+                        config=config
+                    )
+
+                    # Process the response
+                    if hasattr(response, "parsed") and response.parsed is not None:
+                        # Use structured output if available
+                        parsed_response = response.parsed
+                        logger.info("Successfully obtained structured response from thinking model")
+                        return parsed_response.model_dump() if isinstance(parsed_response, BaseModel) else parsed_response
+
+                    # Fall back to text response
+                    if hasattr(response, "text") and response.text.strip():
+                        logger.info(f"Got text response from thinking model ({len(response.text)} chars)")
+                        if output_model:
+                            # Try to extract JSON if output model was provided
+                            return self._extract_json_from_text(response.text, output_model)
+                        else:
+                            # Return raw text if no model was specified
+                            return {"analysis": response.text.strip()}
+
+                    # If neither parsed nor text response is available
+                    logger.warning(f"Empty response from Gemini thinking model on attempt {attempt+1}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+
+                except Exception as e:
+                    logger.error(f"Error on attempt {attempt+1}: {e}", exc_info=True)
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                    else:
+                        return {"error": f"Failed to get response after {max_retries} attempts: {str(e)}"}
+
+            # If we got here, all attempts failed
+            return {"error": "Failed to get a valid response from the thinking model"}
+
+        except Exception as e:
+            logger.error(f"Error in analyze_with_thinking: {e}", exc_info=True)
+            return {"error": f"Failed to analyze with thinking capabilities: {str(e)}"}
+
+    async def call_function(
+        self,
+        prompt: str,
+        functions: List[Dict[str, Any]],
+        function_mode: str = "AUTO",
+        model_type: Optional[ModelType] = None,
+        system_instruction: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Call Gemini with function calling capability to get a structured function call response.
+
+        Args:
+            prompt: The user prompt to process
+            functions: List of function definitions with name, description and parameters schema
+            function_mode: Mode for function calling ('AUTO', 'ANY', 'NONE')
+            model_type: Optional specific model to use
+            system_instruction: Optional system instruction to guide the model
+
+        Returns:
+            Dictionary with function call details or text response
+        """
+        if not self.enabled or not self.client:
+            logger.error("Gemini service not initialized")
+            return {"error": "Gemini service not initialized"}
+
+        try:
+            # Use specified model or default
+            model_name = model_type.value if model_type else self.model_type
+
+            # Configure the function calling tool
+            tool_config = {
+                "function_calling_config": {
+                    "mode": function_mode,  # AUTO, ANY, or NONE
                 }
             }
 
-            return result
-        except json.JSONDecodeError:
-            return {"error": "Invalid JSON response from Gemini"}
-        except Exception as e:
-            logger.error(f"Error in batch_process_anomaly: {str(e)}", exc_info=True)
-            return {"error": f"Failed to process anomaly: {str(e)}"}
+            if function_mode == "ANY" and kwargs.get("allowed_functions"):
+                tool_config["function_calling_config"]["allowed_function_names"] = kwargs.get("allowed_functions")
 
-    async def _generate_response(self, prompt: str, **kwargs) -> Any:
-        """
-        Generate a response from Gemini model with provided parameters.
+            # Create the tools configuration with the functions
+            tools = [{"function_declarations": functions}]
 
-        Args:
-            prompt: The text prompt to send to Gemini
-            **kwargs: Additional parameters to pass to the Gemini generate_content_async method
-
-        Returns:
-            The Gemini response object
-        """
-        if not self.model:
-            logger.warning("Gemini service not configured or unavailable.")
-            return None
-
-        try:
-            # Attempt to generate content with the provided parameters
-            response = await self.model.generate_content_async(prompt, **kwargs)
-            return response
-        except Exception as e:
-            logger.error(f"Error generating Gemini response: {e}", exc_info=True)
-            return None
-
-    async def analyze_metrics_trend(self,
-                                   metric_name: str,
-                                   metric_values: List[float],
-                                   timestamps: List[str]) -> Dict[str, Any]:
-        """
-        Analyze trend in a Kubernetes metric over time.
-
-        Args:
-            metric_name: Name of the metric
-            metric_values: List of metric values over time
-            timestamps: List of corresponding timestamps
-
-        Returns:
-            Dictionary with trend analysis
-        """
-        if not self.model or not self._is_initialized:
-            return {"error": "Gemini service not initialized"}
-
-        # Ensure we have data to analyze
-        if not metric_values or len(metric_values) < 2:
-            return {"error": "Not enough data points for trend analysis"}
-
-        # Format data for the model
-        data_points = []
-        for i, (ts, val) in enumerate(zip(timestamps, metric_values)):
-            if i >= 30:  # Limit to most recent 30 points to avoid overwhelming the model
-                break
-            data_points.append({"timestamp": ts, "value": val})
-
-        system_instruction = """
-        You are a metrics analysis expert focusing on Kubernetes monitoring data.
-        Analyze the metric trend to identify patterns, anomalies, and potential issues.
-        Use statistical thinking to interpret the data accurately.
-        """
-
-        prompt = f"""
-        # Kubernetes Metric Trend Analysis
-
-        Analyze the trend in the '{metric_name}' metric using these data points:
-
-        ```json
-        {json.dumps(data_points, indent=2)}
-        ```
-
-        Calculate and provide:
-        1. Overall trend direction (increasing, decreasing, stable, fluctuating)
-        2. Growth/decline rate if applicable
-        3. Volatility assessment
-        4. Any anomalies or unusual patterns
-        5. Potential implications for the Kubernetes system
-        6. Whether this trend requires attention or action
-
-        Return your analysis in JSON format.
-        """
-
-        try:
-            response = await self.model.generate_content_async(
-                model=self.model.name,
-                contents=prompt,
-                generation_config=self.generation_config,
-                system_instruction=system_instruction,
-                response_mime_type="application/json"
+            # Create configuration
+            config = genai.types.GenerateContentConfig(
+                temperature=kwargs.get("temperature", 0.2),
+                top_p=kwargs.get("top_p", 0.95),
+                top_k=kwargs.get("top_k", 64),
+                max_output_tokens=kwargs.get("max_output_tokens", 2048),
+                tools=tools,
+                tool_config=tool_config
             )
 
-            if hasattr(response, 'text'):
+            # Create content with system instruction if provided
+            contents = []
+            if system_instruction:
+                contents.append({
+                    "role": "system",
+                    "parts": [{"text": system_instruction}]
+                })
+
+            # Add user prompt
+            contents.append({
+                "role": "user",
+                "parts": [{"text": prompt}]
+            })
+
+            # Make the API call with error handling
+            max_retries = 3
+            retry_delay = 2  # seconds
+
+            for attempt in range(max_retries):
                 try:
-                    analysis = json.loads(response.text)
-                    return analysis
-                except json.JSONDecodeError:
-                    # If not valid JSON, return as text
-                    return {"analysis": response.text, "format": "text"}
-            else:
-                return {"error": "No response from model"}
+                    logger.debug(f"Calling Gemini with function calling (attempt {attempt+1}/{max_retries})")
+
+                    response = await asyncio.to_thread(
+                        self.client.models.generate_content,
+                        model=model_name,
+                        contents=contents,
+                        config=config
+                    )
+
+                    # Process response for function calls
+                    if (response and
+                        hasattr(response, "candidates") and
+                        response.candidates and
+                        hasattr(response.candidates[0], "content") and
+                        response.candidates[0].content and
+                        hasattr(response.candidates[0].content, "parts")):
+
+                        for part in response.candidates[0].content.parts:
+                            # Check for function_call part
+                            if hasattr(part, "function_call") and part.function_call:
+                                function_call = part.function_call
+                                logger.info(f"Received function call: {function_call.name}")
+
+                                return {
+                                    "function_call": True,
+                                    "name": function_call.name,
+                                    "arguments": function_call.args,
+                                    "raw_arguments": json.dumps(function_call.args)
+                                }
+
+                    # If we didn't get a function call, return the text response
+                    if hasattr(response, "text"):
+                        return {
+                            "function_call": False,
+                            "text": response.text
+                        }
+
+                    # No valid response
+                    logger.warning(f"No valid response received on attempt {attempt+1}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+
+                except Exception as e:
+                    logger.error(f"Error calling function on attempt {attempt+1}: {e}", exc_info=True)
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                    else:
+                        return {"error": f"Failed to call function after {max_retries} attempts: {str(e)}"}
+
+            # If we get here, all attempts failed
+            return {"error": "Failed to get a valid function call response"}
 
         except Exception as e:
-            logger.error(f"Error analyzing metrics trend: {e}")
-            return {"error": f"Failed to analyze trend: {str(e)}"}
-
-    async def get_deployment_recommendations(self,
-                                           deployment_yaml: str,
-                                           cluster_info: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Get recommendations to improve a Kubernetes deployment.
-
-        Args:
-            deployment_yaml: The YAML definition of the deployment
-            cluster_info: Optional information about the cluster
-
-        Returns:
-            Dictionary with recommendations
-        """
-        if not self.model or not self._is_initialized:
-            return {"error": "Gemini service not initialized"}
-
-        system_instruction = """
-        You are a Kubernetes deployment optimization expert with deep knowledge of:
-        1. Resource allocation and quotas
-        2. High availability configurations
-        3. Security best practices
-        4. Performance optimization
-        5. Deployment strategies
-
-        Analyze Kubernetes deployment YAML and provide specific, actionable recommendations
-        to improve reliability, security, and performance. Focus on concrete changes that
-        can be made to the YAML definition.
-        """
-
-        cluster_context = ""
-        if cluster_info:
-            cluster_context = f"""
-            ## Cluster Context:
-            ```json
-            {json.dumps(cluster_info, indent=2)}
-            ```
-            """
-
-        prompt = f"""
-        # Kubernetes Deployment Review
-
-        Analyze this Kubernetes deployment definition and provide recommendations:
-
-        ```yaml
-        {deployment_yaml}
-        ```
-
-        {cluster_context}
-
-        Please provide:
-        1. Security improvements
-        2. Resource allocation recommendations
-        3. High availability enhancements
-        4. Performance optimizations
-        5. Any missing best practices
-
-        For each recommendation:
-        - Explain WHY it's important
-        - Show the EXACT changes to make (code snippets)
-        - Rate the importance (Critical, High, Medium, Low)
-
-        Return your recommendations in structured JSON format.
-        """
-
-        try:
-            response = await self.model.generate_content_async(
-                model=self.model.name,
-                contents=prompt,
-                generation_config=self.generation_config,
-                system_instruction=system_instruction,
-                response_mime_type="application/json"
-            )
-
-            if hasattr(response, 'text'):
-                try:
-                    recommendations = json.loads(response.text)
-                    return recommendations
-                except json.JSONDecodeError:
-                    # If not valid JSON, return as text
-                    return {"recommendations": response.text, "format": "text"}
-            else:
-                return {"error": "No response from model"}
-
-        except Exception as e:
-            logger.error(f"Error getting deployment recommendations: {e}")
-            return {"error": f"Failed to analyze deployment: {str(e)}"}
+            logger.error(f"Error in function calling: {e}", exc_info=True)
+            return {"error": f"Function calling error: {str(e)}"}

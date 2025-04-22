@@ -1,0 +1,270 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  - daemonsets
+  verbs:
+  - get
+  - list
+  - watch
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-server-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    rule_files:
+      - /etc/prometheus/recording_rules.yml
+      - /etc/prometheus/alerting_rules.yml
+    scrape_configs:
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: node-exporter
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'node_cpu_seconds_total|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_load1|node_load5|node_load15|node_disk_io_time_seconds_total|node_uname_info'
+            action: keep
+
+      - job_name: 'cadvisor'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: http
+        metrics_path: /metrics
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+          - source_labels: [__address__]
+            target_label: __address__
+            regex: (.+):(.+)
+            replacement: ${1}:8080
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_memory_max_usage_bytes|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_cpu_cfs_throttled_periods_total|container_fs_usage_bytes|container_cpu_load_average_10s'
+            action: keep
+
+      - job_name: 'kube-state-metrics'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: kube-state-metrics
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'kube_pod_info|kube_pod_status_phase|kube_pod_container_status_waiting_reason|kube_pod_container_status_restarts_total|kube_deployment_status_replicas_available|kube_deployment_spec_replicas|kube_statefulset_status_replicas_ready|kube_daemonset_status_number_ready|kube_persistentvolumeclaim_status_phase|kube_service_info|kube_node_status_condition'
+            action: keep
+
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+          - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace,__meta_kubernetes_service_name,__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: default;kubernetes;https
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'apiserver_request_total|apiserver_request_duration_seconds|etcd_request_duration_seconds'
+            action: keep
+
+      - job_name: 'etcd'
+        kubernetes_sd_configs:
+          - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace,__meta_kubernetes_service_name,__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: kube-system;kube-etcd;https
+          - source_labels: [__meta_kubernetes_endpoint_address_target_name]
+            target_label: __address__
+            replacement: ${1}:2379
+
+  recording_rules.yml: |
+    groups:
+      - name: cpu_memory_recording_rules
+        rules:
+          - record: node_cpu_usage_percent
+            expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+          - record: node_memory_usage_percent
+            expr: 100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))
+          - record: container_cpu_usage_percent
+            expr: sum by(pod, namespace, container) (rate(container_cpu_usage_seconds_total{container!=""}[5m])) * 100
+          - record: container_memory_usage_percent
+            expr: sum by(pod, namespace, container) (container_memory_usage_bytes{container!=""}) / sum by(pod, namespace, container) (container_memory_max_usage_bytes{container!=""}) * 100
+
+  alerting_rules.yml: |
+    groups:
+      - name: node_alerts
+        rules:
+          - alert: HighCPUUsage
+            expr: node_cpu_usage_percent > 80
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage detected"
+              description: "CPU usage is above 80% on {{ $labels.instance }} for more than 5 minutes."
+
+          - alert: HighMemoryUsage
+            expr: node_memory_usage_percent > 80
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High Memory usage detected"
+              description: "Memory usage is above 80% on {{ $labels.instance }} for more than 5 minutes."
+
+          - alert: LowDiskSpace
+            expr: node_filesystem_avail_bytes / node_filesystem_size_bytes * 100 < 20
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Low disk space"
+              description: "Disk space is below 20% on {{ $labels.instance }} mount point {{ $labels.mountpoint }}."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-server
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.48.0
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/prometheus/
+        - --web.enable-lifecycle
+        - --storage.tsdb.retention.time=7d
+        - --storage.tsdb.retention.size=10GB
+        - --web.enable-admin-api
+        ports:
+        - containerPort: 9090
+        resources:
+          requests:
+            cpu: 200m
+            memory: 500Mi
+          limits:
+            cpu: '1'
+            memory: 2Gi
+        volumeMounts:
+        - name: config
+          mountPath: /etc/prometheus
+        - name: storage
+          mountPath: /prometheus
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+          initialDelaySeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: 9090
+          initialDelaySeconds: 30
+          timeoutSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-server-config
+      - name: storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  ports:
+  - name: web
+    port: 9090
+    targetPort: 9090
+  selector:
+    app: prometheus

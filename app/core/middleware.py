@@ -1,10 +1,17 @@
-from fastapi import Request
 from time import time
-from app.utils.prometheus_client import prometheus
+
+from fastapi import Request
 from loguru import logger
 
+# Changed import from prometheus_client to prometheus_scraper
+from app.utils.prometheus_scraper import prometheus_scraper
+
+
 async def prometheus_middleware(request: Request, call_next):
-    """Middleware to track request metrics using Prometheus."""
+    """
+    Middleware for request logging without Prometheus metrics collection.
+    This version only logs request details and no longer collects metrics.
+    """
     start_time = time()
 
     try:
@@ -15,14 +22,10 @@ async def prometheus_middleware(request: Request, call_next):
         status_code = 500
         raise
     finally:
-        # Record request duration
+        # Calculate request duration
         duration = time() - start_time
         endpoint = request.url.path
         method = request.method
-
-        # Record metrics
-        prometheus.record_request(endpoint, method, status_code)
-        prometheus.record_request_duration(endpoint, duration)
 
         # Log request details
         logger.info(f"{method} {endpoint} - {status_code} - {duration:.3f}s")

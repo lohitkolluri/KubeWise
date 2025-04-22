@@ -62,7 +62,13 @@ Watch KubeWise in action! This video showcases its key features, from anomaly de
 
 *   **Real-time Monitoring:** Continuously scrapes metrics from Prometheus using configurable PromQL queries.
 *   **Hybrid Anomaly Detection:**
-    *   **ML-Based:** Uses Isolation Forest for identifying subtle deviations from normal behavior.
+    *   **Deep Learning-Based:** Uses a Keras Autoencoder model for identifying subtle deviations from normal behavior through reconstruction error.
+        *   **Model Performance:**
+            | Label | Precision | Recall | F1-score |
+            |-------|-----------|--------|----------|
+            | Normal (0) | 0.90 | 0.96 | 0.93 |
+            | Anomaly (1) | 0.92 | 0.80 | 0.85 |
+            | **Overall Accuracy:** | **91%** | | |
     *   **Direct Failure Scanning:** Proactively scans Kubernetes API for explicit failure states (e.g., Failed Pods, NotReady Nodes).
     *   **Threshold Breaching:** Detects immediate issues when critical metric thresholds are crossed.
     *   **Predictive Forecasting:** Predicts potential future failures based on metric trends.
@@ -162,7 +168,7 @@ flowchart TD
 1.  **Scrape:** `PrometheusScraper` fetches metrics based on active PromQL queries.
 2.  **Direct Scan:** `K8sExecutor` queries the K8s API directly for resources in failure states (complementary to metrics).
 3.  **Process & Store:** `AutonomousWorker` updates the in-memory metric history for each entity.
-4.  **Detect:** `AnomalyDetector` uses the Isolation Forest model and direct checks (thresholds, K8s status) on the latest metrics and history to detect anomalies, failures, or predict future issues.
+4.  **Detect:** `AnomalyDetector` uses the Keras Autoencoder model and direct checks (thresholds, K8s status) on the latest metrics and history to detect anomalies, failures, or predict future issues.
 5.  **Record:** If an anomaly/failure is detected, an event is created via `AnomalyEventService` and stored in SQLite.
 6.  **Analyze (Gemini):** `GeminiService` analyzes the event context (metrics, status) to determine root cause and suggest remediation commands.
 7.  **Decide & Remediate (AUTO Mode):** `AutonomousWorker` validates suggested commands (from Gemini or fallback logic) using `K8sExecutor`. If in `AUTO` mode and the command is deemed safe for the context (critical/predicted/standard), `K8sExecutor` applies it via the Kubernetes API. Remediation attempts are recorded.
@@ -405,6 +411,9 @@ KubeWise uses environment variables for configuration, typically loaded from a `
 | `WORKER_SLEEP_INTERVAL_SECONDS` | How often monitoring cycle runs | `15` |
 | `PROMETHEUS_SCRAPE_INTERVAL_SECONDS` | Frequency of metric collection | `15` |
 | `ANOMALY_METRIC_WINDOW_SECONDS` | Duration of metric history kept | `3600` |
+| `AUTOENCODER_MODEL_PATH` | Path to the Keras autoencoder model | `models/kube_anomaly_autoencoder.keras` |
+| `AUTOENCODER_SCALER_PATH` | Path to the model's scaler file | `models/kube_anomaly_scaler.joblib` |
+| `AUTOENCODER_THRESHOLD` | Threshold for anomaly detection (MSE value) | `0.161025` |
 | `GEMINI_AUTO_QUERY_GENERATION` | Enable AI PromQL generation | `False` |
 | `GEMINI_AUTO_ANALYSIS` | Enable AI analysis | `True` |
 | `GEMINI_AUTO_VERIFICATION` | Enable AI verification | `True` |

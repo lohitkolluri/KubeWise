@@ -1,19 +1,18 @@
+import pathlib
+
+from loguru import logger
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from loguru import logger
-from app.core.config import settings
-import os
-import pathlib
 
 # Create data directory if it doesn't exist
 data_dir = pathlib.Path("data")
 data_dir.mkdir(parents=True, exist_ok=True)
 
 # SQLite database URL
-SQLALCHEMY_DATABASE_URL = f"sqlite:///data/kubewise.db"
-ASYNC_SQLALCHEMY_DATABASE_URL = f"sqlite+aiosqlite:///data/kubewise.db"
+SQLALCHEMY_DATABASE_URL = "sqlite:///data/kubewise.db"
+ASYNC_SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///data/kubewise.db"
 
 # Create the engine for synchronous operations
 engine = create_engine(
@@ -35,6 +34,7 @@ AsyncSessionLocal = sessionmaker(
 
 # Base class for SQLAlchemy models
 Base = declarative_base()
+
 
 class Database:
     def __init__(self):
@@ -64,8 +64,10 @@ class Database:
         async with AsyncSessionLocal() as session:
             yield session
 
+
 # Create a global database instance
 database = Database()
+
 
 def get_db():
     """Get database session - sync version."""
@@ -74,6 +76,7 @@ def get_db():
         return db
     finally:
         db.close()
+
 
 async def get_async_db():
     """Get database session - async version."""

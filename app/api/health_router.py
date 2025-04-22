@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends
-from app.utils.health_checker import HealthChecker
-from app.core.config import settings
+from fastapi import APIRouter
 from loguru import logger
+
+from app.utils.health_checker import HealthChecker
 
 router = APIRouter(
     prefix="/health",
@@ -9,7 +9,12 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.get("/", summary="Health check endpoint", description="Performs a comprehensive health check of all dependent services including Prometheus and Gemini API")
+
+@router.get(
+    "/",
+    summary="Health check endpoint",
+    description="Performs a comprehensive health check of all dependent services including Prometheus and Gemini API",
+)
 async def health_check():
     """
     Health check endpoint that verifies all services.
@@ -31,11 +36,8 @@ async def health_check():
 
         return {
             "overall_status": "healthy" if all_healthy else "unhealthy",
-            "services": health_status
+            "services": health_status,
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {
-            "overall_status": "unhealthy",
-            "error": str(e)
-        }
+        return {"overall_status": "unhealthy", "error": str(e)}

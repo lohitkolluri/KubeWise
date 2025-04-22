@@ -1,31 +1,41 @@
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-import asyncio
+
+from app.api import (
+    anomaly_router,
+    health_router,
+    metrics_router,
+    remediation_router,
+    setup_router,
+)
 from app.core.config import settings
+from app.core.dependencies.service_factory import set_gemini_service
 from app.core.logger import setup_logger
 from app.core.middleware import prometheus_middleware
-from app.utils.health_checker import HealthChecker
-from app.utils.prometheus_client import prometheus
-from app.utils.cli_aesthetics import (
-    print_ascii_banner, print_version_info,
-    start_spinner, print_service_dashboard, print_shutdown_message
-)
-from app.api import health_router, metrics_router, remediation_router, setup_router, anomaly_router
-from app.worker import AutonomousWorker
 from app.services.anomaly_event_service import AnomalyEventService
 from app.services.gemini_service import GeminiService
 from app.services.mode_service import mode_service
-from app.core.dependencies.service_factory import set_gemini_service
+from app.utils.cli_aesthetics import (
+    print_ascii_banner,
+    print_service_dashboard,
+    print_shutdown_message,
+    print_version_info,
+    start_spinner,
+)
+from app.utils.health_checker import HealthChecker
+from app.worker import AutonomousWorker
 
-# Display startup banner with ASCII art first
+
+# Initial CLI display
 print_ascii_banner()
 print_version_info(version="3.1.0", mode=mode_service.get_mode())
 
 # Setup logging
 setup_logger()
 
-# Create FastAPI app
+# FastAPI application instance
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="""
@@ -36,215 +46,141 @@ app = FastAPI(
     clusters and automatically suggest or apply remediation steps.
 
     ## Key Features
-    - **Real-time Kubernetes Monitoring**: Collects metrics from Prometheus for monitoring
+    - **Real-time Kubernetes Monitoring**: Collects metrics from Prometheus
     - **ML-powered Anomaly Detection**: Detects abnormal behavior in your cluster
-    - **AI-assisted Root Cause Analysis**: Uses Gemini API to analyze anomalies
-    - **Smart Remediation**: Suggests or automatically applies appropriate remediation steps
-    - **Observability**: Comprehensive dashboard for monitoring and management
+    - **AI-assisted Root Cause Analysis**: Uses Gemini API for anomaly explanation
+    - **Smart Remediation**: Suggests or automatically applies fixes
+    - **Observability**: Dashboard for system monitoring
 
     ## API Groups
-    - **Health**: Check system health status
-    - **Metrics**: Retrieve cluster metrics and manage the anomaly detection model
-    - **Anomalies**: Analyze detected anomalies
-    - **Remediation**: Manage and apply remediations for detected anomalies
-    - **Setup**: Configure system settings and environment variables
+    - Health, Metrics, Anomalies, Remediation, Setup
     """,
     version="3.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_tags=[
-        {
-            "name": "Root",
-            "description": "Basic application information"
-        },
-        {
-            "name": "Health",
-            "description": "System health status checks for all components"
-        },
-        {
-            "name": "Metrics",
-            "description": "Retrieve cluster metrics and manage the anomaly detection model"
-        },
-        {
-            "name": "Anomalies",
-            "description": "Analyze and manage detected anomalies"
-        },
-        {
-            "name": "Remediation",
-            "description": "View anomaly events and apply remediation actions"
-        },
-        {
-            "name": "Setup",
-            "description": "Configure system mode and environment settings"
-        }
+        {"name": "Root", "description": "Basic application information"},
+        {"name": "Health", "description": "System health status checks for all components"},
+        {"name": "Metrics", "description": "Retrieve metrics and manage detection models"},
+        {"name": "Anomalies", "description": "Analyze and manage detected anomalies"},
+        {"name": "Remediation", "description": "Apply or suggest remediation actions"},
+        {"name": "Setup", "description": "Configure system mode and environment settings"},
     ],
-    swagger_ui_parameters={"defaultModelsExpandDepth": -1}  # Hide schema section by default
+    swagger_ui_parameters={"defaultModelsExpandDepth": -1},
 )
 
-# Configure CORS
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"],  # Use specific domains in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Add Prometheus middleware
+# Custom middleware (e.g., request logger)
 app.middleware("http")(prometheus_middleware)
 
-# Global instances for state management
-worker_instance = None
-worker_task = None
-
-# Include routers with dependency injection
+# Application routers
 app.include_router(health_router.router, prefix=settings.API_V1_STR)
 app.include_router(metrics_router.router, prefix=settings.API_V1_STR)
 app.include_router(remediation_router.router, prefix=settings.API_V1_STR)
 app.include_router(setup_router.router, prefix=settings.API_V1_STR)
 app.include_router(anomaly_router.router, prefix=settings.API_V1_STR)
 
-async def setup_monitoring_if_needed():
-    """
-    Set up monitoring server if PROMETHEUS_PORT is configured.
-    This allows the application to expose its own metrics for monitoring.
-    """
-    if settings.PROMETHEUS_PORT:
-        try:
-            # Start the prometheus client server on the specified port
-            prometheus.start_http_server(settings.PROMETHEUS_PORT)
-            logger.info(f"Started Prometheus client server on port {settings.PROMETHEUS_PORT}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to start Prometheus client server: {e}")
-            return False
-    return False
+# Globals for worker state
+worker_instance = None
+worker_task = None
+
 
 @app.on_event("startup")
 async def startup_event():
-    """Handle application startup, including service initialization and worker setup."""
+    """Handle application startup"""
     global worker_task, worker_instance
 
-    # Initialize services status dashboard
     services_status = {
         "Prometheus": {"status": "initializing", "message": "Checking connection..."},
         "Gemini API": {"status": "initializing", "message": "Initializing..."},
-        "Worker": {"status": "initializing", "message": "Not started"}
+        "Worker": {"status": "initializing", "message": "Not started"},
     }
 
     try:
         logger.info("Starting application initialization...")
 
-        # Initialize the Gemini service if API key is available
-        gemini_service_instance = None
+        gemini_service = None
         if settings.GEMINI_API_KEY:
-            gemini_service_instance = GeminiService()
-            # Set the global Gemini service instance in service_factory
-            set_gemini_service(gemini_service_instance)
+            gemini_service = GeminiService(
+                api_key=settings.GEMINI_API_KEY,
+                model_type=settings.GEMINI_MODEL,
+            )
+            set_gemini_service(gemini_service)
 
-        # Create anomaly service - with file-based storage instead of MongoDB
-        anomaly_event_service = AnomalyEventService()
+        anomaly_service = AnomalyEventService()
+        spinner = start_spinner("Performing dependency checks...")
 
-        # Start health check spinner
-        health_spinner = start_spinner("Performing dependency checks...")
+        health_status = await HealthChecker().check_all()
+        spinner.stop(True, "Dependency checks completed")
 
-        # Perform initial health checks
-        health_check = HealthChecker()
-        health_status = await health_check.check_all()
+        for key, label in [("prometheus", "Prometheus"), ("gemini", "Gemini API")]:
+            if key in health_status:
+                status = health_status[key]
+                services_status[label]["status"] = (
+                    "healthy" if status["status"] == "healthy" else "warning"
+                )
+                services_status[label]["message"] = status["message"]
+                if status["status"] != "healthy":
+                    logger.warning(f"{label} not healthy: {status['message']}")
 
-        health_spinner.stop(True, "Dependency checks completed")
-
-        # Update services status based on health checks
-        if "prometheus" in health_status:
-            if health_status["prometheus"]["status"] == "healthy":
-                services_status["Prometheus"]["status"] = "healthy"
-                services_status["Prometheus"]["message"] = "Connection successful"
-            else:
-                services_status["Prometheus"]["status"] = "warning"
-                services_status["Prometheus"]["message"] = health_status["prometheus"]["message"]
-                logger.warning(f"Prometheus not healthy: {health_status['prometheus']['message']}")
-
-        if "gemini" in health_status:
-            if health_status["gemini"]["status"] == "healthy":
-                services_status["Gemini API"]["status"] = "healthy"
-                services_status["Gemini API"]["message"] = "Connection successful"
-            else:
-                services_status["Gemini API"]["status"] = "warning"
-                services_status["Gemini API"]["message"] = health_status["gemini"]["message"]
-                logger.warning(f"Gemini API not healthy: {health_status['gemini']['message']}")
-        else:
-            services_status["Gemini API"]["status"] = "warning"
-            services_status["Gemini API"]["message"] = "Not configured - AI features limited"
-
-        # Start worker spinner
         worker_spinner = start_spinner("Starting autonomous worker...")
-
-        # Initialize and start the background worker
         worker_instance = AutonomousWorker(
-            anomaly_event_svc=anomaly_event_service,
-            gemini_svc=gemini_service_instance
+            anomaly_event_svc=anomaly_service,
+            gemini_svc=gemini_service,
         )
         worker_task = asyncio.create_task(worker_instance.run())
 
-        # Update worker status
-        services_status["Worker"]["status"] = "healthy"
-        services_status["Worker"]["message"] = "Running in background"
-
+        services_status["Worker"] = {"status": "healthy", "message": "Running"}
         worker_spinner.stop(True, "Autonomous worker started")
 
-        # Print final service status dashboard
         print_service_dashboard(services_status)
-
-        logger.success("KubeWise startup completed successfully. System is operational.")
+        logger.success("KubeWise startup completed. System operational.")
 
     except Exception as e:
-        logger.error(f"KubeWise startup failed: {e}", exc_info=True)
+        logger.exception("Startup failed")
+        raise RuntimeError("KubeWise startup failed") from e
 
-        print("\n\033[1;91m╔════════════════════════════════════════════════════════════╗\033[0m")
-        print("\033[1;91m║                   STARTUP FAILED                            ║\033[0m")
-        print("\033[1;91m╚════════════════════════════════════════════════════════════╝\033[0m")
-
-        raise RuntimeError(f"KubeWise startup failed: {e}") from e
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Handle application shutdown, including worker cancellation and resource cleanup."""
+    """Handle graceful shutdown of background tasks"""
     global worker_task
 
     print_shutdown_message()
-    logger.info("Starting application shutdown process...")
+    logger.info("Initiating shutdown...")
 
     try:
-        shutdown_spinner = start_spinner("Cancelling background worker...")
+        spinner = start_spinner("Stopping background worker...")
 
         if worker_task and not worker_task.done():
             worker_task.cancel()
             try:
                 await worker_task
-                shutdown_spinner.stop(True, "Worker task successfully cancelled")
             except asyncio.CancelledError:
-                shutdown_spinner.stop(True, "Worker task successfully cancelled")
-                logger.info("Worker task successfully cancelled.")
-            except Exception as e:
-                shutdown_spinner.stop(False, "Error during worker task shutdown")
-                logger.error(f"Error during worker task shutdown: {e}", exc_info=True)
+                pass
+            spinner.stop(True, "Worker task cancelled")
         else:
-            shutdown_spinner.stop(True, "No active worker to cancel")
+            spinner.stop(True, "No active worker")
 
-        logger.success("KubeWise shutdown completed successfully.")
+        logger.success("Shutdown complete.")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
 
-        print("\n\033[1;91m╔════════════════════════════════════════════════════════════╗\033[0m")
-        print("\033[1;91m║              ERROR DURING SHUTDOWN                          ║\033[0m")
-        print("\033[1;91m╚════════════════════════════════════════════════════════════╝\033[0m")
 
 @app.get("/", tags=["Root"])
 async def root():
-    """Root endpoint providing basic application information."""
+    """Root endpoint for service metadata."""
     return {
         "name": settings.PROJECT_NAME,
         "version": "3.1.0",
         "description": "AI-Powered Kubernetes Anomaly Detection and Remediation",
-        "remediation_mode": mode_service.get_mode()
+        "remediation_mode": mode_service.get_mode(),
     }
