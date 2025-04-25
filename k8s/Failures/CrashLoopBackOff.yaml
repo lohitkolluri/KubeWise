@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubewise-test-crashloop
+  labels:
+    app: kubewise-test
+spec:
+  ttlSecondsAfterFinished: 1800  # Auto-delete 30 minutes after completion
+  template:
+    metadata:
+      labels:
+        app: kubewise-test
+    spec:
+      containers:
+      - name: crashloop-container
+        image: busybox:1.28
+        command: ["/bin/sh", "-c"]
+        args: 
+        - |
+          echo "Starting test container that will exit after 10 seconds..."
+          sleep 10
+          echo "Deliberately exiting with error code 1"
+          exit 1
+      restartPolicy: OnFailure  # This will create the crash loop effect but still trigger TTL
+  backoffLimit: 10  # Allow several restarts to simulate crash loop

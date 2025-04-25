@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -5,7 +6,9 @@ from loguru import logger
 
 from app.core.dependencies.service_factory import get_anomaly_event_service
 from app.models.anomaly_event import AnomalyStatus, RemediationAttempt
+from app.models.ai_remediation_models import WorkflowStep
 from app.services.anomaly_event_service import AnomalyEventService
+from app.services.ai_remediation_service import ai_remediation_service
 from app.utils.k8s_executor import k8s_executor
 
 router = APIRouter(
@@ -208,4 +211,203 @@ async def list_commands():
         logger.error(f"Error listing commands: {e}")
         raise HTTPException(
             status_code=500, detail=f"Failed to list commands: {str(e)}"
+        )
+
+
+# New AI-Powered Remediation Endpoints
+
+@router.post(
+    "/events/{anomaly_id}/ai-analyze",
+    summary="Generate AI remediation plan",
+    description="Analyze the anomaly and generate an AI-powered remediation plan",
+)
+async def generate_ai_remediation_plan(
+    anomaly_id: str,
+):
+    """
+    Generate an AI-powered remediation plan for the anomaly.
+
+    Parameters:
+        anomaly_id (str): ID of the anomaly event to analyze
+
+    Returns:
+        dict: Remediation plan generation result containing:
+            - status: "success" or "error"
+            - workflow: Information about the created workflow
+            - message: Description of the operation
+
+    Raises:
+        HTTPException: If event is not found or plan cannot be generated
+    """
+    try:
+        # Start the workflow but don't wait for completion
+        workflow = await ai_remediation_service.start_workflow(anomaly_id)
+
+        return {
+            "status": "success",
+            "message": f"AI remediation plan generation started for anomaly {anomaly_id}",
+            "workflow": {
+                "anomaly_id": workflow.anomaly_id,
+                "current_step": workflow.current_step,
+                "started_at": workflow.started_at,
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error starting AI remediation for {anomaly_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to start AI remediation: {str(e)}"
+        )
+
+
+@router.post(
+    "/events/{anomaly_id}/ai-remediate",
+    summary="Apply AI remediation",
+    description="Execute the AI-generated remediation plan for an anomaly",
+)
+async def execute_ai_remediation(
+    anomaly_id: str,
+    confidence_threshold: float = Body(0.75, embed=True),
+):
+    """
+    Execute the AI-generated remediation plan for the anomaly.
+
+    Parameters:
+        anomaly_id (str): ID of the anomaly event to remediate
+        confidence_threshold (float): Confidence threshold required to execute (0.0-1.0)
+
+    Returns:
+        dict: Remediation execution results
+
+    Raises:
+        HTTPException: If event is not found, plan doesn't exist, or execution fails
+    """
+    try:
+        # First check if there's a plan
+        plan = await ai_remediation_service.get_remediation_plan(anomaly_id)
+        
+        if not plan:
+            # Generate a plan first
+            workflow = await ai_remediation_service.start_workflow(anomaly_id)
+            
+            # Wait for the plan generation to complete (up to 60 seconds)
+            MAX_WAIT = 60
+            for _ in range(MAX_WAIT):
+                if workflow.current_step in [WorkflowStep.PLAN_GENERATION, WorkflowStep.COMPLETED, WorkflowStep.FAILED]:
+                    break
+                await asyncio.sleep(1)
+                
+            # Check if plan was generated
+            plan = await ai_remediation_service.get_remediation_plan(anomaly_id)
+            
+            if not plan:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to generate remediation plan for anomaly {anomaly_id}"
+                )
+                
+        # Check confidence
+        confidence = plan.get("confidence", 0)
+        if confidence < confidence_threshold:
+            return {
+                "status": "rejected",
+                "message": f"Remediation confidence ({confidence}) below threshold ({confidence_threshold})",
+                "plan": plan
+            }
+            
+        # Execute the plan
+        result = await ai_remediation_service.execute_remediation_plan(anomaly_id)
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error executing AI remediation for {anomaly_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to execute AI remediation: {str(e)}"
+        )
+
+
+@router.get(
+    "/events/{anomaly_id}/ai-plan",
+    summary="Get AI remediation plan",
+    description="Retrieve the AI-generated remediation plan for an anomaly",
+)
+async def get_ai_remediation_plan(
+    anomaly_id: str,
+):
+    """
+    Get the AI-generated remediation plan for an anomaly.
+
+    Parameters:
+        anomaly_id (str): ID of the anomaly event
+
+    Returns:
+        dict: Remediation plan or status information
+
+    Raises:
+        HTTPException: If event is not found or plan cannot be retrieved
+    """
+    try:
+        plan = await ai_remediation_service.get_remediation_plan(anomaly_id)
+        
+        if plan:
+            return {
+                "status": "success",
+                "message": "Remediation plan retrieved",
+                "plan": plan
+            }
+        else:
+            # Check if a workflow exists
+            workflow_list = await ai_remediation_service.list_workflows()
+            workflow = next((w for w in workflow_list if w["anomaly_id"] == anomaly_id), None)
+            
+            if workflow:
+                return {
+                    "status": "pending",
+                    "message": f"Remediation plan generation in progress. Current step: {workflow['current_step']}",
+                    "workflow": workflow
+                }
+            else:
+                return {
+                    "status": "not_found",
+                    "message": "No remediation plan or workflow exists for this anomaly"
+                }
+            
+    except Exception as e:
+        logger.error(f"Error getting AI remediation plan for {anomaly_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to get remediation plan: {str(e)}"
+        )
+
+
+@router.get(
+    "/workflows",
+    summary="List remediation workflows",
+    description="List all active AI remediation workflows",
+)
+async def list_workflows():
+    """
+    List all active remediation workflows.
+
+    Returns:
+        dict: List of active workflows
+
+    Raises:
+        HTTPException: If workflows cannot be retrieved
+    """
+    try:
+        workflows = await ai_remediation_service.list_workflows()
+        return {
+            "status": "success",
+            "count": len(workflows),
+            "workflows": workflows
+        }
+    except Exception as e:
+        logger.error(f"Error listing workflows: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to list workflows: {str(e)}"
         )

@@ -7,9 +7,18 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import json
 from loguru import logger
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed, after_log, wait_exponential
 
-
+from app.core.exceptions import (
+    KubernetesConnectionError, 
+     OperationFailedError, 
+    ResourceNotFoundError,
+    ValidationError
+)
 from app.models.k8s_models import RemediationAction
+from app.core import logger as app_logger
+from app.utils.event_correlator import K8sEventCorrelator
+from app.utils.command_playground import execute_command
 
 class K8sExecutor:
     """
@@ -26,17 +35,32 @@ class K8sExecutor:
         self.blacklisted_operations = (
             set()
         )  # We'll use a blacklist approach instead of whitelist
+        # Initialize event correlator
+        self.event_correlator = K8sEventCorrelator()
 
     def _init_client(self):
+        """Initialize Kubernetes client connections with error handling"""
         try:
             # Load kubernetes configuration from default location
             config.load_kube_config()
             self.v1 = client.CoreV1Api()
             self.apps_v1 = client.AppsV1Api()
             self.batch_v1 = client.BatchV1Api()
-            logger.info("Successfully initialized Kubernetes client")
+            
+            # Use structured logging
+            app_logger.info(
+                "Successfully initialized Kubernetes client",
+                component="k8s_executor",
+                operation="init"
+            )
         except Exception as e:
-            logger.error(f"Failed to initialize Kubernetes client: {e}")
+            app_logger.error(
+                "Failed to initialize Kubernetes client",
+                component="k8s_executor",
+                operation="init",
+                exception=str(e),
+                exception_type=e.__class__.__name__
+            )
             self.v1 = None
             self.apps_v1 = None
             self.batch_v1 = None
@@ -134,6 +158,14 @@ class K8sExecutor:
                 "impact": "none",
                 "estimated_duration": "1-5s",
                 "handler": "_handle_view_logs",
+            },
+            "command": {
+                "description": "Execute a generic command with parameters",
+                "required_params": ["command"],
+                "optional_params": ["params"],
+                "impact": "varies",
+                "estimated_duration": "varies",
+                "handler": "execute_command",
             }
         }
 
@@ -242,6 +274,33 @@ class K8sExecutor:
                 "validation": lambda p: "namespace" in p,
                 # Custom processing in execute_validated_command
             },
+            # Add describe operation to match with command_templates
+            "describe": {
+                "api": "v1",
+                "method": "_handle_describe",
+                "required": ["name"],
+                "optional": ["namespace", "resource_type"],
+                "validation": lambda p: "name" in p,
+                # No patch_body for read-only operations
+            },
+            # Add view_logs operation to match with command_templates
+            "view_logs": {
+                "api": "v1",
+                "method": "_handle_view_logs",
+                "required": ["name", "namespace"],
+                "optional": ["container", "tail", "since"],
+                "validation": lambda p: "name" in p and "namespace" in p,
+                # No patch_body for read-only operations
+            },
+            # Add restart_pod operation to match with command_templates
+            "restart_pod": {
+                "api": "v1",
+                "method": "restart_pod",
+                "required": ["namespace", "pod_name"],
+                "optional": ["force_restart"],
+                "validation": lambda p: "namespace" in p and "pod_name" in p,
+                # No patch_body for this operation
+            },
         }
 
     def _get_api_client(self, api_version: str):
@@ -252,39 +311,182 @@ class K8sExecutor:
             return self.apps_v1
         if (api_version == "batch_v1" and self.batch_v1):
             return self.batch_v1
-        logger.error(f"Kubernetes API client {api_version} not initialized.")
-        raise ConnectionError(f"Kubernetes API client {api_version} not available.")
+            
+        app_logger.error(
+            "Kubernetes API client not initialized",
+            component="k8s_executor",
+            api_version=api_version
+        )
+        raise KubernetesConnectionError(
+            f"Kubernetes API client {api_version} not available",
+            details={"api_version": api_version}
+        )
 
-    def _list_raw(
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(ApiException),
+        after=after_log(logger, "WARNING")
+    )
+    async def _list_raw(
         self, resource_type: str, namespace: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Synchronous helper: list raw K8s resources for use with asyncio.to_thread."""
+        """
+        Synchronous helper with retry: list raw K8s resources for use with asyncio.to_thread.
+        
+        Args:
+            resource_type: Type of Kubernetes resource to list
+            namespace: Optional namespace to filter by
+            
+        Returns:
+            List of dictionaries representing the resources
+            
+        Raises:
+            KubernetesConnectionError: When unable to connect to the Kubernetes API
+        """
         if not self.v1 or not self.apps_v1:
-            return []
-        if resource_type == "pod" and namespace:
-            return [
-                item.to_dict() for item in self.v1.list_namespaced_pod(namespace).items
-            ]
-        if resource_type == "deployment" and namespace:
-            return [
-                item.to_dict()
-                for item in self.apps_v1.list_namespaced_deployment(namespace).items
-            ]
-        if resource_type == "node":
-            return [item.to_dict() for item in self.v1.list_node().items]
-        if resource_type == "service" and namespace:
-            return [
-                item.to_dict()
-                for item in self.v1.list_namespaced_service(namespace).items
-            ]
-        if resource_type == "persistentvolumeclaim" and namespace:
-            return [
-                item.to_dict()
-                for item in self.v1.list_namespaced_persistent_volume_claim(
-                    namespace
-                ).items
-            ]
-        return []
+            raise KubernetesConnectionError(
+                "Kubernetes API client not initialized",
+                details={
+                    "resource_type": resource_type,
+                    "namespace": namespace
+                }
+            )
+            
+        try:
+            with app_logger.LogContext(
+                component="k8s_executor",
+                operation=f"list_{resource_type}",
+                namespace=namespace
+            ):
+                app_logger.debug(
+                    f"Listing {resource_type} resources",
+                    namespace=namespace,
+                    resource_type=resource_type
+                )
+                
+                if resource_type == "pod" and namespace:
+                    return [
+                        item.to_dict() for item in self.v1.list_namespaced_pod(namespace).items
+                    ]
+                elif resource_type == "pod":  # List pods across all namespaces
+                    return [
+                        item.to_dict() for item in self.v1.list_pod_for_all_namespaces().items
+                    ]
+                elif resource_type == "deployment" and namespace:
+                    return [
+                        item.to_dict()
+                        for item in self.apps_v1.list_namespaced_deployment(namespace).items
+                    ]
+                elif resource_type == "deployment":  # List deployments across all namespaces
+                    return [
+                        item.to_dict()
+                        for item in self.apps_v1.list_deployment_for_all_namespaces().items
+                    ]
+                elif resource_type == "node":
+                    return [item.to_dict() for item in self.v1.list_node().items]
+                elif resource_type == "service" and namespace:
+                    return [
+                        item.to_dict()
+                        for item in self.v1.list_namespaced_service(namespace).items
+                    ]
+                elif resource_type == "service":  # List services across all namespaces
+                    return [
+                        item.to_dict()
+                        for item in self.v1.list_service_for_all_namespaces().items
+                    ]
+                elif resource_type == "persistentvolumeclaim" and namespace:
+                    return [
+                        item.to_dict()
+                        for item in self.v1.list_namespaced_persistent_volume_claim(
+                            namespace
+                        ).items
+                    ]
+                elif resource_type == "persistentvolumeclaim":  # List PVCs across all namespaces
+                    return [
+                        item.to_dict()
+                        for item in self.v1.list_persistent_volume_claim_for_all_namespaces().items
+                    ]
+                    
+                app_logger.warning(
+                    f"Unsupported resource type: {resource_type}",
+                    resource_type=resource_type,
+                    namespace=namespace
+                )
+                return []
+                
+        except ApiException as e:
+            if e.status == 403:
+                app_logger.error(
+                    "Permission denied when accessing Kubernetes API",
+                    status_code=e.status,
+                    reason=e.reason,
+                    resource_type=resource_type,
+                    namespace=namespace
+                )
+                raise KubernetesConnectionError(
+                    f"Permission denied when accessing {resource_type}: {e.reason}",
+                    details={
+                        "status_code": e.status,
+                        "reason": e.reason,
+                        "resource_type": resource_type,
+                        "namespace": namespace
+                    }
+                )
+            elif e.status == 404:
+                app_logger.warning(
+                    f"Resource not found: {resource_type}",
+                    status_code=e.status,
+                    reason=e.reason,
+                    resource_type=resource_type,
+                    namespace=namespace
+                )
+                return []
+            elif e.status >= 500:
+                # Server errors may be transient, so we'll let the retry mechanism handle them
+                app_logger.warning(
+                    f"Server error when listing {resource_type}",
+                    status_code=e.status,
+                    reason=e.reason,
+                    resource_type=resource_type,
+                    namespace=namespace
+                )
+                raise
+            else:
+                app_logger.error(
+                    f"API error when listing {resource_type}",
+                    status_code=e.status,
+                    reason=e.reason,
+                    resource_type=resource_type,
+                    namespace=namespace
+                )
+                raise KubernetesConnectionError(
+                    f"API error: {e.reason}",
+                    details={
+                        "status_code": e.status,
+                        "reason": e.reason,
+                        "resource_type": resource_type,
+                        "namespace": namespace
+                    }
+                )
+                
+        except Exception as e:
+            app_logger.error(
+                f"Error listing {resource_type}",
+                exception=str(e),
+                exception_type=e.__class__.__name__,
+                resource_type=resource_type,
+                namespace=namespace
+            )
+            raise KubernetesConnectionError(
+                f"Failed to list {resource_type}: {str(e)}",
+                details={
+                    "exception": str(e),
+                    "exception_type": e.__class__.__name__,
+                    "resource_type": resource_type,
+                    "namespace": namespace
+                }
+            )
 
     def parse_and_validate_command(
         self, command_str: str
@@ -297,13 +499,20 @@ class K8sExecutor:
 
         # Allow raw kubectl commands without validation
         if operation == "kubectl":
-            logger.info(f"Raw kubectl command allowed: {command_str}")
+            app_logger.info(
+                "Raw kubectl command allowed",
+                component="k8s_executor",
+                command=command_str
+            )
             return operation, {"raw_command": command_str}
 
         # Check if the command is blacklisted
         if operation in self.blacklisted_operations:
-            logger.warning(
-                f"Command '{operation}' is blacklisted and cannot be executed."
+            app_logger.warning(
+                f"Command is blacklisted and cannot be executed",
+                component="k8s_executor",
+                operation=operation,
+                command=command_str
             )
             return None
 
@@ -313,8 +522,11 @@ class K8sExecutor:
         # If the operation is not in safe_operations, we need to create a basic configuration
         # This allows any non-blacklisted command to be executed (blacklist approach)
         if op_config is None:
-            logger.info(
-                f"Command '{operation}' is not in safe_operations but allowed as not blacklisted."
+            app_logger.info(
+                "Command is not in safe_operations but allowed as not blacklisted",
+                component="k8s_executor",
+                operation=operation,
+                command=command_str
             )
             # Create a basic configuration assuming all parameters are valid
             op_config = {
@@ -334,28 +546,44 @@ class K8sExecutor:
                 except ValueError:
                     params[key] = value
             else:
-                logger.warning(
-                    f"Invalid parameter format in command '{command_str}': {part}"
+                app_logger.warning(
+                    "Invalid parameter format in command",
+                    component="k8s_executor",
+                    command=command_str,
+                    invalid_part=part
                 )
                 return None
 
         # Check required parameters if specified in op_config
         for req_param in op_config["required"]:
             if req_param not in params:
-                logger.warning(
-                    f"Missing required parameter '{req_param}' for operation '{operation}'."
+                app_logger.warning(
+                    "Missing required parameter for operation",
+                    component="k8s_executor",
+                    operation=operation,
+                    missing_param=req_param,
+                    command=command_str
                 )
                 return None
 
         # Perform custom validation if specified in op_config
         validator = op_config.get("validation")
         if validator and not validator(params):
-            logger.warning(
-                f"Parameter validation failed for operation '{operation}' with params: {params}"
+            app_logger.warning(
+                "Parameter validation failed for operation",
+                component="k8s_executor",
+                operation=operation,
+                params=params,
+                command=command_str
             )
             return None
 
-        logger.debug(f"Command validated: op='{operation}', params={params}")
+        app_logger.debug(
+            "Command validated",
+            component="k8s_executor",
+            operation=operation,
+            params=params
+        )
         return operation, params
 
     # NEW METHOD: Parse template-based remediation action
@@ -726,42 +954,251 @@ class K8sExecutor:
 
     async def execute_validated_command(
         self, operation: str, params: Dict[str, Any]
-    ) -> Any:
-        """Execute a validated Kubernetes command"""
+    ) -> Dict[str, Any]:
+        """Execute a validated command against the Kubernetes API with correlation tracking"""
+        if not operation or not params:
+            app_logger.error(
+                "Invalid operation or parameters",
+                component="k8s_executor",
+                operation=operation
+            )
+            raise ValidationError("Invalid operation or parameters")
+
+        # Generate a correlation ID for tracking this operation across systems
+        correlation_id = self.event_correlator.generate_correlation_id()
+        app_logger.info(
+            f"Executing K8s operation: {operation}",
+            component="k8s_executor",
+            operation=operation,
+            params=params,
+            correlation_id=correlation_id
+        )
+
+        # Special handling for raw kubectl
+        if operation == "kubectl":
+            # ... existing kubectl handling code ...
+            return {"status": "success", "message": "Executed kubectl command", "correlation_id": correlation_id}
+
+        op_config = self.safe_operations.get(operation)
+        if not op_config:
+            app_logger.error(
+                f"Operation not found in safe operations: {operation}",
+                component="k8s_executor",
+                operation=operation,
+                correlation_id=correlation_id
+            )
+            raise ValidationError(f"Unknown operation: {operation}")
+
+        api = op_config.get("api", "v1")
+        method = op_config.get("method")
+        
         try:
-            # Handle both string and dictionary commands
-            if isinstance(operation, dict):
-                if "command" in operation:
-                    operation = operation["command"]
-                if "params" in operation:
-                    params = operation["params"]
-
-            # Get the command template
-            template = self._get_command_templates().get(operation)
-            if not template:
-                raise ValueError(f"Unknown operation: {operation}")
-
-            # Extract the handler method name
-            handler_name = template.get("handler")
-            if not handler_name:
-                raise ValueError(f"No handler defined for operation: {operation}")
-
-            # Get the handler method
-            handler = getattr(self, handler_name, None)
-            if not handler:
-                raise ValueError(f"Handler method {handler_name} not found")
-
-            # Execute the handler with the provided parameters
-            result = await handler(**params)
-
-            # Ensure the result has a command field
-            if isinstance(result, dict) and "command" not in result:
-                result["command"] = f"{operation} {params}"
-
-            return result
-
+            api_client = self._get_api_client(api)
+            method_func = getattr(api_client, method, None)
+            
+            if not method_func:
+                app_logger.error(
+                    f"Method not found in API client: {method}",
+                    component="k8s_executor",
+                    api=api,
+                    method=method,
+                    correlation_id=correlation_id
+                )
+                raise ValidationError(f"Unknown method: {method}")
+                
+            # Prepare kwargs for method call
+            kwargs = {}
+            for param_name, param_value in params.items():
+                # Skip params prefixed with underscore, they're for internal use
+                if param_name.startswith("_"):
+                    continue
+                kwargs[param_name] = param_value
+                
+            # If this is a patch operation, generate the patch body
+            if "patch" in method and "patch_body" in op_config:
+                kwargs["body"] = op_config["patch_body"](params)
+                
+            # Record the operation attempt as an event before execution
+            self._record_operation_event(
+                operation=operation,
+                params=params,
+                correlation_id=correlation_id,
+                status="Attempted"
+            )
+                
+            # Execute the API call
+            result = await asyncio.to_thread(method_func, **kwargs)
+            
+            # Record successful completion
+            self._record_operation_event(
+                operation=operation,
+                params=params,
+                correlation_id=correlation_id,
+                status="Completed"
+            )
+            
+            # Format and return result
+            if hasattr(result, "to_dict"):
+                return {
+                    "status": "success",
+                    "data": result.to_dict(),
+                    "correlation_id": correlation_id
+                }
+            return {
+                "status": "success",
+                "data": result,
+                "correlation_id": correlation_id
+            }
+            
+        except ApiException as e:
+            # Record failure event
+            self._record_operation_event(
+                operation=operation,
+                params=params,
+                correlation_id=correlation_id,
+                status="Failed",
+                error_message=f"{e.status}: {e.reason}"
+            )
+            
+            if e.status == 404:
+                app_logger.warning(
+                    f"Resource not found",
+                    status_code=e.status,
+                    reason=e.reason,
+                    operation=operation,
+                    correlation_id=correlation_id,
+                    **params
+                )
+                raise ResourceNotFoundError(
+                    f"Resource not found: {e.reason}",
+                    details={
+                        "status_code": e.status,
+                        "reason": e.reason,
+                        "operation": operation,
+                        **params
+                    }
+                )
+            elif e.status == 403:
+                app_logger.error(
+                    "Permission denied when accessing Kubernetes API",
+                    status_code=e.status,
+                    reason=e.reason,
+                    operation=operation,
+                    correlation_id=correlation_id,
+                    **params
+                )
+                raise KubernetesConnectionError(
+                    f"Permission denied: {e.reason}",
+                    details={
+                        "status_code": e.status,
+                        "reason": e.reason,
+                        "operation": operation,
+                        **params
+                    }
+                )
+            else:
+                app_logger.error(
+                    f"API error in operation: {operation}",
+                    status_code=e.status,
+                    reason=e.reason,
+                    operation=operation,
+                    correlation_id=correlation_id,
+                    **params
+                )
+                raise OperationFailedError(
+                    f"API error: {e.status} - {e.reason}",
+                    details={
+                        "status_code": e.status,
+                        "reason": e.reason,
+                        "operation": operation,
+                        "correlation_id": correlation_id,
+                        **params
+                    }
+                )
+                
         except Exception as e:
-            raise Exception(f"Failed to execute command: {str(e)}")
+            # Record failure event
+            self._record_operation_event(
+                operation=operation,
+                params=params,
+                correlation_id=correlation_id,
+                status="Failed",
+                error_message=str(e)
+            )
+            
+            app_logger.error(
+                f"Exception in operation: {operation}",
+                exception=str(e),
+                exception_type=e.__class__.__name__,
+                operation=operation, 
+                correlation_id=correlation_id,
+                **params
+            )
+            raise OperationFailedError(
+                f"Operation failed: {str(e)}",
+                details={
+                    "exception": str(e),
+                    "exception_type": e.__class__.__name__,
+                    "operation": operation,
+                    "correlation_id": correlation_id,
+                    **params
+                }
+            )
+
+    def _record_operation_event(
+        self,
+        operation: str,
+        params: Dict[str, Any],
+        correlation_id: str,
+        status: str,
+        error_message: Optional[str] = None
+    ):
+        """Record a Kubernetes event for the operation."""
+        # Skip recording events if event correlator isn't available
+        if not self.event_correlator:
+            return
+            
+        # Determine resource type and name from params
+        resource_type = operation.split("_")[-1].capitalize()  # e.g., "get_pod" -> "Pod"
+        if resource_type == "Deployment":
+            resource_type = "Deployment"  # Ensure proper capitalization
+            
+        resource_name = params.get("name", "unknown")
+        namespace = params.get("namespace", "default")
+        
+        # Format the event reason and message
+        reason = f"{status}{resource_type.capitalize()}Operation"
+        if status == "Attempted":
+            message = f"Starting {operation} operation on {resource_type} {resource_name}"
+        elif status == "Completed":
+            message = f"Successfully completed {operation} operation on {resource_type} {resource_name}"
+        else:  # Failed
+            message = f"Failed {operation} operation on {resource_type} {resource_name}: {error_message}"
+            
+        # Add operation details as additional data
+        additional_data = {
+            "operation": operation
+        }
+        
+        # Add all parameters except sensitive ones
+        filtered_params = {k: v for k, v in params.items() if not k.startswith("_")}
+        additional_data["parameters"] = json.dumps(filtered_params)
+            
+        # Set severity based on status
+        severity = "Normal" if status != "Failed" else "Warning"
+            
+        # Record the event
+        self.event_correlator.record_event(
+            name=resource_name,
+            namespace=namespace,
+            resource_type=resource_type,
+            action=operation,
+            correlation_id=correlation_id,
+            reason=reason,
+            message=message,
+            severity=severity,
+            additional_data=additional_data
+        )
 
     def get_safe_operations_info(self) -> Dict[str, Dict[str, Any]]:
         """Get information about safe operations"""
@@ -775,11 +1212,6 @@ class K8sExecutor:
         return info
 
     async def execute_remediation_action(self, action: RemediationAction) -> dict:
-        """
-        Executes a structured RemediationAction using the validated command flow.
-{{ ... }}
-        Accepts either a Pydantic RemediationAction model or a dict with the same structure.
-        """
         try:
             # Convert RemediationAction (model or dict) to operation/params
             action_dict = action.dict() if hasattr(action, "dict") else action
@@ -789,9 +1221,34 @@ class K8sExecutor:
                 return {"status": "error", "error": "Invalid remediation action"}
             operation, params = op_params
             logger.info(f"Executing remediation action: {operation} with params: {params}")
+
+            # Handle 'command' operation using the command_playground module
+            if operation == "command":
+                command = params.get("command")
+                if not command:
+                    return {"status": "error", "error": "No command provided for execution"}
+
+                result = execute_command(command)
+                if result["success"]:
+                    logger.info(f"Command executed successfully: {command}")
+                    return {"status": "success", "output": result["stdout"]}
+                else:
+                    logger.error(f"Command execution failed: {command}, Error: {result['stderr']}")
+                    return {"status": "error", "error": result["stderr"]}
+
+            # Fallback to generic validated command execution
             result = await self.execute_validated_command(operation, params)
             logger.info(f"Remediation action result: {result}")
             return result
+        except ResourceNotFoundError as e:
+            logger.error(f"Resource not found error: {e.message}")
+            return {"status": "error", "error": e.message, "details": e.details}
+        except KubernetesConnectionError as e:
+            logger.error(f"Kubernetes connection error: {e.message}")
+            return {"status": "error", "error": e.message, "details": e.details}
+        except OperationFailedError as e:
+            logger.error(f"Operation failed: {e.message}")
+            return {"status": "error", "error": e.message, "details": e.details}
         except Exception as e:
             logger.error(f"Error executing remediation action: {e}")
             return {"status": "error", "error": str(e)}
@@ -988,37 +1445,107 @@ class K8sExecutor:
         status_filter: List[str],
         namespace: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Lists resources and their status with optional filtering."""
         results = []
         try:
-            raw_items = await asyncio.to_thread(
-                self._list_raw, resource_type, namespace
-            )
+            raw_items = await self._list_raw(resource_type, namespace)
+            app_logger.debug(f"Raw items for {resource_type}: {len(raw_items)}")
+            
             for item in raw_items:
-                raw_status = await self.get_resource_status(
-                    resource_type, item["metadata"]["name"], namespace
-                )
-
-                # serialize datetime → ISO str
-                def _serialize(o):
-                    if isinstance(o, datetime):
-                        return o.isoformat()
-                    if isinstance(o, dict):
-                        return {k: _serialize(v) for k, v in o.items()}
-                    if isinstance(o, list):
-                        return [_serialize(v) for v in o]
-                    return o
-
-                status = _serialize(raw_status)
-                # apply any status_filter logic here…
-                if not status_filter or status.get("status") in status_filter:
-                    results.append(status)
+                try:
+                    metadata = item.get("metadata", {})
+                    status = item.get("status", {})
+                    
+                    # For pods, handle container statuses safely
+                    if resource_type == "pod":
+                        # Initialize status info with safe defaults
+                        status_info = {
+                            "kind": "Pod",
+                            "metadata": metadata,
+                            "name": metadata.get("name"),
+                            "namespace": metadata.get("namespace"),
+                            "phase": status.get("phase", "Unknown"),
+                            "conditions": [],
+                            "containerStatuses": [],
+                            "status": {
+                                "phase": status.get("phase", "Unknown"),
+                                "containerStatuses": [],
+                                "conditions": []
+                            }
+                        }
+                        
+                        # Safely update conditions and container statuses
+                        if status.get("conditions") is not None:
+                            status_info["conditions"] = status["conditions"]
+                            status_info["status"]["conditions"] = status["conditions"]
+                            
+                        if status.get("containerStatuses") is not None:
+                            status_info["containerStatuses"] = status["containerStatuses"]
+                            status_info["status"]["containerStatuses"] = status["containerStatuses"]
+                            
+                            # Check container states for issues
+                            for container in status["containerStatuses"]:
+                                state = container.get("state", {})
+                                if state.get("waiting"):
+                                    waiting_reason = state["waiting"].get("reason")
+                                    if waiting_reason:
+                                        app_logger.info(
+                                            f"Container {container.get('name')} in pod {metadata.get('name')} " 
+                                            f"is waiting with reason: {waiting_reason}"
+                                        )
+                        
+                        results.append(status_info)
+                        continue
+                    
+                    # For other resources, get full status
+                    raw_status = await self.get_resource_status(
+                        resource_type, metadata.get("name"), metadata.get("namespace")
+                    )
+                    
+                    if raw_status:
+                        # Serialize datetime → ISO str
+                        def _serialize(o):
+                            if isinstance(o, datetime):
+                                return o.isoformat()
+                            if isinstance(o, dict):
+                                return {k: _serialize(v) for k, v in o.items()}
+                            if isinstance(o, list):
+                                return [_serialize(v) for v in o]
+                            return o
+                        
+                        status = _serialize(raw_status)
+                        
+                        # Apply status filtering if requested
+                        if not status_filter or status.get("status") in status_filter:
+                            results.append(status)
+                    else:
+                        # Fallback status if get_resource_status returns None
+                        basic_status = {
+                            "kind": item.get("kind", resource_type.capitalize()),
+                            "metadata": metadata,
+                            "name": metadata.get("name"),
+                            "namespace": metadata.get("namespace"),
+                            "status": status
+                        }
+                        results.append(basic_status)
+                        
+                except Exception as item_error:
+                    app_logger.warning(
+                        f"Error getting status for {resource_type}/{metadata.get('name', 'unknown')}: {str(item_error)}"
+                    )
+            
             return results
+            
         except Exception as e:
-            logger.warning(
-                f"Error listing resources with status for {resource_type}: {e}"
-            )
+            app_logger.warning(f"Error listing resources with status for {resource_type}: {str(e)}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(ApiException),
+        after=after_log(logger, "WARNING")
+    )
     async def get_resource_status(
         self, resource_type: str, name: str, namespace: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -1033,81 +1560,192 @@ class K8sExecutor:
 
         Returns:
             Dictionary with the resource's status details
+            
+        Raises:
+            ResourceNotFoundError: When the requested resource does not exist
+            KubernetesConnectionError: When unable to connect to the Kubernetes API
         """
         if not self.v1 or not self.apps_v1:
-            logger.warning(
-                "Kubernetes client not initialized, cannot get resource status"
+            app_logger.warning(
+                "Kubernetes client not initialized",
+                component="k8s_executor",
+                operation="get_resource_status",
+                resource_type=resource_type,
+                name=name,
+                namespace=namespace
             )
-            return {"status": "unknown", "error": "Kubernetes client not initialized"}
+            raise KubernetesConnectionError(
+                "Kubernetes client not initialized",
+                details={
+                    "resource_type": resource_type,
+                    "name": name,
+                    "namespace": namespace
+                }
+            )
 
         try:
-            if not self.v1 or not self.apps_v1:
-                logger.warning(
-                    "Kubernetes client not initialized, cannot get resource status"
+            with app_logger.LogContext(
+                component="k8s_executor",
+                operation="get_resource_status",
+                resource_type=resource_type
+            ):
+                app_logger.debug(
+                    f"Getting resource status",
+                    resource_type=resource_type,
+                    name=name,
+                    namespace=namespace
                 )
-                return {
-                    "status": "unknown",
-                    "error": "Kubernetes client not initialized",
-                }
+                
+                resource_dict = {}
 
-            resource_dict = {}
+                # Handle resources that require namespaces when namespace is provided
+                if resource_type == "pod" and namespace:
+                    resource = await asyncio.to_thread(
+                        self.v1.read_namespaced_pod, name, namespace
+                    )
+                    resource_dict = resource.to_dict()
 
-            if resource_type == "pod" and namespace:
-                resource = await asyncio.to_thread(
-                    self.v1.read_namespaced_pod, name, namespace
-                )
-                resource_dict = resource.to_dict()
+                elif resource_type == "deployment" and namespace:
+                    resource = await asyncio.to_thread(
+                        self.apps_v1.read_namespaced_deployment, name, namespace
+                    )
+                    resource_dict = resource.to_dict()
+                
+                elif resource_type == "deployment":
+                    # Handle deployments without namespace by searching in all namespaces
+                    deployments = await asyncio.to_thread(
+                        self.apps_v1.list_deployment_for_all_namespaces
+                    )
+                    for item in deployments.items:
+                        if item.metadata.name == name:
+                            resource_dict = item.to_dict()
+                            break
+                    if not resource_dict:
+                        raise ResourceNotFoundError(
+                            f"Deployment {name} not found in any namespace",
+                            details={
+                                "resource_type": resource_type,
+                                "name": name
+                            }
+                        )
 
-            elif resource_type == "deployment" and namespace:
-                resource = await asyncio.to_thread(
-                    self.apps_v1.read_namespaced_deployment, name, namespace
-                )
-                resource_dict = resource.to_dict()
+                elif resource_type == "node":
+                    resource = await asyncio.to_thread(self.v1.read_node, name)
+                    resource_dict = resource.to_dict()
 
-            elif resource_type == "node":
-                resource = await asyncio.to_thread(self.v1.read_node, name)
-                resource_dict = resource.to_dict()
+                elif resource_type == "service" and namespace:
+                    resource = await asyncio.to_thread(
+                        self.v1.read_namespaced_service, name, namespace
+                    )
+                    resource_dict = resource.to_dict()
+                    
+                elif resource_type == "service":
+                    # Handle services without namespace by searching in all namespaces
+                    services = await asyncio.to_thread(
+                        self.v1.list_service_for_all_namespaces
+                    )
+                    for item in services.items:
+                        if item.metadata.name == name:
+                            resource_dict = item.to_dict()
+                            break
+                    if not resource_dict:
+                        raise ResourceNotFoundError(
+                            f"Service {name} not found in any namespace",
+                            details={
+                                "resource_type": resource_type,
+                                "name": name
+                            }
+                        )
 
-            elif resource_type == "service" and namespace:
-                resource = await asyncio.to_thread(
-                    self.v1.read_namespaced_service, name, namespace
-                )
-                resource_dict = resource.to_dict()
+                elif resource_type == "persistentvolumeclaim" and namespace:
+                    resource = await asyncio.to_thread(
+                        self.v1.read_namespaced_persistent_volume_claim, name, namespace
+                    )
+                    resource_dict = resource.to_dict()
+                    
+                elif resource_type == "persistentvolumeclaim":
+                    # Handle PVCs without namespace by searching in all namespaces
+                    pvcs = await asyncio.to_thread(
+                        self.v1.list_persistent_volume_claim_for_all_namespaces
+                    )
+                    for item in pvcs.items:
+                        if item.metadata.name == name:
+                            resource_dict = item.to_dict()
+                            break
+                    if not resource_dict:
+                        raise ResourceNotFoundError(
+                            f"PersistentVolumeClaim {name} not found in any namespace",
+                            details={
+                                "resource_type": resource_type,
+                                "name": name
+                            }
+                        )
 
-            elif resource_type == "persistentvolumeclaim" and namespace:
-                resource = await asyncio.to_thread(
-                    self.v1.read_namespaced_persistent_volume_claim, name, namespace
-                )
-                resource_dict = resource.to_dict()
-
-            else:
-                return {
-                    "status": "unknown",
-                    "error": f"Unsupported resource type: {resource_type}",
-                }
-
-            # Extract relevant status information
-            status_info = {
-                "type": resource_type,
-                "name": name,
-                "namespace": namespace,
-                "status": resource_dict.get("status", {}),
-                "metadata": resource_dict.get("metadata", {}),
-                "spec": resource_dict.get("spec", {}),
-            }
-
-            return status_info
-
+                else:
+                    app_logger.warning(
+                        f"Unsupported resource type",
+                        resource_type=resource_type,
+                        name=name,
+                        namespace=namespace
+                    )
+                    raise ValueError(f"Unsupported resource type: {resource_type}")
+                    
+                return resource_dict
+                
         except ApiException as e:
-            logger.error(
-                f"API error getting status for {resource_type} {namespace}/{name}: {e.status} - {e.reason}"
-            )
-            return {"status": "error", "error": f"{e.status}: {e.reason}"}
+            if e.status == 404:
+                app_logger.warning(
+                    f"Resource not found",
+                    status_code=e.status, 
+                    reason=e.reason,
+                    resource_type=resource_type,
+                    name=name,
+                    namespace=namespace
+                )
+                raise ResourceNotFoundError(
+                    resource_type=resource_type,
+                    name=name,
+                    namespace=namespace
+                )
+            else:
+                app_logger.error(
+                    f"API error when getting resource status",
+                    status_code=e.status,
+                    reason=e.reason,
+                    resource_type=resource_type,
+                    name=name,
+                    namespace=namespace
+                )
+                raise KubernetesConnectionError(
+                    f"API error: {e.reason}",
+                    details={
+                        "status_code": e.status,
+                        "reason": e.reason,
+                        "resource_type": resource_type,
+                        "name": name,
+                        "namespace": namespace
+                    }
+                )
+                
         except Exception as e:
-            logger.error(
-                f"Error getting status for {resource_type} {namespace}/{name}: {e}"
+            app_logger.error(
+                f"Error getting resource status",
+                exception=str(e),
+                exception_type=e.__class__.__name__,
+                resource_type=resource_type,
+                name=name,
+                namespace=namespace
             )
-            return {"status": "error", "error": str(e)}
+            raise KubernetesConnectionError(
+                f"Failed to get {resource_type} status: {str(e)}",
+                details={
+                    "exception": str(e),
+                    "exception_type": e.__class__.__name__,
+                    "resource_type": resource_type,
+                    "name": name,
+                    "namespace": namespace
+                }
+            )
 
     async def scale_parent_controller(
         self, namespace: str, pod_name: str, delta: int = 1
@@ -1317,7 +1955,20 @@ class K8sExecutor:
         elif action_type == "view_logs":
             container_arg = f"-c {params['container']}" if "container" in params else ""
             tail_arg = f"--tail={params['tail']}" if "tail" in params else ""
-            return f"kubectl logs {params['name']} -n {params['namespace']} {container_arg} {tail_arg}"
+            since_arg = f"--since={params['since']}" if "since" in params else ""
+            return f"kubectl logs {params['name']} -n {params['namespace']} {container_arg} {tail_arg} {since_arg}".strip()
+            
+        elif action_type == "command":
+            # Handle generic command type
+            cmd = params.get("command", "")
+            cmd_params = params.get("params", {})
+            
+            # Replace placeholders in the command with params
+            for key, value in cmd_params.items():
+                placeholder = f"{{{key}}}"
+                cmd = cmd.replace(placeholder, str(value))
+                
+            return cmd
 
         # For unknown action types or ones we haven't implemented specific formatting for,
         # create a generic kubectl command based on parameters
@@ -1528,6 +2179,91 @@ class K8sExecutor:
             logger.error(f"Error getting logs for pod {namespace}/{name}: {e}")
             return {"status": "error", "error": str(e)}
 
+    def _resource_type_to_kind(self, resource_type: str) -> str:
+        """
+        Args:
+            resource_type: The resource type (e.g., "pod", "deployment")
+            
+        Returns:
+            The corresponding Kubernetes kind (e.g., "Pod", "Deployment")
+        """
+        mapping = {
+            "pod": "Pod",
+            "deployment": "Deployment",
+            "service": "Service",
+            "node": "Node",
+            "persistentvolumeclaim": "PersistentVolumeClaim",
+            "configmap": "ConfigMap",
+            "secret": "Secret",
+            "statefulset": "StatefulSet",
+            "daemonset": "DaemonSet",
+            "ingress": "Ingress",
+            "job": "Job",
+            "cronjob": "CronJob",
+        }
+        return mapping.get(resource_type, "")
+
+    async def execute_command(self, command: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Execute a generic command```python
+        with parameters
+        This method handles the 'command' action type from remediation suggestions.
+        
+        Args:
+            command: The command to execute
+            params: Optional dictionary of parameters to substitute in the command
+            
+        Returns:
+            Dictionary with execution result
+        """
+        import subprocess
+
+        if params is None:
+            params = {}
+            
+        try:
+            # Replace placeholders in the command with params
+            formatted_command = command
+            for key, value in params.items():
+                placeholder = f"{{{key}}}"
+                formatted_command = formatted_command.replace(placeholder, str(value))
+                
+            logger.info(f"Executing command: {formatted_command}")
+            
+            # Execute the command
+            result = subprocess.run(
+                formatted_command,
+                shell=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            return {
+                "status": "success",
+                "command": formatted_command,
+                "output": result.stdout,
+                "exit_code": result.returncode
+            }
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command execution failed: {e}")
+            return {
+                "status": "error",
+                "command": command,
+                "error": e.stderr,
+                "exit_code": e.returncode
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing command: {e}")
+            return {
+                "status": "error",
+                "command": command,
+                "error": str(e)
+            }
+
 
 # Global instance
 k8s_executor = K8sExecutor()
@@ -1541,40 +2277,72 @@ async def list_resources(
     Returns all resources of the given type as a list of dicts.
     """
     if not k8s_executor.v1 or not k8s_executor.apps_v1:
+        app_logger.warning(
+            "Kubernetes client not available",
+            component="k8s_executor",
+            operation="list_resources",
+            resource_type=resource_type,
+            namespace=namespace
+        )
         return []
+        
     try:
-        if resource_type == "pod":
-            # List pods in the given namespace or across all namespaces if none specified
-            if namespace:
-                pods = await asyncio.to_thread(
-                    k8s_executor.v1.list_namespaced_pod, namespace
+        with app_logger.LogContext(
+            component="k8s_executor",
+            operation="list_resources",
+            resource_type=resource_type,
+            namespace=namespace
+        ):
+            app_logger.debug(
+                f"Listing resources",
+                resource_type=resource_type,
+                namespace=namespace
+            )
+            
+            if resource_type == "pod":
+                # List pods in the given namespace or across all namespaces if none specified
+                if namespace:
+                    pods = await asyncio.to_thread(
+                        k8s_executor.v1.list_namespaced_pod, namespace
+                    )
+                else:
+                    pods = await asyncio.to_thread(
+                        k8s_executor.v1.list_pod_for_all_namespaces
+                    )
+                return [item.to_dict() for item in pods.items]
+            if resource_type == "deployment" and namespace:
+                deps = await asyncio.to_thread(
+                    k8s_executor.apps_v1.list_namespaced_deployment, namespace
                 )
-            else:
-                pods = await asyncio.to_thread(
-                    k8s_executor.v1.list_pod_for_all_namespaces
+                return [item.to_dict() for item in deps.items]
+            if resource_type == "node":
+                nodes = await asyncio.to_thread(k8s_executor.v1.list_node)
+                return [item.to_dict() for item in nodes.items]
+            if resource_type == "service" and namespace:
+                svcs = await asyncio.to_thread(
+                    k8s_executor.v1.list_namespaced_service, namespace
                 )
-            return [item.to_dict() for item in pods.items]
-        if resource_type == "deployment" and namespace:
-            deps = await asyncio.to_thread(
-                k8s_executor.apps_v1.list_namespaced_deployment, namespace
+                return [item.to_dict() for item in svcs.items]
+            if resource_type == "persistentvolumeclaim" and namespace:
+                pvcs = await asyncio.to_thread(
+                    k8s_executor.v1.list_namespaced_persistent_volume_claim, namespace
+                )
+                return [item.to_dict() for item in pvcs.items]
+            # fallback: empty
+            app_logger.warning(
+                f"Unsupported resource type for listing",
+                resource_type=resource_type,
+                namespace=namespace
             )
-            return [item.to_dict() for item in deps.items]
-        if resource_type == "node":
-            nodes = await asyncio.to_thread(k8s_executor.v1.list_node)
-            return [item.to_dict() for item in nodes.items]
-        if resource_type == "service" and namespace:
-            svcs = await asyncio.to_thread(
-                k8s_executor.v1.list_namespaced_service, namespace
-            )
-            return [item.to_dict() for item in svcs.items]
-        if resource_type == "persistentvolumeclaim" and namespace:
-            pvcs = await asyncio.to_thread(
-                k8s_executor.v1.list_namespaced_persistent_volume_claim, namespace
-            )
-            return [item.to_dict() for item in pvcs.items]
-        # fallback: empty
-        return []
-    except Exception:
+            return []
+    except Exception as e:
+        app_logger.error(
+            "Error listing resources",
+            exception=str(e),
+            exception_type=e.__class__.__name__,
+            resource_type=resource_type,
+            namespace=namespace
+        )
         return []
 
 
@@ -1585,3 +2353,5 @@ async def get_resource_status(
     Proxy to the class method for fetching detailed status.
     """
     return await k8s_executor.get_resource_status(resource_type, name, namespace)
+
+

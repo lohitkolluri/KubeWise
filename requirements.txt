@@ -5,6 +5,7 @@ fastapi==0.109.2
 uvicorn==0.22.0
 pydantic==2.6.4
 pydantic-settings==2.2.1
+pydantic-ai
 
 # -------------------------------------
 # Database
@@ -39,6 +40,7 @@ seaborn==0.13.2
 # AI Integration
 # -------------------------------------
 google-genai
+pydantic-core>=2.16.1  # Required for PydanticAI
 
 # -------------------------------------
 # Monitoring and Metrics

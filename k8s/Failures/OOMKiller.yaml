@@ -1,0 +1,34 @@
+# oomkilled-failure.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kubewise-test-failure-oom
+  annotations:
+    "kubewise.ai/test-scenario": "oomkilled"
+spec:
+  schedule: "* * * * *" # Run every minute - will create pods that fail with OOMKilled
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 0  # Don't keep history of successful jobs
+  failedJobsHistoryLimit: 1      # Keep only 1 failed job
+  startingDeadlineSeconds: 1800  # Auto-delete after 30 minutes
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1800  # Auto-delete jobs after 30 minutes
+      template:
+        metadata:
+          labels:
+            app: kubewise-test-failure-oom
+        spec:
+          containers:
+          - name: memory-hog
+            image: polinux/stress # Image with stress-ng tool
+            # Request a small amount, but limit it even lower
+            resources:
+              requests:
+                memory: "50Mi"
+              limits:
+                memory: "25Mi" # Very low limit to trigger OOM
+            # Command to consume memory beyond the limit
+            command: ["stress"]
+            args: ["--vm", "1", "--vm-bytes", "100M", "--vm-hang", "0"]
+          restartPolicy: Never

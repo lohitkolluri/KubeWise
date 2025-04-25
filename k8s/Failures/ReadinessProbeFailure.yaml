@@ -1,0 +1,29 @@
+# readiness-failure.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubewise-test-failure-readiness
+  annotations:
+    "kubewise.ai/test-scenario": "readiness-probe-failure"
+spec:
+  ttlSecondsAfterFinished: 1800  # Auto-delete 30 minutes after completion
+  template:
+    metadata:
+      labels:
+        app: kubewise-test-failure-readiness
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:stable-alpine
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /not-ready # This path does not exist on default nginx
+            port: 80
+          initialDelaySeconds: 5 # Start probing after 5 seconds
+          periodSeconds: 5     # Probe every 5 seconds
+          failureThreshold: 2  # Mark as failed after 2 attempts
+        command: ["sh", "-c", "nginx && sleep 3600"]  
+      restartPolicy: Never
+          

@@ -22,6 +22,21 @@ class AnomalyStatus(str, Enum):
     THRESHOLD_BREACH = "ThresholdBreach"  # New status for direct threshold breaches
 
 
+class AnomalyEventCreate(BaseModel):
+    """Model for creating new anomaly events."""
+    
+    entity_type: str = Field(..., description="Type of entity (pod, node, deployment, etc.)")
+    entity_id: str = Field(..., description="ID of the entity (pod, node, etc.)")
+    namespace: Optional[str] = Field(None, description="Namespace of affected resource")
+    status: AnomalyStatus = Field(..., description="Current status of the anomaly")
+    detection_timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the anomaly was detected")
+    metric_snapshot: List[Dict[str, Any]] = Field(default_factory=list, description="Metrics snapshot window at the time of detection")
+    anomaly_score: float = Field(..., description="Anomaly detection score")
+    notes: Optional[str] = Field(None, description="Additional notes about the anomaly")
+    ai_analysis: Optional[Dict[str, Any]] = Field(None, description="AI analysis of the anomaly")
+    is_proactive: bool = Field(default=False, description="Whether this event is for a predicted future failure")
+
+
 class RemediationAttempt(BaseModel):
     """Model for tracking remediation attempts."""
 
@@ -39,6 +54,9 @@ class RemediationAttempt(BaseModel):
     result: Optional[str] = Field(None, description="Result of the remediation attempt")
     error: Optional[str] = Field(
         None, description="Error message if the attempt failed"
+    )
+    output: Optional[str] = Field(
+        None, description="Command output from the remediation attempt"
     )
     is_proactive: bool = Field(
         default=False,

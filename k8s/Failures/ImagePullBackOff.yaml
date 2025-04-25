@@ -1,0 +1,20 @@
+# imagepull-failure.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubewise-test-failure-imagepull
+  annotations:
+    "kubewise.ai/test-scenario": "imagepullbackoff"
+spec:
+  ttlSecondsAfterFinished: 1800  # Auto-delete 30 minutes after completion
+  template:
+    metadata:
+      labels:
+        app: kubewise-test-failure-imagepull
+    spec:
+      containers:
+      - name: main
+        # Use a deliberately non-existent image name
+        image: non-existent-registry/non-existent-image:latest
+        command: ["sleep", "3600"] # Command doesn't matter, image pull fails first
+      restartPolicy: Never  # Will fail once with ImagePullBackOff error

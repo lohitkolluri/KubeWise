@@ -4,16 +4,19 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.future import select
 
 from app.core.config import settings
-from app.core.database import database, get_async_db
+from app.core.database import database, get_async_db, get_async_db_context
+from app.core.exceptions import DatabaseError, ResourceNotFoundError, ValidationError
 from app.models.anomaly_event import (
     AnomalyEvent,
     AnomalyEventUpdate,
     AnomalyStatus,
     RemediationAttempt,
 )
+from app.services.gemini_service import RemediationAction
 from app.models.db_models import AnomalyEventDB, RemediationAttemptDB
 
 
@@ -44,7 +47,7 @@ class AnomalyEventService:
             AnomalyEvent object
 
         Raises:
-            ValueError: If event data is invalid
+            ValidationError: If event data is invalid
             DatabaseError: If database operation fails
         """
         # Generate operation ID for tracking
@@ -91,8 +94,8 @@ class AnomalyEventService:
                 logger.error(
                     f"[OperationID:{operation_id}] Event data validation failed: {validation_error}"
                 )
-                raise ValueError(
-                    f"Invalid event data: {validation_error}"
+                raise ValidationError(
+                    f"Invalid event data", {"details": str(validation_error)}
                 ) from validation_error
 
             # Extract remediation attempts if any
@@ -148,8 +151,8 @@ class AnomalyEventService:
                 }
 
                 try:
-                    # Get async database session
-                    async for session in get_async_db():
+                    # Use the improved context manager for database sessions
+                    async with get_async_db_context() as session:
                         # Add to database
                         session.add(db_event)
 
@@ -165,33 +168,28 @@ class AnomalyEventService:
                         await session.refresh(db_event)
 
                     # Complete operation tracking
-                    self._active_operations[operation_id][
-                        "end_time"
-                    ] = datetime.utcnow()
+                    self._active_operations[operation_id]["end_time"] = datetime.utcnow()
                     self._active_operations[operation_id]["status"] = "success"
 
-                except Exception as db_error:
+                except SQLAlchemyError as db_error:
                     # Update operation tracking with failure
-                    self._active_operations[operation_id][
-                        "end_time"
-                    ] = datetime.utcnow()
+                    self._active_operations[operation_id]["end_time"] = datetime.utcnow()
                     self._active_operations[operation_id]["status"] = "error"
                     self._active_operations[operation_id]["error"] = str(db_error)
 
                     logger.error(
                         f"[OperationID:{operation_id}] Database error creating anomaly event: {db_error}"
                     )
-                    # Use a more specific exception type
-                    from sqlalchemy.exc import SQLAlchemyError
-
-                    if isinstance(db_error, SQLAlchemyError):
-                        raise SQLAlchemyError(
-                            f"Database error: {db_error}"
-                        ) from db_error
-                    else:
-                        raise RuntimeError(
-                            f"Error during database operation: {db_error}"
-                        ) from db_error
+                    
+                    raise DatabaseError(
+                        f"Database error while creating anomaly event", 
+                        {
+                            "operation_id": operation_id,
+                            "entity_type": event.entity_type,
+                            "entity_id": event.entity_id,
+                            "error": str(db_error)
+                        }
+                    ) from db_error
 
             logger.info(
                 f"[OperationID:{operation_id}] Created new anomaly event: {event.anomaly_id} for {event.entity_type}/{event.entity_id}"
@@ -693,7 +691,7 @@ class AnomalyEventService:
             raise
 
     async def add_remediation_attempt(
-        self, anomaly_id: str, attempt: RemediationAttempt
+        self, anomaly_id: str, attempt: RemediationAttempt, suggested_remediation_commands: List[RemediationAction] = None, status: AnomalyStatus = None
     ) -> Optional[AnomalyEvent]:
         """
         Add a remediation attempt to an anomaly event and schedule verification.
@@ -701,6 +699,8 @@ class AnomalyEventService:
         Args:
             anomaly_id: ID of the event
             attempt: RemediationAttempt object
+            suggested_remediation_commands: Optional list of suggested remediation actions
+            status: Optional new status for the event
 
         Returns:
             Updated AnomalyEvent object or None if not found
@@ -797,6 +797,33 @@ class AnomalyEventService:
 
         except Exception as e:
             logger.error(f"Error adding remediation attempt in SQLite: {e}")
+            raise
+
+    async def update_remediation_status(
+        self, anomaly_id: str, attempt: RemediationAttempt, suggested_remediation_commands: List[RemediationAction] = None, status: AnomalyStatus = None
+    ) -> Optional[AnomalyEvent]:
+        """
+        Update an anomaly event with remediation status.
+
+        Args:
+            anomaly_id: ID of the anomaly event
+            attempt: RemediationAttempt object
+            suggested_remediation_commands: Optional list of suggested remediation commands
+            status: Optional new status
+
+        Returns:
+            Updated AnomalyEvent or None if not found
+        """
+        try:
+            # First add the remediation attempt
+            updated_event = await self.add_remediation_attempt(anomaly_id, attempt, suggested_remediation_commands, status)
+            
+            if not updated_event:
+                return None
+                
+            return updated_event
+        except Exception as e:
+            logger.error(f"Error updating remediation status: {e}")
             raise
 
     async def handle_anomaly_event(self, event: Dict[str, Any]) -> Dict[str, Any]:

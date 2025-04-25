@@ -1,0 +1,23 @@
+# pending-resource-failure.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubewise-test-failure-pending-resource
+  annotations:
+    "kubewise.ai/test-scenario": "pending-pod"
+spec:
+  ttlSecondsAfterFinished: 1800  # Auto-delete 30 minutes after completion
+  template:
+    metadata:
+      labels:
+        app: kubewise-test-failure-pending
+    spec:
+      containers:
+      - name: main
+        image: alpine:latest
+        command: ["sleep", "3600"]
+        resources:
+          requests:
+            cpu: "1000" # Request 1000 CPU cores - likely impossible
+            memory: "100Gi" # Request 100 GiB RAM - likely impossible
+      restartPolicy: Never

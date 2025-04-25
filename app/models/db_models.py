@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -49,12 +50,28 @@ class AnomalyEventDB(Base):
     verification_time = Column(DateTime, nullable=True)
     prediction_data = Column(JSON, nullable=True)
     is_proactive = Column(Boolean, default=False)
+    severity = Column(String, nullable=True, index=True)
+    source = Column(String, nullable=True)
+    tags = Column(JSON, nullable=True)
 
     # Relationship with remediation attempts
     remediation_attempts = relationship(
         "RemediationAttemptDB",
         back_populates="anomaly_event",
         cascade="all, delete-orphan",
+    )
+
+    # Relationship with metrics snapshots
+    metrics_snapshots = relationship(
+        "MetricsSnapshotDB",
+        back_populates="anomaly_event",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("idx_anomaly_status", "status"),
+        Index("idx_anomaly_namespace", "namespace"),
+        Index("idx_anomaly_detection_time", "detection_timestamp"),
     )
 
 
@@ -73,8 +90,44 @@ class RemediationAttemptDB(Base):
     result = Column(String, nullable=True)
     error = Column(String, nullable=True)
     is_proactive = Column(Boolean, default=False)
+    execution_time = Column(Float, nullable=True)
+    extra_metadata = Column(JSON, nullable=True)  # Renamed from 'metadata' to avoid conflict
 
     # Relationship with anomaly event
     anomaly_event = relationship(
         "AnomalyEventDB", back_populates="remediation_attempts"
     )
+
+    __table_args__ = (
+        Index("idx_remediation_timestamp", "timestamp"),
+        Index("idx_remediation_success", "success"),
+    )
+
+
+class MetricsSnapshotDB(Base):
+    """SQLAlchemy model for storing detailed metric snapshots."""
+
+    __tablename__ = "metrics_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    anomaly_event_id = Column(String, ForeignKey("anomaly_events.anomaly_id"))
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    metrics = Column(JSON, nullable=False)
+
+    # Relationship with anomaly event
+    anomaly_event = relationship("AnomalyEventDB", back_populates="metrics_snapshots")
+
+
+class CommandLogDB(Base):
+    """SQLAlchemy model for logging executed commands."""
+
+    __tablename__ = "command_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    command = Column(String, nullable=False)
+    parameters = Column(JSON, nullable=True)
+    executor = Column(String, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    success = Column(Boolean, default=False)
+    result = Column(String, nullable=True)
+    error = Column(String, nullable=True)

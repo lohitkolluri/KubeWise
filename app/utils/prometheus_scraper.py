@@ -1,15 +1,16 @@
 # prometheus_scraper.py
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple, Optional
 import socket
-import requests
+import httpx
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 from loguru import logger
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed, after_log
 
 from app.core.config import settings
+from app.core.exceptions import PrometheusConnectionError, KubernetesConnectionError
 from app.utils.metric_tagger import MetricTagger
 
 try:
@@ -25,6 +26,7 @@ class PrometheusScraper:
         logger.info(f"Initialized PrometheusScraper for URL: {self.prometheus_url}")
 
         self.ignore_entities = ["unknown", "unknown/unknown"]
+        self.http_client = httpx.AsyncClient(timeout=self.timeout)
 
         try:
             load_kube_config()
@@ -33,12 +35,34 @@ class PrometheusScraper:
             self.k8s_available = True
             logger.info("Kubernetes client ready for label fetching.")
         except Exception as e:
-            logger.warning("Kubernetes client initialization failed: {e}", exc_info=True)
+            logger.warning(f"Kubernetes client initialization failed: {e}", exc_info=True)
             self.k8s_core_v1 = None
             self.k8s_apps_v1 = None
             self.k8s_available = False
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def close(self):
+        """Close the HTTP client session"""
+        await self.http_client.aclose()
+
     async def validate_query(self, query: str) -> Dict[str, Any]:
+        """
+        Validate a PromQL query by executing it against Prometheus.
+
+        Args:
+            query: The PromQL query to validate
+
+        Returns:
+            Dictionary containing validation results
+
+        Raises:
+            PrometheusConnectionError: When connection to Prometheus fails
+        """
         result = {"valid": False, "error": None, "returned_data": False, "warnings": []}
 
         if not query.strip():
@@ -52,16 +76,12 @@ class PrometheusScraper:
             result["warnings"].append("sum() without by() may be expensive")
 
         try:
-            await asyncio.get_running_loop()
-            response = await asyncio.to_thread(
-                requests.get,
+            response = await self.http_client.get(
                 f"{self.prometheus_url}/api/v1/query",
                 params={"query": query},
                 timeout=self.timeout / 2,
             )
-            if response.status_code != 200:
-                result["error"] = f"Status {response.status_code} from Prometheus"
-                return result
+            response.raise_for_status()
 
             data = response.json()
             if data.get("status") == "success":
@@ -71,21 +91,47 @@ class PrometheusScraper:
             else:
                 result["error"] = f"{data.get('errorType')}: {data.get('error')}"
 
-        except requests.exceptions.RequestException as e:
-            result["error"] = f"Network error: {e}"
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Invalid query: {e.response.status_code} - {e.response.text}"
+            result["error"] = error_msg
+            logger.warning(error_msg)
+        except httpx.RequestError as e:
+            error_msg = f"Network error: {str(e)}"
+            result["error"] = error_msg
+            logger.error(error_msg)
+            raise PrometheusConnectionError(f"Failed to connect to Prometheus: {str(e)}")
         except Exception as e:
-            result["error"] = f"Unexpected error: {e}"
+            result["error"] = f"Unexpected error: {str(e)}"
+            logger.error(f"Unexpected error validating query: {str(e)}", exc_info=True)
 
         return result
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), retry=retry_if_exception_type(requests.exceptions.RequestException))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+        retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPError)),
+        after=after_log(logger, "WARNING")
+    )
     async def query_prometheus(self, query: str, time_window_seconds: int) -> List[Dict[str, Any]]:
+        """
+        Query Prometheus with a time range query.
+
+        Args:
+            query: The PromQL query to execute
+            time_window_seconds: Time range in seconds to query for
+
+        Returns:
+            List of metrics with their values
+
+        Raises:
+            PrometheusConnectionError: When connection to Prometheus fails
+        """
         results = []
         try:
             end_time = datetime.utcnow()
             start_time = end_time - timedelta(seconds=time_window_seconds)
-            response = await asyncio.to_thread(
-                requests.get,
+            
+            response = await self.http_client.get(
                 f"{self.prometheus_url}/api/v1/query_range",
                 params={
                     "query": query,
@@ -93,7 +139,6 @@ class PrometheusScraper:
                     "end": end_time.isoformat() + "Z",
                     "step": "15s",
                 },
-                timeout=self.timeout,
             )
             response.raise_for_status()
 
@@ -116,12 +161,30 @@ class PrometheusScraper:
                         "values": values,
                         "timestamp": datetime.utcnow().isoformat(),
                     })
+                    
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code if hasattr(e, 'response') else 'Unknown'
+            logger.error(f"HTTP error querying Prometheus, status {status_code}: {e}")
+            # Don't raise here to allow other queries to proceed
+        except httpx.RequestError as e:
+            logger.error(f"Network error querying Prometheus: {e}")
+            raise PrometheusConnectionError(f"Failed to connect to Prometheus: {str(e)}")
         except Exception as e:
-            logger.error(f"Failed to query Prometheus: {e}")
+            logger.error(f"Failed to query Prometheus: {e}", exc_info=True)
 
         return results
 
-    def _detect_entity(self, query: str, labels: Dict[str, str]) -> (str, str):
+    def _detect_entity(self, query: str, labels: Dict[str, str]) -> Tuple[str, str]:
+        """
+        Detect the entity type and ID from Prometheus metric labels.
+
+        Args:
+            query: The PromQL query that was executed
+            labels: The metric labels
+
+        Returns:
+            Tuple of (entity_id, entity_type)
+        """
         if "node" in labels:
             return labels["node"], "node"
         if "instance" in labels:
@@ -151,6 +214,9 @@ class PrometheusScraper:
 
         Returns:
             Dictionary of entity metrics keyed by entity identifier
+
+        Raises:
+            PrometheusConnectionError: When connection to Prometheus fails and no metrics can be retrieved
         """
         logger.info(f"Fetching metrics for {len(queries)} queries")
 
@@ -160,16 +226,18 @@ class PrometheusScraper:
 
         # DEBUG: Log the Prometheus URL being used
         logger.info(f"Using Prometheus URL: {self.prometheus_url}")
+        
         # Test Prometheus connectivity
         try:
-            response = await asyncio.to_thread(
-                requests.get,
+            response = await self.http_client.get(
                 f"{self.prometheus_url}/-/healthy",
                 timeout=self.timeout / 2
             )
             logger.info(f"Prometheus health check status: {response.status_code}")
-        except Exception as e:
-            logger.error(f"Prometheus health check failed: {e}")
+        except httpx.RequestError as e:
+            error_msg = f"Prometheus health check failed: {e}"
+            logger.error(error_msg)
+            raise PrometheusConnectionError(error_msg)
 
         # Collect all raw metrics from Prometheus
         all_metrics = {}
@@ -266,15 +334,14 @@ class PrometheusScraper:
 
             logger.info(f"Collected {total_metrics} metrics across {len(all_metrics)} entities")
 
-            # If we got no metrics, log a more specific error
+            # If we got no metrics, log a specific error and do a direct test query
             if total_metrics == 0:
                 logger.error("No metrics were collected. Check Prometheus connection and queries.")
                 # Try one direct query to see what happens
                 if queries:
                     try:
                         logger.info("Testing direct Prometheus query...")
-                        response = await asyncio.to_thread(
-                            requests.get,
+                        response = await self.http_client.get(
                             f"{self.prometheus_url}/api/v1/query",
                             params={"query": "up"},
                             timeout=self.timeout / 2,
@@ -284,10 +351,16 @@ class PrometheusScraper:
                             logger.info(f"Direct query result: {response.json()}")
                     except Exception as e:
                         logger.error(f"Direct query failed: {e}")
+                        # Raise connection error if even the test query fails
+                        if isinstance(e, httpx.RequestError):
+                            raise PrometheusConnectionError(f"Failed to connect to Prometheus: {str(e)}")
 
             # Apply metric tagging before returning
             return MetricTagger.tag_metrics_batch(all_metrics)
 
+        except PrometheusConnectionError:
+            # Re-raise PrometheusConnectionError as it's already properly formatted
+            raise
         except Exception as e:
             logger.error(f"Error in fetch_all_metrics: {e}", exc_info=True)
             return {}
@@ -303,11 +376,13 @@ class PrometheusScraper:
 
         Returns:
             List of results with metric labels and values
+
+        Raises:
+            PrometheusConnectionError: When connection to Prometheus fails
         """
         try:
             # Use instant query for better performance when checking labels
-            response = await asyncio.to_thread(
-                requests.get,
+            response = await self.http_client.get(
                 f"{self.prometheus_url}/api/v1/query",
                 params={"query": query},
                 timeout=self.timeout / 2,
@@ -329,6 +404,11 @@ class PrometheusScraper:
                     })
 
             return results
+            
+        except httpx.RequestError as e:
+            error_msg = f"Network error in fetch_metric_data_for_label_check: {e}"
+            logger.warning(error_msg)
+            raise PrometheusConnectionError(error_msg)
         except Exception as e:
             logger.warning(f"Error in fetch_metric_data_for_label_check: {e}")
             return []
@@ -343,6 +423,9 @@ class PrometheusScraper:
 
         Returns:
             Dictionary containing pod metadata
+
+        Raises:
+            KubernetesConnectionError: When connection to Kubernetes API fails
         """
         if not self.k8s_available or not self.k8s_core_v1:
             return {}
@@ -365,10 +448,15 @@ class PrometheusScraper:
             }
 
             return metadata
+            
         except ApiException as e:
             logger.warning(f"Kubernetes API error fetching pod metadata: {e}")
+            if e.status == 403:
+                raise KubernetesConnectionError(f"Permission denied when accessing pod {namespace}/{pod_name}: {e.reason}")
         except Exception as e:
             logger.warning(f"Error fetching pod metadata: {e}")
+            if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                raise KubernetesConnectionError(f"Failed to connect to Kubernetes API: {str(e)}")
 
         return {}
 
