@@ -1,18 +1,20 @@
 import asyncio
-import datetime # Added import
+import datetime
+import re
+import time
 from typing import Optional
 
 import httpx
 import motor.motor_asyncio
 import typer
+from loguru import logger
 from rich import print as rprint
 from rich.table import Table
 
-from kubewise.api.deps import get_mongo_db # Reuse dependency logic structure conceptually
+from kubewise.api.deps import get_mongo_db
 from kubewise.collector import k8s_events, prometheus
 from kubewise.config import settings
-from kubewise.logging import setup_logging # Configure logging for CLI use
-from kubewise.models import AnomalyRecord
+from kubewise.logging import setup_logging
 
 # Initialize Typer app
 app = typer.Typer(
@@ -21,7 +23,7 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# --- Helper Functions (Async Context) ---
+# --- Helper Functions ---
 
 async def _get_db():
     """Helper to get DB connection for CLI commands."""
@@ -31,7 +33,7 @@ async def _get_db():
         )
         await client.admin.command('ping')
         db = client.get_database()
-        return client, db # Return client too for closing
+        return client, db
     except Exception as e:
         rprint(f"[bold red]Error connecting to MongoDB:[/bold red] {e}")
         return None, None
@@ -40,10 +42,8 @@ async def _get_db():
 
 @app.command()
 def config():
-    """
-    Display the current KubeWise configuration (secrets masked).
-    """
-    setup_logging() # Ensure logs are configured if needed by settings access
+    """Display the current KubeWise configuration (secrets masked)."""
+    setup_logging()
     rprint("[bold cyan]--- KubeWise Configuration ---[/bold cyan]")
     rprint(f"[green]MongoDB URI Set:[/green] {bool(settings.mongo_uri)}")
     rprint(f"[green]Prometheus URL:[/green] {settings.prom_url}")
@@ -56,10 +56,8 @@ def config():
 
 @app.command()
 def check_connections():
-    """
-    Perform basic checks for connectivity to Prometheus and Kubernetes API.
-    """
-    setup_logging() # Configure logging for output
+    """Perform basic checks for connectivity to Prometheus and Kubernetes API."""
+    setup_logging()
 
     async def checker():
         # Check Prometheus
@@ -79,38 +77,25 @@ def check_connections():
         rprint("\n[cyan]Checking Kubernetes connection...[/cyan]")
         try:
             await k8s_events.load_k8s_config()
-            # Optionally perform a simple API call, e.g., list namespaces
-            # async with client.ApiClient() as api_client:
-            #     v1 = client.CoreV1Api(api_client)
-            #     await v1.list_namespace(limit=1)
             rprint("[bold green]Kubernetes configuration loaded successfully.[/bold green]")
             rprint("[yellow]Note: This checks config loading, not necessarily API reachability.[/yellow]")
         except Exception as e:
             rprint(f"[bold red]Error loading Kubernetes configuration:[/bold red] {e}")
 
-    asyncio.run(checker()) # Keep asyncio.run here for standalone execution
+    asyncio.run(checker())
 
-
-# Note: Typer doesn't automatically run async functions defined with @app.command()
-# unless you structure the main entry point differently (e.g., using typer.run(main_async)).
-# For simplicity here, we keep asyncio.run within the command functions,
-# acknowledging it creates nested loops if called from another async context,
-# but ensures direct CLI execution works as intended.
-# A more advanced setup might involve a single async entry point.
 
 @app.command(name="list-anomalies")
-def list_anomalies_cmd( # Keep sync def for direct Typer invocation
+def list_anomalies_cmd(
     limit: int = typer.Option(20, "--limit", "-l", help="Maximum number of anomalies to list.", min=1, max=100),
 ):
-    """
-    List the most recent detected anomalies stored in the database.
-    """
-    setup_logging() # Configure logging
+    """List the most recent detected anomalies stored in the database."""
+    setup_logging()
 
     async def fetcher():
         mongo_client, db = await _get_db()
         if not db:
-            return # Error already printed
+            return
 
         rprint(f"\n[bold cyan]Fetching last {limit} anomalies...[/bold cyan]")
         try:
@@ -137,7 +122,6 @@ def list_anomalies_cmd( # Keep sync def for direct Typer invocation
 
             for raw_anomaly in anomalies_raw:
                 try:
-                    # Basic validation/formatting for display
                     ts = raw_anomaly.get("timestamp", "N/A")
                     if isinstance(ts, datetime.datetime):
                         ts_str = ts.isoformat(sep=" ", timespec="milliseconds")
@@ -171,7 +155,7 @@ def list_anomalies_cmd( # Keep sync def for direct Typer invocation
             if mongo_client:
                 mongo_client.close()
 
-    asyncio.run(fetcher()) # Keep asyncio.run here
+    asyncio.run(fetcher())
 
 @app.command(name="validate-queries")
 def validate_queries_cmd(
@@ -184,7 +168,7 @@ def validate_queries_cmd(
     This command tests each query against Prometheus and reports the results.
     If retry_failed is enabled, it will attempt simpler versions of failing queries.
     """
-    setup_logging()  # Configure logging
+    setup_logging()
 
     async def validator():
         # Check Prometheus connection first

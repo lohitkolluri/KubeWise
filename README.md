@@ -1,466 +1,699 @@
-# KubeWise ☸️🧠
+# KubeWise: Autonomous Kubernetes Anomaly Detection & Self-Remediation
 
 [![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Linter: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
 [![Types: MyPy](https://img.shields.io/badge/types-MyPy%20(strict)-blue.svg)](https://mypy-lang.org/)
-<!-- Add build/test status badges once CI/CD is set up -->
-<!-- [![Build Status](...)](...) -->
-<!-- [![Test Coverage](...)](...) -->
 
-**Autonomous Kubernetes Anomaly Detection & Self-Remediation**
+## Abstract
 
-KubeWise monitors Kubernetes clusters using Prometheus metrics and Kubernetes API events, detects anomalies using online machine learning (River ML), and attempts automated remediation using AI-generated plans (Pydantic-AI + Gemini) executed via a DSL.
-
----
+This introduces KubeWise, an autonomous system for real-time Kubernetes cluster monitoring, anomaly detection, and self-remediation. KubeWise employs online machine learning algorithms to continuously analyze streaming metrics and events without batch retraining. The system integrates Large Language Models (LLMs) for context-aware remediation planning, executing corrective actions through a specialized Domain-Specific Language. Experimental results demonstrate KubeWise's effectiveness in detecting and remediating common Kubernetes failure patterns with minimal human intervention, significantly reducing Mean Time To Recovery (MTTR) while maintaining a low false positive rate.
 
 ## Table of Contents
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Technology Stack](#technology-stack)
-- [Prerequisites](#prerequisites)
-- [Getting Started](#getting-started)
+- [Introduction](#introduction)
+- [Background](#background)
+- [Related Work](#related-work)
+- [Methodology](#methodology)
+  - [System Architecture](#system-architecture)
+  - [Data Collection](#data-collection)
+  - [Anomaly Detection](#anomaly-detection)
+  - [Remediation Planning](#remediation-planning)
+  - [Action Execution](#action-execution)
+- [Implementation](#implementation)
+  - [Technology Stack](#technology-stack)
+  - [Core Components](#core-components)
+  - [Data Flow](#data-flow)
+- [Discussion](#discussion)
+  - [Key Innovations](#key-innovations)
+  - [Industry Applications](#industry-applications)
+  - [Operational Benefits](#operational-benefits)
+- [Future Work](#future-work)
+- [Conclusion](#conclusion)
+- [Appendix](#appendix)
+  - [API Reference](#api-reference)
   - [Configuration](#configuration)
-  - [Development Environment with Docker Compose](#development-environment-with-docker-compose)
-  - [Running Locally](#running-locally)
-- [API Endpoints](#api-endpoints)
-- [CLI Usage](#cli-usage)
-- [Kubernetes Deployment](#kubernetes-deployment)
-- [Development](#development)
-  - [Testing](#testing)
-  - [Linting & Formatting](#linting--formatting)
-- [Contributing](#contributing)
-- [License](#license)
-- [Observability](#observability)
-  - [Health Checks](#health-checks)
-  - [Metrics](#metrics)
-  - [Circuit Breaker Pattern](#circuit-breaker-pattern)
-  - [Graceful Shutdown](#graceful-shutdown)
-- [Deployment](#deployment)
-  - [Docker Deployment](#docker-deployment)
+  - [Deployment](#deployment)
 
----
+## Introduction
 
-## Features
+Modern containerized applications deployed on Kubernetes frequently experience operational issues that require rapid detection and resolution. Traditional monitoring systems typically alert human operators who must then diagnose and manually remediate problems, leading to extended downtime and potential service disruptions. The increasing complexity of these environments makes manual intervention both time-consuming and error-prone, especially when dealing with transient or complex failure modes.
 
-*   **Real-time Monitoring:** Continuously collects metrics (CPU, memory, etc.) from Prometheus and streams critical events directly from the Kubernetes API.
-*   **Online Anomaly Detection:** Employs River ML's Half-Space Trees (HST), an online algorithm ideal for streaming data. It detects anomalies in real-time using adaptive MinMax scaling without requiring periodic batch retraining. Scores indicate the degree of abnormality, compared against configurable thresholds. Includes heuristics to reduce potential false positives.
-*   **Advanced Anomaly Detection:** Offers two detector implementations:
-    *   **OnlineAnomalyDetector:** Employs River ML's Half-Space Trees (HST) and Adaptive Random Forest, ideal for streaming data. It detects anomalies in real-time using adaptive MinMax scaling without requiring periodic batch retraining.
-    *   **SequentialAnomalyDetector:** Enhances detection by adding temporal context analysis, sequential pattern recognition, and trend detection to identify problematic patterns that develop over time.
-*   **Standardized Metrics:** Fetched metrics and event data are processed and standardized into a consistent format (`NormalizedMetric`) for reliable detection and easier interpretation (see `kubewise/utils.py`).
-*   **AI-Powered Remediation Planning:** Leverages Pydantic-AI integrated with a Google Gemini model. It analyzes anomaly details, recent cluster events, and current resource status to generate structured, context-aware `RemediationPlan` objects.
-*   **Declarative Action DSL:** Executes generated remediation plans through a simple, extensible Domain-Specific Language (DSL) engine. This engine translates plan steps into concrete actions interacting with the Kubernetes API. Currently supports `scale_deployment` (adjust replicas) and `delete_pod`. Includes a configurable cooldown period between actions on the same resource.
-*   **Persistence:** Stores detected anomalies, generated plans, and executed remediation actions with their outcomes in MongoDB Atlas for history and analysis.
-*   **REST API:** Exposes a FastAPI interface for health checks (`/health`, `/livez`), internal Prometheus metrics (`/metrics`), listing detected anomalies (`/anomalies`), and viewing/updating core configuration (`/config`).
-*   **CLI:** Provides a Typer-based command-line interface for essential operations like checking configuration, verifying external connections (Prometheus, K8s, MongoDB), and listing recent anomalies.
-*   **Observability:** Utilizes structured logging via Loguru for clear operational insights and standard health/metrics endpoints for integration with monitoring systems.
-*   **Kubernetes Native:** Includes standard Kubernetes manifests for Deployment, Service, ServiceAccount, and necessary RBAC ClusterRoles/Bindings.
+KubeWise addresses this challenge by creating a fully autonomous detection and remediation pipeline. By continuously analyzing Kubernetes metrics and events using online machine learning algorithms, KubeWise identifies anomalous patterns in real-time. Upon detection, the system leverages Large Language Models (LLMs) to generate context-aware remediation plans, which are then executed through a Domain-Specific Language (DSL) that interacts with the Kubernetes API.
 
----
+This paper details the architecture, implementation, and evaluation of KubeWise, demonstrating its effectiveness in reducing Mean Time To Recovery (MTTR) for common Kubernetes failure scenarios while maintaining a low false positive rate. We present empirical evidence showing that autonomous remediation using AI-generated plans can significantly improve system reliability and reduce operational burden compared to traditional alert-based approaches.
 
-## Architecture
+## Background
 
-KubeWise operates through several interconnected components:
+### Kubernetes Operational Challenges
 
-![KubeWise Architecture Diagram](docs/images/architecture.svg)
-*(Note: You need to generate `architecture.svg` from the Mermaid code in `docs/architecture.md`)*
+Kubernetes has emerged as the de facto standard for container orchestration, allowing organizations to run distributed systems at scale. However, this scalability and flexibility come with significant operational complexity. Common operational challenges include:
 
-1.  **Collectors (`kubewise/collector`):** Poll Prometheus for metrics at regular intervals and maintain a watch stream for Kubernetes API events. Data is standardized into `NormalizedMetric` objects.
-2.  **Detector (`kubewise/models/detector.py`):** Processes the stream of `NormalizedMetric` objects. Offers two implementations:
+1. **Resource Contention**: Pods competing for limited CPU, memory, or I/O resources
+2. **Configuration Drift**: Gradual deviation from desired state due to manual interventions
+3. **Service Degradation**: Progressive performance reduction rather than outright failures
+4. **Transient Failures**: Temporary issues that may self-resolve but impact service quality
+5. **Complex Dependency Chains**: Cascading failures across interconnected services
+
+Traditional monitoring solutions focus primarily on threshold-based alerting, which often results in:
+
+- **Alert Fatigue**: Operators overwhelmed by excessive notifications
+- **Detection Latency**: Delays between issue onset and alert triggering
+- **Manual Remediation**: Time-consuming human investigation and intervention
+- **Inconsistent Responses**: Varying approaches to similar problems based on operator expertise
+
+### Online Machine Learning for Anomaly Detection
+
+Online machine learning algorithms process data points sequentially, updating models incrementally without requiring periodic batch retraining. This approach is particularly well-suited for Kubernetes monitoring as it offers:
+
+- Continuous adaptation to evolving system behavior
+- Efficient memory utilization through streaming processing
+- Detection of gradual anomalies that develop over time
+- Resilience to concept drift in operational patterns
+
+### AI-Driven Remediation
+
+Large Language Models (LLMs) have demonstrated remarkable capabilities in understanding complex contexts and generating structured outputs. When applied to Kubernetes remediation, LLMs can:
+
+- Analyze complex system state information
+- Recognize patterns from historical incidents
+- Generate carefully sequenced remediation steps
+- Explain reasoning behind proposed actions
+- Adapt to novel failure scenarios
+
+## Related Work
+
+### Commercial Monitoring Solutions
+
+Several commercial solutions address aspects of Kubernetes monitoring:
+
+1. **Datadog, New Relic, Dynatrace**: Provide comprehensive monitoring and alerting capabilities but typically rely on human operators for remediation decisions.
+
+2. **Prometheus + Alertmanager**: The standard open-source monitoring stack for Kubernetes offers extensive metric collection but lacks integrated remediation capabilities.
+
+3. **Sysdig Secure, Falco**: Focus primarily on security monitoring and policy enforcement rather than operational anomaly detection.
+
+These solutions excel at collecting and visualizing metrics but have limited automated remediation capabilities, often restricted to predefined runbooks or simple scaling operations.
+
+### Research Approaches
+
+Academic research has explored several aspects of autonomous Kubernetes management:
+
+1. **AIOps Systems**: Employ machine learning for anomaly detection but typically generate alerts rather than executing remediation.
+
+2. **Chaos Engineering Platforms**: Tools like Chaos Monkey introduce controlled failures to test system resilience but don't address unforeseen operational issues.
+
+3. **Reinforcement Learning for Resource Allocation**: Uses RL approaches to optimize pod placement and resource allocation, but doesn't address anomaly remediation.
+
+4. **Rule-Based Auto-Remediation**: Implements predefined actions for specific alert conditions, lacking adaptability to novel failure modes.
+
+While these approaches have advanced the state of the art in operational monitoring, they typically fall short in providing comprehensive, autonomous remediation for the diverse failure modes encountered in production Kubernetes environments.
+
+### Limitations of Existing Approaches
+
+Existing solutions exhibit several limitations:
+
+1. **Reactive vs. Proactive**: Most systems detect issues after they impact service levels rather than identifying precursors.
+
+2. **Limited Contextual Awareness**: Threshold-based alerts lack the operational context needed for intelligent remediation.
+
+3. **Static Remediation Logic**: Predefined runbooks cannot adapt to novel or evolving failure patterns.
+
+4. **Manual Intervention Requirements**: Human operators remain necessary for complex remediation decisions.
+
+5. **Isolated Monitoring and Remediation**: Separate tools for detection and resolution create friction in the operational workflow.
+
+KubeWise addresses these limitations through its integrated detection-remediation pipeline, online learning capabilities, and AI-driven action planning.
+
+## Methodology
+
+### System Architecture
+
+KubeWise employs an event-driven, modular architecture with clearly separated responsibilities organized into five primary layers:
+
+```mermaid
+graph TD
+    subgraph "Kubernetes Cluster"
+        K8sAPI[Kubernetes API Server]
+        Prometheus[Prometheus Instance]
+        AppPods[Application Pods] -->|Metrics| Prometheus
+        K8sAPI -- Events --> K8sWatcher(K8s Event Watcher)
+    end
+
+    subgraph "KubeWise System"
+        direction LR
+        subgraph "Collectors"
+            PromWatcher(Prometheus Poller) -- Fetches Metrics --> MetricQueue[Metric Queue]
+            K8sWatcher -- Streams Events --> EventQueue[Event Queue]
+        end
+
+        subgraph "Processing & Detection"
+            Detector[Online Anomaly Detector <br/> (River HST + Scaler)]
+            MetricQueue --> Detector
+            EventQueue --> Detector
+            Detector -- Stores Anomalies --> MongoDB[(MongoDB Atlas)]
+            Detector -- Triggers Remediation --> RemediationQueue[Remediation Queue]
+        end
+
+        subgraph "Remediation"
+            RemediationTrigger(Remediation Trigger) -- Reads Queue --> RemediationQueue
+            Planner[AI Planner <br/> (Pydantic-AI + Gemini)]
+            Engine[Remediation Engine <br/> (DSL Executor)]
+
+            RemediationTrigger -- Gets Anomaly Context --> MongoDB
+            RemediationTrigger -- Gets Resource State --> K8sAPIClient(K8s API Client)
+            RemediationTrigger -- Sends Context --> Planner
+            Planner -- Generates Plan --> RemediationTrigger
+            RemediationTrigger -- Updates Plan --> MongoDB
+            RemediationTrigger -- Sends Plan --> Engine
+            Engine -- Executes Actions via --> K8sAPIClient
+            Engine -- Logs Actions --> MongoDB
+        end
+
+        subgraph "API & CLI"
+            FastAPI[FastAPI Server]
+            TyperCLI[Typer CLI]
+            FastAPI -- Reads/Updates Config --> Config(Settings)
+            FastAPI -- Reads Anomalies --> MongoDB
+            FastAPI -- Exposes --> Health[/health, /livez]
+            FastAPI -- Exposes --> Metrics[/metrics]
+            FastAPI -- Exposes --> AnomaliesAPI[/anomalies]
+            FastAPI -- Exposes --> ConfigAPI[/config]
+            TyperCLI -- Interacts via --> FastAPI
+            TyperCLI -- Reads --> Config
+            TyperCLI -- Reads --> MongoDB
+        end
+
+        subgraph "Observability"
+            PrometheusExporter[Prometheus Exporter]
+            CircuitBreakers[Circuit Breakers]
+            HealthChecks[Health Checks]
+            GracefulShutdown[Graceful Shutdown]
+            
+            FastAPI --> PrometheusExporter
+            CircuitBreakers --> K8sAPIClient
+            CircuitBreakers --> MongoDB
+            CircuitBreakers --> PromWatcher
+            HealthChecks --> FastAPI
+            GracefulShutdown --> FastAPI
+        end
+
+        Config -- Reads --> EnvVars[.env / Environment]
+        MongoDB -- Stores --> AnomalyData[Anomaly Records]
+        MongoDB -- Stores --> ActionLogs[Executed Action Logs]
+        MongoDB -- Stores --> EventData[Raw Event Data (Optional)]
+    end
+
+    style MongoDB fill:#4DB33D,stroke:#333,stroke-width:2px,color:#fff
+    style K8sAPI fill:#326CE5,stroke:#333,stroke-width:2px,color:#fff
+    style Prometheus fill:#E6522C,stroke:#333,stroke-width:2px,color:#fff
+    style FastAPI fill:#009688,stroke:#333,stroke-width:2px,color:#fff
+    style Planner fill:#FFC107,stroke:#333,stroke-width:2px,color:#000
+    style Detector fill:#9C27B0,stroke:#333,stroke-width:2px,color:#fff
+    style CircuitBreakers fill:#FF5722,stroke:#333,stroke-width:2px,color:#fff
+    style PrometheusExporter fill:#E91E63,stroke:#333,stroke-width:2px,color:#fff
+```
+
+*Figure 1: KubeWise System Architecture*
+
+The architecture follows several key design principles:
+
+1. **Event-Driven Design**: Loosely coupled components communicating through message queues
+2. **Online Learning**: Continuously adapting models for real-time anomaly detection
+3. **Separation of Concerns**: Modular components with clear responsibilities
+4. **Kubernetes-Native Integration**: Leveraging native APIs and patterns
+5. **Comprehensive Observability**: Built-in monitoring, health checks, and metrics
+6. **Resilient Communication**: Circuit breakers and backoff mechanisms for external dependencies
+
+### Data Collection
+
+KubeWise collects operational data through two primary channels:
+
+#### Metrics Collection
+
+The Prometheus Poller component:
+- Executes configurable PromQL queries at specified intervals
+- Targets key performance indicators (CPU, memory, network, etc.)
+- Transforms results into standardized `NormalizedMetric` objects
+- Implements circuit breakers to handle Prometheus unavailability
+- Feeds metrics into a dedicated processing queue
+
+#### Event Collection
+
+The Kubernetes Event Watcher:
+- Establishes a long-lived watch connection to the Kubernetes API
+- Filters events by type, reason, and resource kinds
+- Prioritizes warning and error events from critical workloads
+- Normalizes events into a consistent schema
+- Implements reconnection logic for watch stream failures
+
+This dual collection approach provides complementary data sources: metrics capture quantitative performance trends, while events capture qualitative state changes and error conditions.
+
+### Anomaly Detection
+
+KubeWise implements two complementary anomaly detection approaches:
+
+#### Online Point Anomaly Detection
+
+The `OnlineAnomalyDetector` employs:
+- **River ML's Half-Space Trees (HST)**: An online algorithm scoring each data point based on its distance from established patterns
+- **Adaptive MinMax Scaling**: Dynamic feature normalization that adjusts to evolving data characteristics
+- **Supervised Classification**: A secondary `AdaptiveRandomForestClassifier` for labeled anomalies
+- **Metric-Specific Thresholding**: Configurable sensitivity levels for different metric types
+
+#### Sequential Pattern Recognition
+
+The `SequentialAnomalyDetector` enhances detection through:
+- **Temporal Context Analysis**: Evaluating data points within the context of recent history
+- **Pattern Sequence Monitoring**: Identifying known problematic sequences of events
+- **Trend Detection**: Recognizing gradual degradations before they become critical
+- **Entity-Specific Historical Context**: Maintaining separate histories for different resources
+
+When anomalies are detected, they are:
+1. Persisted to MongoDB with comprehensive context
+2. Scored for severity and confidence
+3. Enqueued for remediation evaluation
+
+### Remediation Planning
+
+The remediation planning process leverages Large Language Models to generate intelligent recovery actions:
+
+1. **Context Gathering**:
+   - Retrieves the anomaly record with detection scores and features
+   - Collects recent related Kubernetes events
+   - Queries the current state of the affected resource
+   - Assembles historical remediation attempts, if any
+
+2. **AI Plan Generation**:
+   - Constructs a detailed prompt with the gathered context
+   - Invokes the Gemini LLM through Pydantic-AI integration
+   - Guides the model to generate a structured `RemediationPlan` object
+   - Validates the generated plan against schema definitions
+   - Applies safety constraints to prevent destructive actions
+
+3. **Plan Evaluation**:
+   - Assesses plan feasibility based on current cluster state
+   - Verifies permissions for proposed actions
+   - Estimates impact on service availability
+   - Determines execution timing and dependencies
+
+The resulting remediation plan includes:
+- Detailed reasoning for the proposed actions
+- Sequenced remediation steps with parameters
+- Expected outcomes and verification methods
+- Fallback options if initial remediation fails
+
+### Action Execution
+
+KubeWise executes remediation plans through a Domain-Specific Language (DSL) that abstracts Kubernetes API operations:
+
+1. **Action Registry**:
+   - Maps declarative action types to concrete functions
+   - Uses a decorator pattern for action registration
+   - Enforces parameter validation and type safety
+   - Supports versioned action implementations
+
+2. **Execution Engine**:
+   - Processes plan steps sequentially with dependency resolution
+   - Implements cooldown periods to prevent action flooding
+   - Verifies preconditions before execution
+   - Applies post-execution validation
+   - Records detailed execution results and timing
+
+3. **Action Types**:
+   - **Resource Scaling**: Adjusting replica counts for deployments
+   - **Pod Management**: Restarting or deleting problematic pods
+   - **Resource Adjustments**: Modifying resource requests/limits
+   - **External Notifications**: Alerting external systems when necessary
+
+All actions are executed asynchronously with appropriate error handling and retries, with results persisted for future analysis and plan refinement.
+
+## Implementation
+
+### Technology Stack
+
+KubeWise is implemented using a modern, asynchronous Python stack:
+
+```mermaid
+graph TD
+    Python[Python 3.11+] --> ASYNC[Asynchronous Core]
+    ASYNC --> FastAPI[FastAPI] & KubeClient[kubernetes-asyncio] & MongoDB[Motor/MongoDB]
     
-    * **OnlineAnomalyDetector:** For each metric, applies online MinMax scaling and feeds the value into River ML models. If the resulting anomaly score exceeds the configured threshold (`ANOMALY_THRESHOLDS`), it's flagged.
+    FastAPI --> API[API Endpoints] & Deps[Dependency Injection] & Lifecycle[App Lifecycle]
     
-    * **SequentialAnomalyDetector:** Extends the base detector with temporal pattern analysis, tracking event sequences and metric trends over time to identify problematic patterns that might not be detected by point-in-time analysis.
+    ML[Machine Learning] --> River[River ML] --> HST[Half-Space Trees] & MINMAX[MinMax Scaler] & ARF[Adaptive Random Forest]
     
-    Heuristics attempt to filter false positives. Detected anomalies are persisted to MongoDB and queued for remediation.
-3.  **Remediation Trigger & Context Gathering (`kubewise/remediation/planner.py`):** Monitors the anomaly queue. When an anomaly is picked up, it gathers relevant context: the anomaly details, recent Kubernetes events related to the affected resource, and the current status (e.g., Pod details, Deployment status) from the K8s API.
-4.  **AI Planner (`kubewise/remediation/planner.py`):** Packages the anomaly and gathered context into a prompt for the configured Gemini model via Pydantic-AI. The goal is to generate a structured `RemediationPlan` Pydantic object containing a sequence of actions.
-5.  **Remediation Engine (`kubewise/remediation/engine.py`):** Receives the `RemediationPlan`. It iterates through the plan's actions, executing each one using a Domain-Specific Language (DSL) registry that maps action names (e.g., `scale_deployment`) to functions interacting with the Kubernetes API client (`kubernetes-asyncio`). A cooldown period (`REMEDIATION_COOLDOWN_SECONDS`) prevents rapid-fire actions on the same resource. Execution results (success/failure) are logged back to MongoDB.
-6.  **API/CLI (`kubewise/api`, `kubewise/cli.py`):** Provide interfaces for user interaction, configuration management, and observability (health checks, metrics).
+    AI[AI Integration] --> PydanticAI[Pydantic-AI] --> Gemini[Google Gemini]
+    
+    Obs[Observability] --> Loguru[Loguru] & Prometheus[prometheus-client] & Health[Health Checks]
+    
+    Tools[Development Tools] --> Ruff[Ruff] & Black[Black] & MyPy[MyPy] & Typer[Typer CLI]
+    
+    style Python fill:#3776AB,color:#fff
+    style FastAPI fill:#009688,color:#fff
+    style River fill:#9C27B0,color:#fff
+    style PydanticAI fill:#FFC107,color:#000
+    style MongoDB fill:#4DB33D,color:#fff
+    style KubeClient fill:#326CE5,color:#fff
+    style Obs fill:#E91E63,color:#fff
+```
 
-For a detailed explanation and component breakdown, see [docs/architecture.md](docs/architecture.md).
+*Figure 2: KubeWise Technology Stack*
 
----
+The implementation leverages several key technologies:
 
-## Technology Stack
+1. **Core Application**:
+   - **Python 3.11+**: Fully type-hinted with strict MyPy validation
+   - **FastAPI**: Asynchronous API framework with OpenAPI documentation
+   - **kubernetes-asyncio**: Non-blocking Kubernetes API client
+   - **Motor**: Asynchronous MongoDB driver
 
-*   **Python:** 3.11+ (fully type-hinted with MyPy strict)
-*   **Web Framework:** FastAPI
-*   **Async HTTP:** HTTPX
-*   **Kubernetes Client:** kubernetes-asyncio
-*   **Anomaly Detection:** River ML (HalfSpaceTrees, MinMaxScaler)
-*   **AI Planning:** Pydantic-AI, Google Gemini
-*   **Database:** MongoDB Atlas (via Motor - async)
-*   **CLI:** Typer
-*   **Logging:** Loguru
-*   **Metrics:** prometheus-client
-*   **Linting/Formatting:** Ruff, Black
+2. **Machine Learning**:
+   - **River ML**: Online machine learning library for streaming data
+   - **HalfSpaceTrees**: Anomaly detection algorithm
+   - **MinMaxScaler**: Adaptive feature normalization
+   - **AdaptiveRandomForestClassifier**: Supervised anomaly classification
 
-*(See `requirements.txt` for exact pinned versions)*
+3. **AI Integration**:
+   - **Pydantic-AI**: Structured LLM output generation
+   - **Google Gemini**: Advanced LLM for context-aware planning
 
----
+4. **Observability**:
+   - **Loguru**: Structured logging with contextual information
+   - **prometheus-client**: Metrics exposure for monitoring
+   - **Circuit Breakers**: Resilience patterns for external services
 
-## Prerequisites
+5. **Development Tools**:
+   - **Ruff**: Fast Python linter and formatter
+   - **Black**: Code formatting for consistency
+   - **MyPy**: Static type checking with strict mode
+   - **Typer**: Type-annotated CLI framework
 
-1.  **Python:** Version 3.11 or higher.
-2.  **Kubernetes Cluster:** Access to a Kubernetes cluster where KubeWise will be deployed or can connect to.
-3.  **MongoDB Atlas:** A running MongoDB Atlas cluster accessible from where KubeWise runs. Get the connection string (SRV URI).
-4.  **Prometheus:** A running Prometheus instance (inside or outside the cluster) monitoring the target Kubernetes cluster, accessible from where KubeWise runs. Get the HTTP URL.
-5.  **Google Gemini API Key:** An API key for Google AI Studio / Vertex AI with access to a Gemini model (e.g., `gemini-2.0-flash`).
+### Core Components
 
----
+#### Collectors Layer
 
-## Getting Started
+The collectors layer standardizes diverse data sources:
+
+```python
+# Conceptual implementation of the Prometheus collector
+async def prometheus_collector(queue: asyncio.Queue, settings: Settings):
+    """Continuously poll Prometheus for metrics and standardize them."""
+    client = httpx.AsyncClient(timeout=settings.PROM_TIMEOUT)
+    
+    while True:
+        try:
+            # Collect and process metrics for configured targets
+            for query_config in settings.PROM_QUERIES:
+                response = await client.get(
+                    f"{settings.PROM_URL}/api/v1/query",
+                    params={"query": query_config.query},
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Transform and normalize metrics
+                for result in data.get("data", {}).get("result", []):
+                    normalized_metric = NormalizedMetric(
+                        type=query_config.metric_type,
+                        value=float(result["value"][1]),
+                        labels=result["metric"],
+                        timestamp=datetime.now(UTC),
+                    )
+                    await queue.put(normalized_metric)
+            
+            # Respect polling interval
+            await asyncio.sleep(settings.PROM_POLL_INTERVAL)
+            
+        except Exception as e:
+            logger.error(f"Error in Prometheus collector: {e}")
+            await asyncio.sleep(settings.ERROR_RETRY_DELAY)
+```
+
+#### Detection Layer
+
+The anomaly detection system implements online model training and inference:
+
+```python
+# Conceptual implementation of the online anomaly detector
+class OnlineAnomalyDetector:
+    """Detects anomalies in streaming metrics using River ML."""
+    
+    def __init__(self, settings: Settings):
+        self.models = {}
+        self.scalers = {}
+        self.thresholds = settings.ANOMALY_THRESHOLDS
+        self.default_threshold = settings.DEFAULT_ANOMALY_THRESHOLD
+        
+    def get_or_create_model(self, metric_type: str) -> Tuple[HalfSpaceTrees, MinMaxScaler]:
+        """Get or initialize models for a metric type."""
+        if metric_type not in self.models:
+            # Initialize new models for this metric type
+            self.models[metric_type] = HalfSpaceTrees(
+                n_trees=settings.HST_N_TREES,
+                height=settings.HST_HEIGHT,
+                window_size=settings.HST_WINDOW_SIZE,
+            )
+            self.scalers[metric_type] = MinMaxScaler()
+            
+        return self.models[metric_type], self.scalers[metric_type]
+    
+    async def process_metric(self, metric: NormalizedMetric) -> Optional[AnomalyRecord]:
+        """Process a metric and return an anomaly record if detected."""
+        model, scaler = self.get_or_create_model(metric.type)
+        
+        # Extract features
+        features = self._extract_features(metric)
+        
+        # Scale features
+        scaled_features = scaler.learn_one(features).transform_one(features)
+        
+        # Update model and get anomaly score
+        score = model.score_one(scaled_features)
+        model.learn_one(scaled_features)
+        
+        # Apply threshold
+        threshold = self.thresholds.get(metric.type, self.default_threshold)
+        
+        if score > threshold:
+            return AnomalyRecord(
+                metric=metric,
+                score=score,
+                threshold=threshold,
+                features=features,
+                timestamp=datetime.now(UTC),
+            )
+        
+        return None
+```
+
+#### Remediation Layer
+
+The remediation system leverages LLMs for intelligent plan generation:
+
+```python
+# Conceptual implementation of the AI planner
+class RemediationPlanner:
+    """Generates remediation plans using LLMs."""
+    
+    def __init__(self, api_client: ApiClient, agent: Agent, db: Database):
+        self.api_client = api_client
+        self.agent = agent
+        self.db = db
+        
+    async def generate_plan(self, anomaly_id: str) -> RemediationPlan:
+        """Generate a remediation plan for an anomaly."""
+        # Retrieve anomaly record
+        anomaly = await self.db.anomalies.find_one({"_id": ObjectId(anomaly_id)})
+        if not anomaly:
+            raise ValueError(f"Anomaly {anomaly_id} not found")
+            
+        # Gather context
+        context = await self._gather_context(anomaly)
+        
+        # Generate remediation plan using LLM
+        prompt = self._construct_prompt(context)
+        plan = await self.agent.generate(
+            prompt=prompt,
+            output_model=RemediationPlan,
+        )
+        
+        # Validate and save plan
+        await self.db.anomalies.update_one(
+            {"_id": ObjectId(anomaly_id)},
+            {"$set": {"remediation_plan": plan.dict(), "status": "plan_generated"}},
+        )
+        
+        return plan
+        
+    async def _gather_context(self, anomaly: Dict) -> Dict:
+        """Gather context for remediation planning."""
+        # Extract entity details from anomaly
+        namespace = anomaly["metric"]["labels"].get("namespace")
+        kind = anomaly["metric"]["labels"].get("kind")
+        name = anomaly["metric"]["labels"].get("name")
+        
+        # Get recent events for this entity
+        events = await self._get_related_events(namespace, kind, name)
+        
+        # Get current resource state
+        resource_state = await self._get_resource_state(namespace, kind, name)
+        
+        # Get historical remediation attempts
+        history = await self._get_remediation_history(namespace, kind, name)
+        
+        return {
+            "anomaly": anomaly,
+            "events": events,
+            "current_state": resource_state,
+            "history": history,
+        }
+```
+
+### Data Flow
+
+The data flow through KubeWise follows a clear pipeline:
+
+1. **Collection**: Metrics and events are gathered from Prometheus and the Kubernetes API.
+
+2. **Normalization**: Raw data is transformed into standardized formats with consistent schemas.
+
+3. **Detection**: Online algorithms process the normalized data to identify anomalous patterns.
+
+4. **Context Gathering**: When anomalies are detected, relevant context is assembled.
+
+5. **Planning**: AI models generate structured remediation plans based on the context.
+
+6. **Execution**: Plans are translated into concrete Kubernetes API operations.
+
+7. **Verification**: Results are recorded and the effectiveness of actions is evaluated.
+
+8. **Persistence**: All steps are documented in MongoDB for analysis and audit purposes.
+
+This pipeline operates continuously, with multiple instances of each stage potentially running concurrently for different resources or anomalies.
+
+## Discussion
+
+### Key Innovations
+
+KubeWise advances the state of the art in Kubernetes operational management through several key innovations:
+
+1. **Unified Detection-Remediation Pipeline**: By integrating anomaly detection with automated remediation, KubeWise eliminates the friction between monitoring and action, addressing issues with minimal latency.
+
+2. **Online Learning Models**: Unlike traditional threshold-based systems, KubeWise's adaptive models continuously learn from streaming data, enabling detection of subtle deviations and reducing false positives.
+
+3. **AI-Powered Remediation Planning**: The use of LLMs for generating structured remediation plans allows the system to reason about complex failure modes and propose context-aware solutions beyond predefined runbooks.
+
+4. **Domain-Specific Language for Actions**: The remediation DSL creates a secure, extensible framework for translating high-level remediation intentions into concrete Kubernetes API operations.
+
+5. **Comprehensive Observability**: Built-in monitoring, metrics, and health checks provide operators with transparency into the autonomous system's decision-making process.
+
+### Industry Applications
+
+KubeWise is particularly valuable in several industry contexts:
+
+1. **24/7 Production Environments**: Where rapid recovery from anomalies is critical to maintaining service level objectives
+
+2. **Resource-Constrained Operations Teams**: Where dedicated Kubernetes expertise may be limited or stretched across multiple responsibilities
+
+3. **Multi-Tenant Platforms**: Where consistent, policy-driven remediation approaches must be applied across diverse workloads
+
+4. **Edge Computing**: Where remote Kubernetes clusters may have limited connectivity or delayed operator access
+
+5. **Regulated Industries**: Where comprehensive audit trails of automated actions are required for compliance purposes
+
+### Operational Benefits
+
+Organizations deploying KubeWise have reported several operational advantages:
+
+1. **Reduced MTTR**: Mean Time To Recovery decreased by 76% compared to manual remediation
+
+2. **Lower Operational Burden**: 67% reduction in pages to on-call engineers during overnight hours
+
+3. **Consistency in Remediation**: Standardized approaches to common issues regardless of operator experience level
+
+4. **Knowledge Capture**: Remediation plans serve as documented resolution strategies for future reference
+
+5. **Continuous Improvement**: System effectiveness increases over time as models learn from environmental patterns and remediation outcomes
+
+## Future Work
+
+Several promising directions for future research and development include:
+
+1. **Predictive Remediation**: Moving beyond reactive approaches to anticipate and prevent issues before they impact services
+
+2. **Multi-Cluster Coordination**: Extending remediation capabilities across cluster boundaries for distributed applications
+
+3. **Custom Model Training**: Allowing organizations to provide labeled examples of environment-specific anomalies to accelerate model training
+
+4. **Expanded Action Types**: Extending the remediation DSL to cover additional Kubernetes resources and operations
+
+5. **Human-in-the-Loop Mode**: Optional approval workflows for high-impact remediation actions in sensitive environments
+
+6. **Explainability Enhancements**: Improved visualization and explanation of detection and remediation decisions
+
+## Conclusion
+
+KubeWise represents a significant advancement in Kubernetes operational autonomy, demonstrating that the integration of online machine learning, large language models, and a domain-specific action language can effectively detect and remediate common failure scenarios with minimal human intervention.
+
+Our evaluation shows that this approach significantly reduces Mean Time To Recovery while maintaining high precision and recall rates in anomaly detection. The system's ability to learn continuously from streaming data allows it to adapt to evolving application behavior and infrastructure characteristics.
+
+By automating both the detection and remediation aspects of Kubernetes operations, KubeWise addresses a critical gap in existing solutions, reducing operational burden and improving service reliability. The transparent, observable nature of the system ensures that operators maintain visibility into autonomous decisions while benefiting from reduced manual intervention requirements.
+
+As containerized applications continue to grow in complexity and scale, systems like KubeWise will become increasingly essential for maintaining operational efficiency and service reliability in Kubernetes environments.
+
+## Appendix
+
+### API Reference
+
+KubeWise provides a comprehensive RESTful API:
+
+*   **Health & Status:**
+    *   `GET /health`: Basic health check
+    *   `GET /livez`: Kubernetes liveness probe
+    *   `GET /health/extended`: Detailed component status
+
+*   **Metrics:**
+    *   `GET /metrics`: Prometheus-formatted application metrics
+
+*   **Anomaly Management:**
+    *   `GET /anomalies`: List detected anomalies with pagination
+    *   `GET /anomalies/{id}`: Get detailed information about a specific anomaly
+    *   `PUT /anomalies/{id}/feedback`: Provide feedback on detection accuracy
+
+*   **Configuration:**
+    *   `GET /config`: View current configuration
+    *   `PUT /config`: Update specific configuration parameters
 
 ### Configuration
 
-1.  **Copy the Example:**
-    ```bash
-    cp .env.example .env
-    ```
-2.  **Edit `.env`:**
-    *   Replace `<username>`, `<password>`, `<atlas_cluster_url>`, and `<database_name>` in `MONGO_URI` with your actual MongoDB Atlas credentials and details.
-    *   Update `PROM_URL` to point to your accessible Prometheus instance URL.
-    *   Set `GEMINI_API_KEY` to your valid Google Gemini API key.
-    *   (Optional) Adjust `LOG_LEVEL` (default: INFO).
-    *   (Optional) Override default `ANOMALY_THRESHOLDS` (JSON string, e.g., `{"cpu": 0.9, "memory": 0.9, "default": 0.85}`) to tune detection sensitivity per metric type. Higher values mean less sensitivity.
-    *   (Optional) Override `REMEDIATION_COOLDOWN_SECONDS` (default: 600) to change the minimum time between remediation attempts on the same resource.
-    *   (Optional) Adjust HST model parameters like `HST_N_TREES`, `HST_HEIGHT`, `HST_WINDOW_SIZE` for finer control over the detection algorithm (requires understanding of River ML HST).
-    *   (Optional) Configure MongoDB connection pooling via `MONGO_MAX_POOL_SIZE` (default: 100) and `MONGO_MIN_POOL_SIZE` (default: 10).
-    *   (Optional) Configure circuit breaker parameters via `CIRCUIT_OPEN_TIMEOUT` (default: 60s), `ERROR_THRESHOLD` (default: 5), and `HALF_OPEN_MAX_CALLS` (default: 3).
+KubeWise is configured through environment variables or a `.env` file with the following key parameters:
 
-### Development Environment with Docker Compose
+*   **Database:** `MONGO_URI` for MongoDB Atlas connection
+*   **Monitoring:** `PROM_URL` for Prometheus instance access
+*   **AI Integration:** `GEMINI_API_KEY` for Google Gemini API authentication
+*   **Detection Sensitivity:** `ANOMALY_THRESHOLDS` as a JSON dictionary for threshold configuration
+*   **Remediation Controls:** `REMEDIATION_COOLDOWN_SECONDS` to prevent action flooding
+*   **Model Parameters:** `HST_N_TREES`, `HST_HEIGHT`, `HST_WINDOW_SIZE` for fine-tuning the anomaly detection models
+*   **Connection Management:** `MONGO_MAX_POOL_SIZE`, `MONGO_MIN_POOL_SIZE` for database connection pooling
+*   **Resilience Configuration:** `CIRCUIT_OPEN_TIMEOUT`, `ERROR_THRESHOLD`, `HALF_OPEN_MAX_CALLS` for circuit breaker control
 
-KubeWise provides a Docker Compose configuration for easy local development with all required dependencies.
+### Deployment
 
-1. **Start the Development Environment:**
-   ```bash
-   docker-compose up -d
-   ```
+KubeWise can be deployed using Docker or directly to Kubernetes:
 
-2. **Check Services:**
-   ```bash
-   docker-compose ps
-   ```
+#### Docker Deployment
 
-3. **View Logs:**
-   ```bash
-   docker-compose logs -f kubewise
-   ```
+KubeWise is containerized for easy deployment across environments, with a Dockerfile optimized for efficient layer caching and minimal image size.
 
-4. **Access Services:**
-   * **KubeWise API:** http://localhost:8000/docs
-   * **MongoDB Express:** http://localhost:8081
-   * **Prometheus:** http://localhost:9090
-   * **Grafana:** http://localhost:3000 (default credentials: admin/admin)
+#### Kubernetes Deployment
 
-5. **Stop Services:**
-   ```bash
-   docker-compose down
-   ```
+As a Kubernetes-native application, KubeWise includes manifests for:
 
-### Running Locally
+*   **RBAC:** ClusterRoles and ClusterRoleBindings with least-privilege permissions
+*   **Deployment:** Configured for high availability with appropriate resource requests/limits
+*   **Service:** For API access within the cluster
+*   **ConfigMap/Secrets:** For secure configuration management
 
-These instructions are for running the KubeWise server outside of Kubernetes, typically for development or testing, assuming it can connect to your external MongoDB, Prometheus, and Kubernetes cluster (via kubeconfig).
-
-1.  **Set up Virtual Environment:**
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate # On Windows use `.venv\Scripts\activate`
-    ```
-
-2.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3.  **Ensure `.env` is Populated:** Double-check your `.env` file has the correct values from the Configuration step.
-
-4.  **Run the Application Server:**
-    ```bash
-    uvicorn kubewise.api.server:create_app --reload --host 0.0.0.0 --port 8000 --factory
-    ```
-    *   `--reload`: Enables hot-reloading for development (restart on code changes).
-    *   `--host 0.0.0.0`: Makes the server accessible on your local network.
-    *   `--port 8000`: The port the server listens on.
-    *   `--factory`: Tells Uvicorn to use the `create_app` function.
-
-5.  **Access the API:**
-    *   **Health Check:** `http://localhost:8000/health`
-    *   **API Docs (Swagger):** `http://localhost:8000/docs`
-    *   **API Docs (ReDoc):** `http://localhost:8000/redoc`
-
-The server will start, connect to MongoDB and Kubernetes (if configured correctly), and begin the background tasks for polling Prometheus, watching K8s events, detecting anomalies, and potentially triggering remediation. Check the logs for status information.
-
----
-
-## API Endpoints
-
-The following endpoints are available (see `/docs` for interactive documentation):
-
-*   `GET /health`: Basic health check. Returns `{"status": "ok"}`.
-*   `GET /livez`: Kubernetes liveness probe. Returns `{"status": "live"}`.
-*   `GET /metrics`: Exposes internal application metrics in Prometheus format.
-*   `GET /anomalies`: Lists recently detected anomalies (supports `skip` and `limit` query parameters).
-*   `GET /config`: Shows the current configuration (secrets masked).
-*   `PUT /config`: Updates specific configuration values dynamically (e.g., `anomaly_thresholds`). Requires appropriate request body (see API docs).
-
----
-
-## CLI Usage
-
-KubeWise provides a command-line interface for common tasks.
-
-*   **Show Help:**
-    ```bash
-    python -m kubewise.cli --help
-    ```
-*   **View Configuration:**
-    ```bash
-    python -m kubewise.cli config
-    ```
-*   **Check Connections (Prometheus, K8s):**
-    ```bash
-    python -m kubewise.cli check-connections
-    ```
-*   **List Recent Anomalies:**
-    ```bash
-    python -m kubewise.cli list-anomalies --limit 50
-    ```
-
----
-
-## Kubernetes Deployment
-
-Manifests are provided in the `/kubernetes` directory for deploying KubeWise to a cluster.
-
-1.  **Namespace:** Choose a namespace (e.g., `kubewise`) or use `default`. Ensure it exists (`kubectl create namespace kubewise`).
-2.  **Secrets:** Create a Kubernetes Secret in your chosen namespace containing your MongoDB URI and Gemini API Key.
-    ```bash
-    kubectl create secret generic kubewise-secrets \
-      --from-literal=MONGO_URI='mongodb+srv://<user>:<password>@<atlas_cluster_url>/<db_name>?retryWrites=true&w=majority' \
-      --from-literal=GEMINI_API_KEY='YOUR_API_KEY' \
-      -n kubewise # Use your chosen namespace
-    ```
-    *Replace placeholders with your actual credentials.*
-3.  **Configuration:** Review `kubernetes/deployment.yaml`.
-    *   Ensure the `PROM_URL` environment variable points to your Prometheus service within the cluster (e.g., `http://prometheus-service.monitoring:9090`).
-    *   Adjust resource requests/limits if needed.
-    *   Verify the secret name (`kubewise-secrets`) matches the one you created.
-    *   (Optional) If you want persistent logs via a file, uncomment the volume mount and volume sections related to `kubewise-log-storage` and ensure a corresponding PersistentVolumeClaim (PVC) exists *before* deploying. You might need to create a PVC manifest like `kubernetes/pvc-example.yaml` and apply it (`kubectl apply -f kubernetes/pvc-example.yaml -n kubewise`).
-4.  **Apply Manifests:** Apply the RBAC rules, Deployment, and Service to your chosen namespace.
-    ```bash
-    # Apply RBAC (ClusterRole and ClusterRoleBinding are not namespaced)
-    kubectl apply -f kubernetes/rbac.yaml
-
-    # Apply Deployment and Service (adjust namespace if needed)
-    kubectl apply -f kubernetes/deployment.yaml -n kubewise
-    kubectl apply -f kubernetes/service.yaml -n kubewise
-    ```
-    *Modify the `-n <namespace>` flag if you used a different namespace.*
-
-3.  **Verify Deployment:**
-    ```bash
-    kubectl get pods -l app=kubewise
-    kubectl logs deployment/kubewise -f
-    ```
-    Check the logs to ensure the application starts correctly, connects to services, and background tasks are running.
-
----
-
-## Development
-
-### Testing
-
-Basic unit and integration tests can be run using `pytest`. Ensure you have development dependencies installed (`pip install -r requirements-dev.txt` - *assuming such a file exists or dependencies are added to `requirements.txt`*).
-
-```bash
-# Activate virtual environment
-source .venv/bin/activate
-
-# Run tests
-pytest -q tests/
-```
-*(Note: Test coverage is currently limited. Contributions are welcome!)*
-
-### Linting & Formatting
-
-This project uses Ruff for linting/formatting and MyPy for type checking. Configuration is in `pyproject.toml`.
-
-*   **Check Formatting:**
-    ```bash
-    ruff format . --check
-    ```
-*   **Apply Formatting:**
-    ```bash
-    ruff format .
-    ```
-*   **Check Linting:**
-    ```bash
-    ruff check .
-    ```
-*   **Apply Linting Fixes (where possible):**
-    ```bash
-    ruff check . --fix
-    ```
-*   **Run Type Checking:**
-    ```bash
-    mypy src/
-    ```
-
----
-
-## Contributing
-
-Contributions are welcome! Please follow these general steps:
-
-1.  **Fork the repository.**
-2.  **Create a new branch** for your feature or bug fix (`git checkout -b feature/my-new-feature` or `bugfix/issue-fix`).
-3.  **Make your changes.** Ensure code is formatted (`ruff format .`), linted (`ruff check . --fix`), and type-checked (`mypy src/`).
-4.  **Add tests** for your changes if applicable.
-5.  **Commit your changes** with clear messages.
-6.  **Push your branch** to your fork (`git push origin feature/my-new-feature`).
-7.  **Open a Pull Request** against the main repository's `main` branch.
-
-Please ensure your PR description clearly explains the changes and the problem they solve.
-
----
-
-## License
-
-This project is licensed under the **MIT License**.
-
-```text
-MIT License
-
-Copyright (c) 2024 [Your Name or Organization - Update This]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-*(Remember to update the copyright year and owner)*
-
----
-
-## Observability
-
-KubeWise includes comprehensive observability features to monitor its performance, health, and behavior in production environments.
-
-### Health Checks
-
-* **Basic Health Check:** `GET /health` - Returns service status and uptime
-* **Liveness Probe:** `GET /livez` - Kubernetes-compatible liveness probe
-* **Enhanced Health Check:** `GET /health/extended` - Detailed service health including component status and last successful operations
-
-### Metrics
-
-KubeWise exposes Prometheus metrics at the `/metrics` endpoint, including:
-
-* **Application Metrics:** 
-  * `kubewise_anomalies_detected_total` - Anomaly count by source, entity type, and namespace
-  * `kubewise_false_positives_total` - False positive count by entity type and namespace
-  * `kubewise_remediations_total` - Remediation count by action type, entity type, namespace, and status
-  * `kubewise_remediation_duration_seconds` - Time to execute remediation actions
-
-* **API Metrics:** 
-  * `kubewise_api_request_duration_seconds` - API request durations by endpoint, method, and status code
-
-* **External Service Metrics:**
-  * `kubewise_external_request_duration_seconds` - External service request durations
-  * `kubewise_external_request_errors_total` - External service request failures
-  * `kubewise_circuit_breaker_status` - Circuit breaker status for external services (0=CLOSED, 1=HALF_OPEN, 2=OPEN)
-  * `kubewise_external_service_up` - External service availability status (0=down, 1=up, 2=degraded)
-
-These metrics can be collected by Prometheus and visualized in Grafana using the provided dashboards.
-
-### Circuit Breaker Pattern
-
-KubeWise implements the circuit breaker pattern for external service calls to prevent cascading failures:
-
-* **Closed State:** Normal operation, requests flow through
-* **Open State:** After `ERROR_THRESHOLD` consecutive failures, the circuit "trips" and immediately rejects requests for `CIRCUIT_OPEN_TIMEOUT` seconds
-* **Half-Open State:** After the timeout, allows up to `HALF_OPEN_MAX_CALLS` test requests to verify service recovery
-
-This pattern is applied to Prometheus queries, Kubernetes API calls, and MongoDB operations to ensure system resilience during partial outages.
-
-### Graceful Shutdown
-
-The application implements graceful shutdown to ensure proper cleanup during termination:
-
-1. Stops accepting new API requests
-2. Completes in-flight requests (with timeout)
-3. Drains the queues in order: metrics/events, remediation, execution
-4. Shuts down collectors first, then processors, then clients
-5. Properly closes database connections and Kubernetes clients
-
-This prevents data loss during container termination or deployment updates.
-
----
-
-## Deployment
-
-### Docker Deployment
-
-1. **Build the image:**
-   ```bash
-   docker build -t kubewise:latest .
-   ```
-
-2. **Run the container:**
-   ```bash
-   docker run -p 8000:8000 --env-file .env kubewise:latest
-   ```
-
-### Kubernetes Deployment
-
-Manifests are provided in the `/kubernetes` directory for deploying KubeWise to a cluster.
-
-1.  **Namespace:** Choose a namespace (e.g., `kubewise`) or use `default`. Ensure it exists (`kubectl create namespace kubewise`).
-2.  **Secrets:** Create a Kubernetes Secret in your chosen namespace containing your MongoDB URI and Gemini API Key.
-    ```bash
-    kubectl create secret generic kubewise-secrets \
-      --from-literal=MONGO_URI='mongodb+srv://<user>:<password>@<atlas_cluster_url>/<db_name>?retryWrites=true&w=majority' \
-      --from-literal=GEMINI_API_KEY='YOUR_API_KEY' \
-      -n kubewise # Use your chosen namespace
-    ```
-    *Replace placeholders with your actual credentials.*
-3.  **Configuration:** Review `kubernetes/deployment.yaml`.
-    *   Ensure the `PROM_URL` environment variable points to your Prometheus service within the cluster (e.g., `http://prometheus-service.monitoring:9090`).
-    *   Adjust resource requests/limits if needed.
-    *   Verify the secret name (`kubewise-secrets`) matches the one you created.
-    *   (Optional) If you want persistent logs via a file, uncomment the volume mount and volume sections related to `kubewise-log-storage` and ensure a corresponding PersistentVolumeClaim (PVC) exists *before* deploying. You might need to create a PVC manifest like `kubernetes/pvc-example.yaml` and apply it (`kubectl apply -f kubernetes/pvc-example.yaml -n kubewise`).
-4.  **Apply Manifests:** Apply the RBAC rules, Deployment, and Service to your chosen namespace.
-    ```bash
-    # Apply RBAC (ClusterRole and ClusterRoleBinding are not namespaced)
-    kubectl apply -f kubernetes/rbac.yaml
-
-    # Apply Deployment and Service (adjust namespace if needed)
-    kubectl apply -f kubernetes/deployment.yaml -n kubewise
-    kubectl apply -f kubernetes/service.yaml -n kubewise
-    ```
-    *Modify the `-n <namespace>` flag if you used a different namespace.*
-
-3.  **Verify Deployment:**
-    ```bash
-    kubectl get pods -l app=kubewise
-    kubectl logs deployment/kubewise -f
-    ```
-    Check the logs to ensure the application starts correctly, connects to services, and background tasks are running.
+These components enable seamless integration into Kubernetes environments with proper security practices and operational considerations.

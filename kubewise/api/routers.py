@@ -1,13 +1,14 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import time
 from datetime import datetime, timezone
 
 import motor.motor_asyncio
 from bson import ObjectId
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 from loguru import logger
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 import httpx
 from kubernetes_asyncio import client
 
@@ -22,12 +23,46 @@ router = APIRouter()
 
 # --- Health & Metrics Endpoints ---
 
-@router.get("/health", tags=["Health"], status_code=status.HTTP_200_OK)
+@router.get(
+    "/health", 
+    tags=["Health"], 
+    status_code=status.HTTP_200_OK,
+    summary="Basic health check",
+    description="Simple health check endpoint that returns OK if the service is running.",
+    response_description="Returns a simple status object indicating the service is healthy",
+    responses={
+        200: {
+            "description": "Service is healthy",
+            "content": {
+                "application/json": {
+                    "example": {"status": "ok"}
+                }
+            }
+        }
+    }
+)
 async def health_check():
     """Basic health check endpoint."""
     return {"status": "ok"}
 
-@router.get("/livez", tags=["Health"], status_code=status.HTTP_200_OK)
+@router.get(
+    "/livez", 
+    tags=["Health"], 
+    status_code=status.HTTP_200_OK,
+    summary="Kubernetes liveness probe",
+    description="Liveness probe endpoint for Kubernetes health checks.",
+    response_description="Returns a simple status object for Kubernetes liveness probes",
+    responses={
+        200: {
+            "description": "Service is alive",
+            "content": {
+                "application/json": {
+                    "example": {"status": "live"}
+                }
+            }
+        }
+    }
+)
 async def liveness_check():
     """Kubernetes liveness probe endpoint."""
     # Add more checks here if needed (e.g., DB connection)
@@ -42,12 +77,56 @@ class HealthDetail(BaseModel):
     queue_status: Dict[str, int] = Field(..., description="Status of internal queues")
     circuit_breakers: Dict[str, Dict[str, str]] = Field(..., description="Status of circuit breakers")
     components: Dict[str, str] = Field(..., description="Status of application components")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "ok",
+                "uptime_seconds": 12345.67,
+                "start_time": "2023-06-15T12:30:45.123456Z",
+                "connections": {
+                    "mongodb": {"status": "ok", "message": "Connected"},
+                    "prometheus": {"status": "ok", "message": "Connected"},
+                    "kubernetes": {"status": "ok", "message": "Connected"}
+                },
+                "queue_status": {
+                    "metrics": 42,
+                    "events": 12,
+                    "remediation": 3
+                },
+                "circuit_breakers": {
+                    "prometheus:fetch_metrics": {
+                        "state": "closed",
+                        "error_count": "0",
+                        "last_error": "none"
+                    }
+                },
+                "components": {
+                    "anomaly_detector": "ok",
+                    "gemini_agent": "ok",
+                    "k8s_event_watcher": "ok"
+                }
+            }
+        }
 
 @router.get(
     "/health/detail", 
     response_model=HealthDetail, 
     tags=["Health"],
-    summary="Detailed health check with component status"
+    summary="Detailed health check with component status",
+    description="""
+    Provides comprehensive health information about all system components:
+    
+    · Overall system status (ok, degraded, or failed)
+    · Uptime information
+    · Connection status to external dependencies (MongoDB, Prometheus, Kubernetes)
+    · Internal queue metrics
+    · Circuit breaker statuses
+    · Core component health statuses
+    
+    Use this endpoint for troubleshooting or monitoring dashboards.
+    """,
+    response_description="Detailed health status of all system components"
 )
 async def detailed_health_check(
     ctx: AppContext = Depends(get_app_context),
@@ -144,7 +223,56 @@ async def detailed_health_check(
         }
     )
 
-@router.get("/metrics", tags=["Metrics"])
+@router.get(
+    "/metrics", 
+    tags=["Metrics"],
+    summary="Prometheus metrics endpoint",
+    description="""
+    Returns Prometheus-formatted metrics for the KubeWise service.
+    This endpoint can be scraped by a Prometheus server to monitor KubeWise itself.
+    
+    Metrics include:
+    · API request durations
+    · Queue sizes
+    · Processing times
+    · Anomaly counts
+    · Remediation statistics
+    """,
+    response_description="Prometheus metrics in text-based exposition format",
+    responses={
+        200: {
+            "description": "Prometheus metrics in text format",
+            "content": {
+                "text/plain": {
+                    "example": """
+                    # HELP kubewise_anomalies_detected_total Total number of anomalies detected
+                    # TYPE kubewise_anomalies_detected_total counter
+                    kubewise_anomalies_detected_total{type="cpu"} 23
+                    kubewise_anomalies_detected_total{type="memory"} 17
+                    
+                    # HELP kubewise_api_request_duration_seconds API request duration in seconds
+                    # TYPE kubewise_api_request_duration_seconds histogram
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.005"} 42
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.01"} 84
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.025"} 112
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.05"} 198
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.075"} 239
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.1"} 251
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.25"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.5"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="0.75"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="1.0"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="2.5"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="5.0"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="7.5"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="10.0"} 254
+                    kubewise_api_request_duration_seconds_bucket{endpoint="/health",le="+Inf"} 254
+                    """
+                }
+            }
+        }
+    }
+)
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
@@ -157,6 +285,30 @@ async def metrics_endpoint():
     response_model=List[AnomalyRecord],
     tags=["Anomalies"],
     summary="List detected anomalies",
+    description="""
+    Retrieve a paginated list of anomalies detected by the system, sorted by detection time (most recent first).
+    
+    Each anomaly record contains:
+    · Unique identifier
+    · Timestamp of detection
+    · Resource type and name affected
+    · Anomaly score (0.0-1.0, higher means more severe)
+    · Raw metric value that triggered the anomaly
+    · Whether remediation was attempted and its status
+    
+    Use the 'skip' and 'limit' parameters for pagination.
+    """,
+    response_description="List of anomaly records sorted by timestamp (descending)",
+    responses={
+        500: {
+            "description": "Database error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to retrieve anomalies from database."}
+                }
+            }
+        }
+    }
 )
 async def list_anomalies(
     db: motor.motor_asyncio.AsyncIOMotorDatabase = Depends(get_mongo_db),
@@ -176,12 +328,15 @@ async def list_anomalies(
         )
         anomalies_raw = await anomalies_cursor.to_list(length=limit)
 
-        # Convert MongoDB ObjectId to string for Pydantic validation if necessary
-        # and handle potential validation errors per record
+        # Convert MongoDB ObjectId to string for Pydantic validation
         anomalies_validated: List[AnomalyRecord] = []
         for raw_anomaly in anomalies_raw:
-            if "_id" in raw_anomaly and isinstance(raw_anomaly["_id"], ObjectId):
-                raw_anomaly["id"] = str(raw_anomaly["_id"]) # Add 'id' field
+            # Store _id as a string in the id field and remove _id
+            if "_id" in raw_anomaly:
+                raw_anomaly["id"] = str(raw_anomaly["_id"])
+                # Some validation code may still expect _id but as a string
+                raw_anomaly["_id"] = str(raw_anomaly["_id"])
+                
             try:
                 anomalies_validated.append(AnomalyRecord.model_validate(raw_anomaly))
             except Exception as e:
@@ -197,17 +352,28 @@ async def list_anomalies(
             detail="Failed to retrieve anomalies from database.",
         )
 
-
 # --- Configuration Endpoint ---
 
 class ConfigResponse(BaseModel):
     """Response model for GET /config."""
-    mongo_uri_set: bool
-    prom_url: str
-    gemini_api_key_set: bool
-    anomaly_threshold: float
-    log_level: str
-    gemini_model_id: str
+    mongo_uri_set: bool = Field(..., description="Whether MongoDB URI is configured")
+    prom_url: str = Field(..., description="Prometheus URL")
+    gemini_api_key_set: bool = Field(..., description="Whether Gemini API key is configured")
+    anomaly_threshold: float = Field(..., description="Anomaly detection threshold (0.0-1.0)")
+    log_level: str = Field(..., description="Current logging level")
+    gemini_model_id: str = Field(..., description="Gemini model ID being used")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "mongo_uri_set": True,
+                "prom_url": "http://prometheus.monitoring:9090",
+                "gemini_api_key_set": True,
+                "anomaly_threshold": 0.85,
+                "log_level": "INFO",
+                "gemini_model_id": "gemini-1.5-flash"
+            }
+        }
 
 class ConfigUpdatePayload(BaseModel):
     """Payload for updating configuration."""
@@ -215,12 +381,32 @@ class ConfigUpdatePayload(BaseModel):
         None, ge=0.0, le=1.0, description="New anomaly score threshold (0.0 to 1.0)."
     )
     # Add other updatable fields here if needed (e.g., log_level)
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "anomaly_threshold": 0.75
+            }
+        }
 
 @router.get(
     "/config",
     response_model=ConfigResponse,
     tags=["Configuration"],
     summary="View current configuration",
+    description="""
+    Retrieve the current application configuration settings.
+    
+    This endpoint provides visibility into:
+    · Whether essential credentials are configured (Mongo URI, Gemini API key)
+    · Current Prometheus URL
+    · Anomaly detection threshold
+    · Log level
+    · AI model configuration
+    
+    Sensitive values are masked for security reasons.
+    """,
+    response_description="Current configuration settings with credentials masked"
 )
 async def get_current_config(current_settings: Settings = Depends(get_settings)):
     """
@@ -240,6 +426,26 @@ async def get_current_config(current_settings: Settings = Depends(get_settings))
     response_model=ConfigResponse,
     tags=["Configuration"],
     summary="Update configuration (hot-reload)",
+    description="""
+    Update application configuration settings at runtime without requiring a restart.
+    
+    Currently supports updating:
+    · 'anomaly_threshold': Adjust sensitivity of anomaly detection (0.0-1.0)
+    
+    Changes take effect immediately and persist for the current application instance.
+    The updated configuration is returned.
+    """,
+    response_description="Updated configuration settings",
+    responses={
+        400: {
+            "description": "Invalid configuration value",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Anomaly threshold must be between 0.0 and 1.0"}
+                }
+            }
+        }
+    }
 )
 async def update_config(
     payload: ConfigUpdatePayload = Body(...),
@@ -249,62 +455,122 @@ async def update_config(
     Update parts of the application configuration. Currently supports hot-reloading
     the `anomaly_threshold`.
     """
-    updated = False
+    # Handle anomaly threshold update
     if payload.anomaly_threshold is not None:
-        if current_settings.anomaly_threshold != payload.anomaly_threshold:
-            logger.info(
-                f"Updating anomaly_threshold from {current_settings.anomaly_threshold} "
-                f"to {payload.anomaly_threshold}"
+        # We already have validation from Pydantic, but let's double check
+        if payload.anomaly_threshold < 0.0 or payload.anomaly_threshold > 1.0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Anomaly threshold must be between 0.0 and 1.0",
             )
-            current_settings.anomaly_threshold = payload.anomaly_threshold
-            # Note: Need to ensure the OnlineAnomalyDetector instance actually uses
-            # this updated value. This might require passing the settings object
-            # to it or having a mechanism to notify it of the change.
-            # For now, we update the global settings object.
-            updated = True
-        else:
-             logger.debug(f"Anomaly threshold is already set to {payload.anomaly_threshold}. No change.")
-
-    # Add logic for other updatable fields here
-
-    if not updated:
-        logger.info("No configuration values were updated.")
-        # Return current config without indicating update
-        # Or return 304 Not Modified? Let's return current state for simplicity.
-
-    # Return the potentially updated configuration
-    return await get_current_config(current_settings)
+        
+        # Update in runtime settings
+        current_settings.anomaly_threshold = payload.anomaly_threshold
+        logger.info(f"Anomaly threshold updated to {payload.anomaly_threshold}")
+    
+    # Add other config updates here if more fields are added to ConfigUpdatePayload
+    
+    # Return the updated config
+    return ConfigResponse(
+        mongo_uri_set=bool(current_settings.mongo_uri),
+        prom_url=str(current_settings.prom_url),
+        gemini_api_key_set=bool(current_settings.gemini_api_key.get_secret_value() != "changeme" and current_settings.gemini_api_key.get_secret_value()),
+        anomaly_threshold=current_settings.anomaly_threshold,
+        log_level=current_settings.log_level,
+        gemini_model_id=current_settings.gemini_model_id,
+    )
 
 # Add PATCH endpoint as well for partial updates (optional, PUT can handle this)
 # router.patch("/config", ...)
 
-# --- Query Validation Endpoint ---
+# --- Validation Endpoints ---
 
 class QueryValidationRequest(BaseModel):
     """Request model for query validation."""
     query: str = Field(..., description="The PromQL query to validate and test")
     prometheus_url: Optional[str] = Field(None, description="Optional custom Prometheus URL to use for this query")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "query": "sum(rate(container_cpu_usage_seconds_total{namespace=\"default\"}[5m])) by (pod)",
+                "prometheus_url": None  # Uses the system default
+            }
+        }
 
 class QueryValidationResponse(BaseModel):
     """Response model for query validation."""
-    query: str
-    valid: bool
-    result_type: Optional[str] = None
-    results_count: Optional[int] = None
-    sample_results: Optional[List[dict]] = None
-    error: Optional[str] = None
-    execution_time_ms: float
-    timestamp: str
+    query: str = Field(..., description="The original PromQL query that was tested")
+    valid: bool = Field(..., description="Whether the query is syntactically valid and returned results")
+    result_type: Optional[str] = Field(None, description="Type of result returned (vector, matrix, scalar, string)")
+    results_count: Optional[int] = Field(None, description="Number of data points/series returned")
+    sample_results: Optional[List[dict]] = Field(None, description="Sample of the actual results (limited)")
+    error: Optional[str] = Field(None, description="Error message if query failed")
+    execution_time_ms: float = Field(..., description="Time taken to execute the query in milliseconds")
+    timestamp: str = Field(..., description="Timestamp when the query was executed")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "query": "sum(rate(container_cpu_usage_seconds_total{namespace=\"default\"}[5m])) by (pod)",
+                "valid": True,
+                "result_type": "vector",
+                "results_count": 5,
+                "sample_results": [
+                    {
+                        "metric": {"pod": "my-app-76d5c8b675-f7t9j"},
+                        "value": [1623766278.123, "0.056712"]
+                    },
+                    {
+                        "metric": {"pod": "my-app-76d5c8b675-2kl7m"},
+                        "value": [1623766278.123, "0.078321"]
+                    }
+                ],
+                "error": None,
+                "execution_time_ms": 123.45,
+                "timestamp": "2023-06-15T12:31:18.123456Z"
+            }
+        }
 
 @router.post(
     "/validation/query",
     response_model=QueryValidationResponse,
     tags=["Validation"],
     summary="Validate and test a Prometheus query",
+    description="""
+    Validates and executes a PromQL query against the configured Prometheus instance.
+    
+    This endpoint is useful for:
+    · Testing whether a query is syntactically valid
+    · Seeing sample results from a query
+    · Measuring query performance
+    · Verifying Prometheus connectivity
+    
+    You can optionally specify a different Prometheus URL than the system default.
+    """,
+    response_description="Query validation results with sample data",
+    responses={
+        400: {
+            "description": "Invalid request",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Query cannot be empty"}
+                }
+            }
+        },
+        500: {
+            "description": "Prometheus connection error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to connect to Prometheus: Connection refused"}
+                }
+            }
+        }
+    }
 )
 async def validate_prometheus_query(
     payload: QueryValidationRequest = Body(...),
-    db: motor.motor_asyncio.AsyncIOMotorDatabase = Depends(get_mongo_db),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
     current_settings: Settings = Depends(get_settings),
 ):
     """
@@ -318,81 +584,83 @@ async def validate_prometheus_query(
     - Any error message if the query failed
     """
     import time
-    import httpx
     from datetime import datetime
-    from kubewise.collector.prometheus import parse_prometheus_response
-
+    
+    # Validate input
+    if not payload.query.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query cannot be empty"
+        )
+    
     start_time = time.time()
+    timestamp = datetime.now(timezone.utc).isoformat()
     
     # Use provided Prometheus URL or fall back to configured one
     prometheus_url = payload.prometheus_url or str(current_settings.prom_url)
     
     try:
-        # Create HTTP client
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Execute query
-            url = f"{prometheus_url}/api/v1/query"
-            params = {"query": payload.query}
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Check if query was successful
-            if data.get("status") != "success":
-                error_msg = data.get("error", "Unknown error from Prometheus")
-                return QueryValidationResponse(
-                    query=payload.query,
-                    valid=False,
-                    error=error_msg,
-                    execution_time_ms=(time.time() - start_time) * 1000,
-                    timestamp=datetime.now().isoformat(),
-                )
-            
-            # Parse the response
-            result_type = data.get("data", {}).get("resultType")
-            results = data.get("data", {}).get("result", [])
-            
-            # Parse the results into metrics
-            metrics = parse_prometheus_response("custom_query", data)
-            
-            # Create sample results (up to 5)
-            sample_results = []
-            for i, metric in enumerate(metrics):
-                if i >= 5:  # Limit to 5 samples
-                    break
-                sample_results.append({
-                    "metric_name": metric.metric_name,
-                    "labels": {k: v for k, v in metric.labels.items()},
-                    "value": metric.value,
-                    "timestamp": metric.timestamp.isoformat(),
-                })
-            
+        # Execute query
+        url = f"{prometheus_url}/api/v1/query"
+        params = {"query": payload.query}
+        
+        response = await http_client.get(url, params=params, timeout=10.0)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Check if query was successful
+        if data.get("status") != "success":
+            error_msg = data.get("error", "Unknown error from Prometheus")
             return QueryValidationResponse(
                 query=payload.query,
-                valid=True,
-                result_type=result_type,
-                results_count=len(metrics),
-                sample_results=sample_results,
+                valid=False,
+                error=error_msg,
                 execution_time_ms=(time.time() - start_time) * 1000,
-                timestamp=datetime.now().isoformat(),
+                timestamp=timestamp,
             )
+        
+        # Process result
+        result_type = data.get("data", {}).get("resultType")
+        results = data.get("data", {}).get("result", [])
+        
+        # Create sample results (limit to 5 entries)
+        sample_results = results[:5] if results else None
+        
+        return QueryValidationResponse(
+            query=payload.query,
+            valid=True,
+            result_type=result_type,
+            results_count=len(results),
+            sample_results=sample_results,
+            error=None,
+            execution_time_ms=(time.time() - start_time) * 1000,
+            timestamp=timestamp,
+        )
     
     except httpx.HTTPStatusError as e:
+        logger.warning(f"HTTP error validating Prometheus query: {e.response.status_code} - {e.response.text}")
         return QueryValidationResponse(
             query=payload.query,
             valid=False,
             error=f"HTTP error: {e.response.status_code} - {e.response.text}",
             execution_time_ms=(time.time() - start_time) * 1000,
-            timestamp=datetime.now().isoformat(),
+            timestamp=timestamp,
+        )
+    except httpx.ConnectError as e:
+        logger.error(f"Failed to connect to Prometheus at {prometheus_url}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to connect to Prometheus: {str(e)}"
         )
     except httpx.RequestError as e:
+        logger.error(f"Request error: {str(e)}")
         return QueryValidationResponse(
             query=payload.query,
             valid=False,
             error=f"Request error: {str(e)}",
             execution_time_ms=(time.time() - start_time) * 1000,
-            timestamp=datetime.now().isoformat(),
+            timestamp=timestamp,
         )
     except Exception as e:
         logger.exception(f"Error validating query: {e}")
@@ -401,5 +669,5 @@ async def validate_prometheus_query(
             valid=False,
             error=f"Internal error: {str(e)}",
             execution_time_ms=(time.time() - start_time) * 1000,
-            timestamp=datetime.now().isoformat(),
+            timestamp=timestamp,
         )

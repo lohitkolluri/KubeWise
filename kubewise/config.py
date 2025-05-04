@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 import logging
-from typing import Literal, Dict, List # Added Dict, List
+from typing import Literal, Dict, List
 
+from loguru import logger
 from pydantic import Field, HttpUrl, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Define valid log levels
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-# --- Default Prometheus Queries ---
+# Default Prometheus Queries for resource monitoring and failure detection
 DEFAULT_PROM_QUERIES = {
     # Resource Utilization Metrics (normalized to percentages)
     "pod_cpu_utilization_pct": '''
@@ -146,13 +147,13 @@ class Settings(BaseSettings):
         prom_queries_poll_interval: Interval in seconds between Prometheus query polls.
     """
 
-    # --- Environment Variable Sources ---
+    # Environment Variable Sources
     mongo_uri: str = Field(..., validation_alias="MONGO_URI")
     mongo_db_name: str = Field(..., validation_alias="MONGO_DB_NAME")
     prom_url: HttpUrl = Field("http://localhost:9090", validation_alias="PROM_URL")
     gemini_api_key: SecretStr = Field(..., validation_alias="GEMINI_API_KEY")
     anomaly_thresholds: Dict[str, float] = Field(
-        default_factory=lambda: {"default": 0.85, "memory": 0.95}, # Increased default and memory thresholds
+        default_factory=lambda: {"default": 0.85, "memory": 0.95},
         validation_alias="ANOMALY_THRESHOLDS"
     )
     log_level: LogLevel = Field("INFO", validation_alias="LOG_LEVEL")
@@ -163,47 +164,47 @@ class Settings(BaseSettings):
     )
     prom_queries_poll_interval: float = Field(60.0, validation_alias="PROM_QUERIES_POLL_INTERVAL")
 
-    # --- Anomaly Detector Model Settings ---
+    # Anomaly Detector Model Settings
     hst_n_trees: int = Field(25, validation_alias="HST_N_TREES", description="Number of trees in the Half-Space Trees model.")
     hst_height: int = Field(15, validation_alias="HST_HEIGHT", description="Height of trees in the Half-Space Trees model.")
     hst_window_size: int = Field(500, validation_alias="HST_WINDOW_SIZE", description="Window size for the Half-Space Trees model.")
     river_trees: int = Field(50, validation_alias="RIVER_TREES", description="Number of trees in the River Adaptive Random Forest model.")
-    detector_save_interval: int = Field(300, validation_alias="DETECTOR_SAVE_INTERVAL", description="Interval in seconds to save anomaly detector state.") # Added detector save interval
+    detector_save_interval: int = Field(300, validation_alias="DETECTOR_SAVE_INTERVAL", description="Interval in seconds to save anomaly detector state.")
 
-    # --- Remediation Settings ---
+    # Remediation Settings
     remediation_cooldown_seconds: int = Field(
-        10, # Defaulting to the value from detector.py (was 300)
+        10,
         validation_alias="REMEDIATION_COOLDOWN_SECONDS",
         description="Minimum time in seconds between remediation actions for the same entity."
     )
 
     max_parallel_remediation_actions: int = Field(
-        5, # Defaulting to the current hardcoded value
+        5,
         validation_alias="MAX_PARALLEL_REMEDIATION_ACTIONS",
         description="Maximum number of remediation actions to execute in parallel."
     )
 
-    # --- False Positive Heuristic Settings ---
+    # False Positive Heuristic Settings
     fp_hst_score_threshold: float = Field(
-        0.90, # Kept default
+        0.90,
         validation_alias="FP_HST_SCORE_THRESHOLD",
         description="HST score above which (combined with low River score) an anomaly might be a false positive.",
         ge=0.0, le=1.0
     )
     fp_river_score_threshold: float = Field(
-        0.10, # Changed default from 0.03 to 0.10 as per user request context
+        0.10,
         validation_alias="FP_RIVER_SCORE_THRESHOLD",
         description="River score below which (combined with high HST score) an anomaly might be a false positive.",
         ge=0.0, le=1.0
     )
     fp_system_mem_mib_threshold: float = Field(
-        500.0, # Changed default from 250.0 to 500.0 as per user request context
+        500.0,
         validation_alias="FP_SYSTEM_MEM_MIB_THRESHOLD",
         description="Memory usage (in MiB) below which a memory anomaly in system namespaces is considered a likely false positive.",
         gt=0.0
     )
     fp_score_difference_threshold: float = Field(
-        0.75, # Default difference threshold
+        0.75,
         validation_alias="FP_SCORE_DIFFERENCE_THRESHOLD",
         description="Score difference (HST - River) above which (combined with high HST score) an anomaly might be a false positive.",
         ge=0.0, le=1.0
@@ -214,31 +215,31 @@ class Settings(BaseSettings):
         description="List of Kubernetes namespaces considered system namespaces for heuristic adjustments."
     )
     
-    # --- Event Processing Settings ---
+    # Event Processing Settings
     event_max_age_seconds: int = Field(
-        300,  # Reduced from 600 to 300 seconds (5 minutes)
+        300,
         validation_alias="EVENT_MAX_AGE_SECONDS",
         description="Maximum age in seconds for events to be considered for anomaly detection. "
                     "Older events are likely already resolved and will be ignored.",
         gt=0
     )
 
-    # --- Resource Health Check Settings ---
+    # Resource Health Check Settings
     resource_check_interval: int = Field(
-        300,  # 5 minutes
+        300,
         validation_alias="RESOURCE_CHECK_INTERVAL",
         description="How often to check the health status of resources (in seconds)",
         gt=0
     )
 
     resource_health_ttl: int = Field(
-        900,  # 15 minutes
+        900,
         validation_alias="RESOURCE_HEALTH_TTL",
         description="Time-to-live for resource health information (in seconds)",
         gt=0
     )
 
-    # --- Pydantic Settings Configuration ---
+    # Pydantic Settings Configuration
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -263,7 +264,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"Anomaly threshold for '{key}' must be between 0.0 and 1.0, got {value}")
         if "default" not in thresholds:
              thresholds["default"] = 0.8
-             logging.warning("No 'default' anomaly threshold provided, using 0.8.")
+             logger.warning("No 'default' anomaly threshold provided, using 0.8.")
         return thresholds
 
     @property
@@ -289,16 +290,12 @@ if __name__ == "__main__":
     print(f"Gemini API Key: {api_key_masked}")
     print(f"Prometheus Poll Interval: {settings.prom_queries_poll_interval}s")
     print(f"Total Prometheus Queries: {len(settings.prom_queries)}")
-    print(f"HST Trees: {settings.hst_n_trees}, Height: {settings.hst_height}, Window: {settings.hst_window_size}") # Added detector params
-    print(f"River Trees: {settings.river_trees}") # Added detector params
-    print(f"Detector Save Interval: {settings.detector_save_interval}s") # Added detector params
+    print(f"HST Trees: {settings.hst_n_trees}, Height: {settings.hst_height}, Window: {settings.hst_window_size}")
+    print(f"River Trees: {settings.river_trees}")
+    print(f"Detector Save Interval: {settings.detector_save_interval}s")
     print(f"Remediation Cooldown: {settings.remediation_cooldown_seconds}s")
     print(f"FP HST Score Threshold: {settings.fp_hst_score_threshold}")
     print(f"FP River Score Threshold: {settings.fp_river_score_threshold}")
     print(f"FP System Mem MiB Threshold: {settings.fp_system_mem_mib_threshold}")
     print(f"System Namespaces: {settings.system_namespaces}")
-    # print("Prometheus Queries (showing first 70 chars, whitespace removed):") # Optional: Can uncomment if needed
-    # for name, query in settings.prom_queries.items():
-    #     cleaned_query = "".join(query.split())
-    #     print(f"  - {name}: {cleaned_query[:70]}...")
     print("-----------------------------")

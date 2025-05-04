@@ -43,26 +43,27 @@ class PrometheusFetcher:
     def __init__(
         self,
         metrics_queue: asyncio.Queue[MetricPoint],
+        http_client: httpx.AsyncClient,
         prometheus_url: Optional[str] = None,
         metrics_queries: Optional[Dict[str, str]] = None,
         poll_interval: float = METRICS_POLL_INTERVAL,
         health_check_interval: float = DEFAULT_HEALTH_CHECK_INTERVAL,
-        limits: httpx.Limits = DEFAULT_LIMITS,
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: float = 30.0,  # Default timeout for Prometheus API requests
     ):
         """
         Initialize the Prometheus fetcher.
         
         Args:
             metrics_queue: Queue to put metrics into
+            http_client: Shared HTTP client to use for requests
             prometheus_url: URL of the Prometheus API
             metrics_queries: Dict of metric name to PromQL query
             poll_interval: How often to fetch metrics in seconds
             health_check_interval: How often to check connection health
-            limits: HTTP client connection limits
-            timeout: HTTP client timeout
+            timeout: Timeout in seconds for Prometheus API requests
         """
         self.metrics_queue = metrics_queue
+        self._client = http_client
         self.prometheus_url = prometheus_url or settings.prom_url
         # Strip trailing slash if present
         if isinstance(self.prometheus_url, str):
@@ -70,15 +71,13 @@ class PrometheusFetcher:
             
         self.poll_interval = poll_interval
         self.health_check_interval = health_check_interval
-        self.limits = limits
-        self.timeout = timeout
+        self.timeout = timeout  # Store the timeout value
         
         # Initialize with default queries if none provided
         self.metrics_queries = metrics_queries or settings.prom_queries
         
         # State tracking
         self._is_running = False
-        self._client: Optional[httpx.AsyncClient] = None
         self._exit_stack = AsyncExitStack()
         self._polling_task: Optional[asyncio.Task] = None
         self._health_check_task: Optional[asyncio.Task] = None
@@ -107,14 +106,6 @@ class PrometheusFetcher:
             
         logger.info(f"Starting Prometheus metrics fetcher (URL: {self.prometheus_url})")
         
-        # Initialize httpx client with connection pooling
-        self._client = httpx.AsyncClient(
-            limits=self.limits,
-            timeout=httpx.Timeout(timeout=self.timeout),
-            http2=False,  # Disable HTTP/2 as 'h2' package might not be installed
-            transport=httpx.AsyncHTTPTransport(retries=2)  # Basic transport-level retries (increased to 2)
-        )
-
         # Register client for cleanup
         await self._exit_stack.enter_async_context(self._client)
         
@@ -249,8 +240,8 @@ class PrometheusFetcher:
                     # Initialize a new client with fresh connections
                     self._exit_stack = AsyncExitStack()
                     self._client = httpx.AsyncClient(
-                        limits=self.limits,
                         timeout=httpx.Timeout(timeout=self.timeout),
+                        limits=httpx.Limits(max_keepalive_connections=20, max_connections=30),
                         http2=False, # Disable HTTP/2 as 'h2' package might not be installed
                         transport=httpx.AsyncHTTPTransport(retries=1)
                     )

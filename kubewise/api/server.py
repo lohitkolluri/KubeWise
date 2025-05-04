@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import datetime # Needed for timezone aware datetime
 import time # For rate limiting check
 from typing import Optional, Set, Dict, Tuple # Added Tuple for helper return
+import json
 
 import httpx
 import motor.motor_asyncio
@@ -33,12 +34,25 @@ from kubewise.models import AnomalyRecord, KubernetesEvent, MetricPoint
 from kubewise.remediation import engine, planner
 # Imports for Gemini Agent
 from pydantic_ai import Agent
-# Corrected imports based on pydantic-ai docs - REMOVED incorrect 'from pydantic_ai.llm import Gemini'
+# Corrected imports based on pydantic-ai docs
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.google_gla import GoogleGLAProvider
 # Import AppContext from the new context module
 from kubewise.api.context import AppContext
 from prometheus_client import REGISTRY # Import REGISTRY
+
+# Import the dependency factory module
+from kubewise.api.factory import (
+    initialize_app_context, 
+    create_prometheus_fetcher
+)
+
+# Custom JSON encoder to handle datetime serialization
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime.datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 # --- Constants ---
 # Remediation cooldown is now configured through settings.remediation_cooldown_seconds
@@ -71,52 +85,48 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown logic.
     """
     # === Startup ===
-    # Logging is configured on import now.
     logger.info("Starting KubeWise lifespan...")
 
-    # Create the application context instance
-    app_context = AppContext()
-    app_context.start_time = datetime.datetime.now(datetime.timezone.utc)
-    app_context.start_timestamp = time.time()
-    app.state.app_context = app_context # Store context in app state
-
-    console = Console() # Keep console for banner and progress
+    console = Console()
 
     # 1. Show KubeWise banner
-    console.clear() # Clear console for a clean start
+    console.clear()
     console.print(Panel.fit(ASCII_BANNER, title="[bold green]KubeWise", subtitle="AI-Powered Kubernetes Guardian 🚀", style="bold cyan", box=box.DOUBLE))
 
     # 2. Simulated loading steps + Fetch nodes dynamically
     console.rule("[bold green]Starting KubeWise Server...")
+
+    # Initialize the application context using our factory
+    app_context = await initialize_app_context()
+    app.state.app_context = app_context
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        # Initialize Kubernetes
+        # Display progress
         task = progress.add_task("[yellow]Connecting to Kubernetes cluster...", total=None)
         
-        # Fetch cluster nodes
+        # Fetch cluster nodes if Kubernetes client is available
         progress.update(task, description="[cyan]Fetching cluster nodes...")
         try:
             # Pass the shared k8s_api_client from the context
-            nodes = await fetch_kubernetes_nodes(app_context.k8s_api_client)
-            logger.info(f"Fetched nodes: Type={type(nodes)}, Content={nodes}") # Debug log
+            if app_context.k8s_api_client is not None:
+                nodes = await fetch_kubernetes_nodes(app_context.k8s_api_client)
+                logger.info(f"Fetched nodes: {nodes}")
+            else:
+                nodes = []
+                logger.error("Cannot fetch nodes: Kubernetes client not available")
         except Exception as e:
             nodes = []
             console.print(f"[bold red]Failed to fetch nodes: {e}")
-            logger.error(f"Error fetching nodes: {e}") # Log the error
+            logger.error(f"Error fetching nodes: {e}")
 
         if nodes:
             console.print("\n[bold green]🖥️  Connected Nodes:")
-            # Ensure nodes is iterable before iterating
-            if isinstance(nodes, list):
-                for node in nodes:
-                    console.print(f"   - [cyan]{node}[/cyan]")
-            else:
-                console.print("[bold red]Error: Fetched nodes is not a list and cannot be iterated.")
-                logger.error(f"Fetched nodes is not a list: Type={type(nodes)}")
+            for node in nodes:
+                console.print(f"   - [cyan]{node}[/cyan]")
         else:
             console.print("[bold yellow]⚠️  No nodes found or unable to fetch!")
 
@@ -134,14 +144,12 @@ async def lifespan(app: FastAPI):
 
     console.rule("[bold blue]KubeWise Server Started Successfully 🎯")
 
-    # Gather settings to display (optional, can keep or remove)
-    # Mask sensitive keys like API keys if necessary (GEMINI_API_KEY is Pydantic SecretStr)
-    # Use anomaly_thresholds from settings
+    # Display settings
     settings_display = {
         "Log Level": settings.log_level,
         "Prometheus URL": str(settings.prom_url),
         "Mongo DB Name": settings.mongo_db_name,
-        "Anomaly Thresholds": str(settings.anomaly_thresholds), # Use the new dict setting
+        "Anomaly Thresholds": str(settings.anomaly_thresholds),
         "Gemini Model ID": settings.gemini_model_id,
         "Gemini API Key": f"{settings.gemini_api_key.get_secret_value()[:4]}... (masked)",
     }
@@ -157,292 +165,161 @@ async def lifespan(app: FastAPI):
     )
     logger.info("KubeWise startup sequence initiated.")
 
-    # --- Initialize Clients and Resources within AppContext ---
-    try:
-        from kubewise.api.deps import create_mongo_client
-        mongo_connection_uri: str = str(settings.mongo_uri)
-        app_context.mongo_client = await create_mongo_client(mongo_connection_uri)
-        await app_context.mongo_client.admin.command('ping')
-        app_context.db = app_context.mongo_client[settings.mongo_db_name]
-        logger.info(f"Connected to MongoDB database '{settings.mongo_db_name}' with optimized connection pool")
-    except Exception as e:
-        logger.exception(f"FATAL: Failed to connect to MongoDB during startup: {e}")
-        app_context.mongo_client = None
-        app_context.db = None
-        logger.critical("MongoDB unavailable – aborting startup")
-        raise RuntimeError("MongoDB connection failed during startup")
-
-    # Initialize shared HTTP client (httpx)
-    app_context.http_client = httpx.AsyncClient(follow_redirects=True)
-    logger.info("Shared HTTP client (httpx) initialized.")
-
-    # Initialize K8s client (needed by watcher and remediation engine) using aiohttp session
-    try:
-        await load_k8s_config() # Use the imported function
-        # Create an aiohttp session explicitly - will be used for app's own HTTP operations
-        app_context.aiohttp_session = aiohttp.ClientSession()
-        # Initialize ApiClient with proper configuration
-        app_context.k8s_api_client = client.ApiClient()
-        # Verify connection with a simple API call
-        v1 = client.CoreV1Api(api_client=app_context.k8s_api_client)
-        await v1.list_namespace(limit=1)
-        logger.info("Kubernetes client configured and connection verified.")
-    except Exception as e:
-        logger.exception(f"FATAL: Failed to configure Kubernetes client during startup: {e}")
-        app_context.k8s_api_client = None
-        # Close the session if it was created before the error
-        if app_context.aiohttp_session and not app_context.aiohttp_session.closed:
-             await app_context.aiohttp_session.close()
-        app_context.aiohttp_session = None
-        # Decide if K8s client failure is fatal or not. For now, allow startup.
-        logger.error("Kubernetes client failed to initialize. Event watching will not work.")
-
-    # Initialize Anomaly Detector using settings
-    if app_context.db is not None: # Explicit None check
-        try:
-            app_context.anomaly_detector = SequentialAnomalyDetector(
-                db=app_context.db,
-                hst_n_trees=settings.hst_n_trees,
-                hst_height=settings.hst_height,
-                hst_window_size=settings.hst_window_size,
-                river_trees=settings.river_trees,
-                remediation_cooldown_seconds=settings.remediation_cooldown_seconds,
-                temporal_window_seconds=3600,  # 1 hour window for temporal analysis
-                max_sequence_history=20  # Keep up to 20 events in sequence history
-            )
-            logger.info(f"Sequential anomaly detector initialized with settings: HST(trees={settings.hst_n_trees}, height={settings.hst_height}, window={settings.hst_window_size}), River(trees={settings.river_trees}).")
-            logger.info("Attempting to load detector state...")
-            # Load state explicitly after initialization
-            await app_context.anomaly_detector.load_state()
-        except Exception as detector_init_err:
-            logger.exception(f"Failed to initialize or load state for SequentialAnomalyDetector: {detector_init_err}")
-            app_context.anomaly_detector = None # Ensure it's None on failure
-            logger.error("Anomaly detector failed to initialize. Anomaly detection will not work.")
-    else:
-        logger.error("Anomaly detector cannot be initialized because DB connection failed.")
-        # Decide if this is fatal. For now, allow startup.
-
-    # Initialize Gemini Agent
-    if settings.gemini_api_key and settings.gemini_api_key.get_secret_value() != "changeme":
-        try:
-            # Initialize provider with API key
-            provider = GoogleGLAProvider(api_key=settings.gemini_api_key.get_secret_value())
-            # Initialize model with the provider and model ID from settings
-            model = GeminiModel(settings.gemini_model_id, provider=provider)
-            # Initialize Agent with the configured model
-            app_context.gemini_agent = Agent(model)
-            logger.info(f"Gemini agent initialized with model '{settings.gemini_model_id}'.")
-        except Exception as agent_err:
-            logger.exception(f"Failed to initialize Gemini agent: {agent_err}")
-            app_context.gemini_agent = None # Ensure it's None on failure
-            logger.error("Gemini agent failed to initialize. AI-based remediation planning will not work.")
-    else:
-        logger.warning("GEMINI_API_KEY not set or is 'changeme'. Gemini agent not initialized.")
-        app_context.gemini_agent = None
-
-
     # --- Start Background Tasks & Watchers ---
-    # Instantiate and start the KubernetesEventWatcher directly
-    # Ensure K8s client is available before starting watcher
-    if app_context.db is not None and app_context.k8s_api_client is not None: # Explicit None checks for DB and K8s client
-        app_context.k8s_event_watcher = KubernetesEventWatcher(
-            events_queue=app_context.event_queue,
-            db=app_context.db,
-            k8s_client=app_context.k8s_api_client # Pass the shared client instance
-        )
-        # Start the watcher (it manages its own background tasks)
+    
+    # Start event watcher if available
+    if app_context.k8s_event_watcher is not None:
         await app_context.k8s_event_watcher.start()
-    elif app_context.db is None:
-        logger.error("KubernetesEventWatcher not started because DB connection failed.")
+        logger.info("Kubernetes event watcher started.")
     else:
-        logger.error("KubernetesEventWatcher not started because DB connection failed.")
-
-    # Start Prometheus Poller Task
-    if app_context.http_client is not None: # Explicit None check
-        prom_task = asyncio.create_task(run_prometheus_poller(app_context))
-        app_context.datasource_tasks.add(prom_task)
-        prom_task.add_done_callback(app_context.datasource_tasks.discard)
-
-    if app_context.anomaly_detector is not None: # Explicit None check
-        detector_task = asyncio.create_task(run_detection_loop(app_context))
-        app_context.processing_tasks.add(detector_task)
-        detector_task.add_done_callback(app_context.processing_tasks.discard)
-
-        if app_context.db is not None and app_context.k8s_api_client is not None: # Explicit None checks
-            remediation_task = asyncio.create_task(run_remediation_trigger(app_context))
+        logger.warning("Kubernetes event watcher not available - event monitoring disabled.")
+    
+    # Start Prometheus metrics fetcher if available
+    try:
+        prom_fetcher = await create_prometheus_fetcher(app_context)
+        if prom_fetcher is not None:
+            await prom_fetcher.start()
+            logger.info("Prometheus metrics fetcher started successfully.")
+        else:
+            logger.warning("Prometheus metrics fetcher not available. Metrics collection disabled.")
+    except Exception as e:
+        logger.error(f"Failed to start Prometheus metrics fetcher: {e}")
+        logger.warning("Prometheus metrics fetching disabled.")
+    
+    # Start detection loop
+    if app_context.anomaly_detector is not None and app_context.db is not None:
+        try:
+            detector_task = asyncio.create_task(
+                detection_loop(
+                    detector=app_context.anomaly_detector,
+                    metric_queue=app_context.metric_queue,
+                    event_queue=app_context.event_queue,
+                    remediation_queue=app_context.remediation_queue,
+                    db=app_context.db,
+                    app_context=app_context,
+                ),
+                name="anomaly_detection_loop"
+            )
+            app_context.processing_tasks.add(detector_task)
+            logger.info("Anomaly detection loop started.")
+        except Exception as detector_err:
+            logger.exception(f"Failed to start detection loop: {detector_err}")
+            logger.warning("Anomaly detection disabled.")
+    else:
+        logger.warning("Anomaly detector or database not available - anomaly detection disabled.")
+    
+    # Start remediation loop
+    if app_context.db is not None and app_context.k8s_api_client is not None and app_context.remediation_queue is not None:
+        try:
+            from kubewise.api.factory import create_planner_dependencies
+            planner_deps = await create_planner_dependencies(app_context)
+            
+            remediation_task = asyncio.create_task(
+                run_remediation_trigger(app_context),
+                name="remediation_trigger_loop"
+            )
             app_context.processing_tasks.add(remediation_task)
-            remediation_task.add_done_callback(app_context.processing_tasks.discard)
-        else:
-            logger.error("Remediation trigger task not started due to missing DB or K8s client.")
-
-        # Start detector state saver task if detector initialized
-        if app_context.anomaly_detector is not None:
-            saver_task = asyncio.create_task(run_detector_state_saver(app_context))
-            app_context.processing_tasks.add(saver_task) # Add to processing tasks for tracking
-            saver_task.add_done_callback(app_context.processing_tasks.discard)
-        else:
-            logger.error("Detector state saver task not started because detector failed to initialize.")
-
-
-    total_tasks = len(app_context.datasource_tasks) + len(app_context.processing_tasks)
-    # Define gauges within lifespan to avoid duplicate registration on reload
-    # Check if metrics already exist in the registry (handles potential edge cases)
-    metric_name = "kubewise_metric_queue_size"
-    if metric_name not in REGISTRY._names_to_collectors:
-        metric_queue_gauge = Gauge(metric_name, "Current number of items in the metric queue")
+            logger.info("Remediation trigger loop started.")
+        except Exception as remediation_err:
+            logger.exception(f"Failed to start remediation loop: {remediation_err}")
+            logger.warning("Automatic remediation disabled.")
     else:
-        metric_queue_gauge = REGISTRY._names_to_collectors[metric_name]
-
-    event_name = "kubewise_event_queue_size"
-    if event_name not in REGISTRY._names_to_collectors:
-        event_queue_gauge = Gauge(event_name, "Current number of items in the event queue")
-    else:
-        event_queue_gauge = REGISTRY._names_to_collectors[event_name]
-
-    remediation_name = "kubewise_remediation_queue_size"
-    if remediation_name not in REGISTRY._names_to_collectors:
-        remediation_queue_gauge = Gauge(remediation_name, "Current number of items in the remediation queue")
-    else:
-        remediation_queue_gauge = REGISTRY._names_to_collectors[remediation_name]
-
-
-    # Pass gauges to the updater task
-    queue_metrics_task = asyncio.create_task(
-        run_queue_metrics_updater(
-            ctx=app_context,
-            metric_gauge=metric_queue_gauge,
-            event_gauge=event_queue_gauge,
-            remediation_gauge=remediation_queue_gauge
+        logger.warning("Required dependencies not available - automatic remediation disabled.")
+    
+    # Start queue metrics updater
+    try:
+        # Create Prometheus gauges for queue sizes
+        metric_queue_gauge = Gauge(
+            "kubewise_metric_queue_size", 
+            "Current number of items in the metric queue"
         )
-    )
-    app_context.processing_tasks.add(queue_metrics_task)
-    queue_metrics_task.add_done_callback(app_context.processing_tasks.discard)
+        event_queue_gauge = Gauge(
+            "kubewise_event_queue_size", 
+            "Current number of items in the event queue"
+        )
+        remediation_queue_gauge = Gauge(
+            "kubewise_remediation_queue_size", 
+            "Current number of items in the remediation queue"
+        )
+        
+        metrics_task = asyncio.create_task(
+            run_queue_metrics_updater(
+                app_context,
+                metric_queue_gauge,
+                event_queue_gauge,
+                remediation_queue_gauge
+            ),
+            name="queue_metrics_updater"
+        )
+        app_context.processing_tasks.add(metrics_task)
+        logger.info("Queue metrics updater started.")
+    except Exception as metrics_err:
+        logger.exception(f"Failed to start queue metrics updater: {metrics_err}")
+    
+    # Start detector state saver
+    if app_context.anomaly_detector is not None:
+        try:
+            saver_task = asyncio.create_task(
+                run_detector_state_saver(app_context),
+                name="detector_state_saver"
+            )
+            app_context.processing_tasks.add(saver_task)
+            logger.info("Detector state saver started.")
+        except Exception as saver_err:
+            logger.exception(f"Failed to start detector state saver: {saver_err}")
+    
+    logger.info("KubeWise server startup completed.")
 
-    total_tasks = len(app_context.datasource_tasks) + len(app_context.processing_tasks)
-    logger.info(f"Started {total_tasks} background task(s).")
-
-
-    yield # Application runs here
+    # --- Yield to HTTP middleware ---
+    yield
 
     # === Shutdown ===
-    logger.info("Starting KubeWise shutdown sequence...")
-    app_context = app.state.app_context # Retrieve context
-    shutdown_timeout = 15.0 # General timeout for shutdown steps in seconds
+    logger.info("Shutting down KubeWise server...")
 
-    async def cancel_and_wait(tasks: Set[asyncio.Task], name: str, timeout: float):
-        """Helper to cancel tasks and wait for them with a timeout."""
-        tasks_to_cancel = [t for t in list(tasks) if t and not t.done()]
-        if not tasks_to_cancel:
-            logger.info(f"No active {name} tasks to cancel.")
-            return
-
-        logger.info(f"Cancelling {len(tasks_to_cancel)} {name} task(s)...")
-        for task in tasks_to_cancel:
-            task.cancel()
-
-        logger.info(f"Waiting up to {timeout}s for {name} tasks to finish after cancellation...")
-        done, pending = await asyncio.wait(tasks_to_cancel, timeout=timeout, return_when=asyncio.ALL_COMPLETED)
-
-        if pending:
-            logger.warning(f"{len(pending)} {name} tasks did not finish within the {timeout}s timeout:")
-            for task in pending:
-                try:
-                    logger.warning(f"  - Task still pending: {task.get_name()} (State: {task._state})")
-                except AttributeError:
-                    logger.warning(f"  - Task still pending: {task.get_name()}")
-        else:
-            logger.info(f"All cancelled {name} tasks finished within timeout.")
-
-        # Log exceptions from completed tasks
-        for task in done:
-            if task.cancelled():
-                logger.debug(f"Task {task.get_name()} was cancelled successfully.")
-            elif task.exception():
-                try:
-                    task.result() # Re-raise to log
-                except Exception as task_exc:
-                    logger.error(f"Task {task.get_name()} finished with exception: {task_exc!r}")
-
-
-    # --- Ordered Shutdown ---
-    # 1. Stop Kubernetes Event Watcher (uses its own internal timeouts now)
+    # Cancel all background tasks
+    if app_context.processing_tasks:
+        await cancel_and_wait(app_context.processing_tasks, "Processing tasks", 10.0)
+    
+    if app_context.datasource_tasks:
+        await cancel_and_wait(app_context.datasource_tasks, "Data source tasks", 10.0)
+    
+    # Stop event watcher if available
     if app_context.k8s_event_watcher is not None:
-        logger.info("Attempting to stop Kubernetes Event Watcher...")
+        await app_context.k8s_event_watcher.stop()
+        logger.info("Kubernetes event watcher stopped.")
+    
+    # Save detector state before shutdown
+    if app_context.anomaly_detector is not None:
         try:
-            # The watcher's stop method now has internal timeouts
-            await app_context.k8s_event_watcher.stop()
-            logger.info("Kubernetes Event Watcher stop sequence finished.")
-        except Exception as e:
-            # Log error but continue shutdown
-            logger.exception(f"Error during Kubernetes Event Watcher stop: {e}")
-
-    # 2. Cancel Datasource Tasks (Pollers) - Watcher is stopped above
-    await cancel_and_wait(app_context.datasource_tasks, "datasource", shutdown_timeout)
-
-    # 3. Optionally wait for queues to drain? (Skipped for simplicity)
-
-    # 4. Cancel Processing Tasks (Detector, Remediation, Queue Metrics)
-    await cancel_and_wait(app_context.processing_tasks, "processing", shutdown_timeout)
-
-    # 5. Save final detector state before closing clients (with timeout)
-    if app_context.anomaly_detector is not None: # Explicit None check
-        logger.info("Attempting to save final detector state...")
-        try:
-            await asyncio.wait_for(app_context.anomaly_detector.save_state(), timeout=shutdown_timeout)
-            logger.info("Successfully saved final detector state.")
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout ({shutdown_timeout}s) occurred while saving detector state.")
-        except Exception as e:
-            logger.exception(f"Error saving detector state during shutdown: {e}")
-
-    # 6. Close Async Clients (with timeouts)
-    if app_context.http_client is not None: # Explicit None check
-        logger.info("Closing shared HTTP client (httpx)...")
-        try:
-            await asyncio.wait_for(app_context.http_client.aclose(), timeout=5.0)
-            logger.info("Shared HTTP client (httpx) closed.")
-        except asyncio.TimeoutError:
-             logger.error("Timeout occurred while closing HTTP client (httpx).")
-        except Exception as e:
-             logger.exception(f"Error closing HTTP client (httpx): {e}")
-
-    # Close the aiohttp session first, as k8s_api_client uses it
-    if app_context.aiohttp_session is not None: # Explicit None check
-        logger.info("Closing aiohttp client session...")
-        try:
-            # aiohttp session close is async
-            await asyncio.wait_for(app_context.aiohttp_session.close(), timeout=5.0)
-            logger.info("aiohttp client session closed.")
-        except asyncio.TimeoutError:
-             logger.error("Timeout occurred while closing aiohttp client session.")
-        except Exception as e:
-             logger.exception(f"Error closing aiohttp client session: {e}")
-
-    # Closing the k8s_api_client might still be necessary depending on its internal state
-    # but closing the aiohttp session is the primary fix for the reported error.
-    if app_context.k8s_api_client is not None: # Explicit None check
-        logger.info("Closing Kubernetes API client...")
-        try:
-            # Assuming k8s_client.close() is async and safe to call after session close
-            await asyncio.wait_for(app_context.k8s_api_client.close(), timeout=5.0)
-            logger.info("Kubernetes client closed.")
-        except asyncio.TimeoutError:
-             logger.error("Timeout occurred while closing Kubernetes client.")
-        except Exception as e:
-             logger.exception(f"Error closing Kubernetes client: {e}")
-
-
-    # 7. Close Sync Clients (no timeout needed for sync calls)
-    if app_context.mongo_client is not None: # Explicit None check
-        logger.info("Closing MongoDB connection...")
-        try:
-            app_context.mongo_client.close() # Sync close
-            logger.info("MongoDB connection closed.")
-        except Exception as e:
-             logger.exception(f"Error closing MongoDB connection: {e}")
-
-
-    logger.info("KubeWise shutdown sequence complete.")
+            await app_context.anomaly_detector.save_all_state()
+            logger.info("Detector state saved.")
+        except Exception as save_err:
+            logger.error(f"Failed to save detector state: {save_err}")
+    
+    # Close Kubernetes client
+    if app_context.k8s_api_client:
+        await app_context.k8s_api_client.close()
+        logger.info("Kubernetes client closed.")
+    
+    # Final cleanup before exit
+    logger.info("Performing final application cleanup...")
+    
+    # Close the HTTP client and any aiohttp sessions
+    if app_context.http_client is not None:
+        await app_context.http_client.aclose()
+        logger.info("HTTP client closed.")
+        
+    # Close any aiohttp session if present
+    if app_context.aiohttp_session is not None:
+        await app_context.aiohttp_session.close()
+        logger.info("aiohttp session closed.")
+        
+    # Close MongoDB connection
+    if app_context.mongo_client is not None:
+        app_context.mongo_client.close()
+        logger.info("MongoDB client closed.")
+    
+    logger.info("KubeWise server shutdown completed.")
 
 
 # --- Helper Functions ---
@@ -619,13 +496,95 @@ async def run_remediation_trigger(ctx: AppContext):
                     ctx.remediation_queue.task_done()  # Mark task as done
                     continue  # Skip to the next anomaly
                 
-                # --- Remediation Rate Limiting Check ---
+                # --- Early Resource Existence Check ---
+                # Check if the resource still exists before proceeding with planning
                 entity_id = get_entity_id_from_anomaly(anomaly_record)
+                if entity_id and ctx.k8s_api_client is not None:
+                    try:
+                        # Parse namespace and name from entity_id
+                        if "/" in entity_id:
+                            namespace, name = entity_id.split("/", 1)
+                            entity_exists = True
+                            
+                            # Create API clients
+                            core_v1_api = client.CoreV1Api(ctx.k8s_api_client)
+                            apps_v1_api = client.AppsV1Api(ctx.k8s_api_client)
+                            
+                            # Check existence based on entity type
+                            entity_type = anomaly_record.entity_type.lower() if anomaly_record.entity_type else "unknown"
+                            logger.info(f"Early check: Verifying if {entity_type} '{namespace}/{name}' exists before planning...")
+                            
+                            if entity_type == "pod":
+                                try:
+                                    await core_v1_api.read_namespaced_pod(name=name, namespace=namespace)
+                                except client.ApiException as e:
+                                    if e.status == 404:
+                                        entity_exists = False
+                                        logger.info(f"Early check: Pod '{namespace}/{name}' not found, marking as auto-resolved.")
+                            
+                            elif entity_type == "deployment" or entity_type == "deploy":
+                                try:
+                                    await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
+                                except client.ApiException as e:
+                                    if e.status == 404:
+                                        entity_exists = False
+                                        logger.info(f"Early check: Deployment '{namespace}/{name}' not found, marking as auto-resolved.")
+                            
+                            elif entity_type == "service" or entity_type == "svc":
+                                try:
+                                    await core_v1_api.read_namespaced_service(name=name, namespace=namespace)
+                                except client.ApiException as e:
+                                    if e.status == 404:
+                                        entity_exists = False
+                                        logger.info(f"Early check: Service '{namespace}/{name}' not found, marking as auto-resolved.")
+                            
+                            elif entity_type == "statefulset" or entity_type == "sts":
+                                try:
+                                    await apps_v1_api.read_namespaced_stateful_set(name=name, namespace=namespace)
+                                except client.ApiException as e:
+                                    if e.status == 404:
+                                        entity_exists = False
+                                        logger.info(f"Early check: StatefulSet '{namespace}/{name}' not found, marking as auto-resolved.")
+                            
+                            elif entity_type == "daemonset" or entity_type == "ds":
+                                try:
+                                    await apps_v1_api.read_namespaced_daemon_set(name=name, namespace=namespace)
+                                except client.ApiException as e:
+                                    if e.status == 404:
+                                        entity_exists = False
+                                        logger.info(f"Early check: DaemonSet '{namespace}/{name}' not found, marking as auto-resolved.")
+                            
+                            elif entity_type == "node":
+                                try:
+                                    await core_v1_api.read_node(name=name)
+                                except client.ApiException as e:
+                                    if e.status == 404:
+                                        entity_exists = False
+                                        logger.info(f"Early check: Node '{name}' not found, marking as auto-resolved.")
+                            
+                            # If entity doesn't exist, mark as auto-resolved and skip remediation
+                            if not entity_exists:
+                                # Update anomaly status
+                                await ctx.db["anomalies"].update_one(
+                                    {"_id": anomaly_record.id},
+                                    {"$set": {
+                                        "remediation_status": "auto_resolved", 
+                                        "remediation_error": f"{entity_type.capitalize()} '{namespace}/{name}' no longer exists, considering issue resolved."
+                                    }}
+                                )
+                                # Mark task as done and skip to next anomaly
+                                ctx.remediation_queue.task_done()
+                                continue
+                    except Exception as e:
+                        logger.error(f"Early check: Error verifying entity existence: {e}")
+                        # Continue with remediation despite the error in verification
+                
+                # --- Remediation Rate Limiting Check ---
                 proceed_with_remediation = True
                 now = datetime.datetime.now(datetime.timezone.utc) # Get current time once for potential update later
                 if entity_id and ctx.anomaly_detector is not None: # Explicit None check
-                    # Access detector's internal state (use with caution, maybe add a method later)
-                    entity_state = ctx.anomaly_detector._entity_state.setdefault(entity_id, {})
+                    # Access entity state to determine resource type
+                    entity_state = ctx.anomaly_detector._entity_states.setdefault(entity_id, {})
                     last_remediation_time = entity_state.get("last_remediation_time")
 
                     if last_remediation_time:
@@ -654,13 +613,14 @@ async def run_remediation_trigger(ctx: AppContext):
                 if ctx.gemini_agent is not None: # Explicit None check
                     try:
                         # Pass agent and db to the planner function
-                        generated_plan = await planner.generate_remediation_plan( # Correct indentation and variables
+                        from kubewise.api.factory import create_planner_dependencies
+                        planner_deps = await create_planner_dependencies(ctx)
+                        generated_plan = await planner.generate_remediation_plan(
                             anomaly_record=anomaly_record,
-                            db=ctx.db,
-                            k8s_api_client=ctx.k8s_api_client,
+                            dependencies=planner_deps,
                             agent=ctx.gemini_agent
                         )
-                        logger.info(f"Gemini planner generated plan: {generated_plan.model_dump_json(indent=2) if generated_plan else 'None'}")
+                        logger.info(f"Gemini planner generated plan: \n{json.dumps(generated_plan.model_dump(), indent=2, cls=DateTimeEncoder)}")
                     except Exception as plan_err:
                         logger.exception(f"Error during Gemini plan generation: {plan_err}")
                         # Update status to reflect planning error
@@ -672,39 +632,120 @@ async def run_remediation_trigger(ctx: AppContext):
 
                 # Fallback to static plan if Gemini failed or didn't produce actions
                 if not generated_plan or not generated_plan.actions:
-                    if ctx.gemini_agent:
+                    if ctx.gemini_agent is not None:
                          logger.warning("Gemini plan was empty or failed, falling back to static planner.")
                     else:
                          logger.info("Gemini agent not available, using static planner.")
                     # Load static plan (assuming it doesn't raise exceptions easily)
-                    generated_plan = await planner.load_static_plan(anomaly_record, ctx.db)
-                    logger.info(f"Static planner loaded plan: {generated_plan.model_dump_json(indent=2) if generated_plan else 'None'}")
+                    from kubewise.api.factory import create_planner_dependencies
+                    planner_deps = await create_planner_dependencies(ctx)
+                    generated_plan = await planner.load_static_plan(
+                        anomaly_record,
+                        planner_deps.db,
+                        planner_deps.k8s_client
+                    )
+                    logger.info(f"Static planner loaded plan: \n{json.dumps(generated_plan.model_dump(), indent=2, cls=DateTimeEncoder) if generated_plan else 'None'}")
 
 
                 # 2. Execute Plan (if any plan exists with actions)
                 if generated_plan and generated_plan.actions:
-                    logger.info(f"Executing remediation plan with {len(generated_plan.actions)} action(s).")
-                    # Pass k8s client from context to engine
-                    execution_success = await engine.execute_remediation_plan(
-                        plan=generated_plan,
-                        anomaly_record=anomaly_record,
-                        db=ctx.db,
-                        k8s_client=ctx.k8s_api_client, # Pass client
-                        app_context=ctx  # Pass context for metrics
-                    )
-                    # Update last remediation time in state *only if execution was successful*
-                    if execution_success and entity_id and ctx.anomaly_detector is not None: # Explicit None check
-                         # Use the 'now' timestamp captured earlier
-                         ctx.anomaly_detector._entity_state[entity_id]["last_remediation_time"] = now
-                         logger.info(f"Updated last remediation timestamp for entity '{entity_id}'.")
-
+                    logger.info(f"Generated remediation plan with {len(generated_plan.actions)} action(s).")
+                    
+                    # --- Plan Validation ---
+                    # Check if plan has validation fields (backward compatibility)
+                    has_validation_fields = hasattr(generated_plan, 'validation_status')
+                    
+                    # For plans without validation fields, proceed directly to execution
+                    # For plans with validation fields, validate according to validation_status
+                    if has_validation_fields and generated_plan.validation_status == "pending":
+                        logger.info(f"Validating remediation plan for anomaly {anomaly_id_str}...")
+                        
+                        # First, update status to indicate validation in progress
+                        await ctx.db["anomalies"].update_one(
+                            {"_id": anomaly_record.id}, 
+                            {"$set": {"remediation_status": "validating"}}
+                        )
+                        
+                        # Execute a dry run to assess plan safety
+                        if hasattr(generated_plan, 'requires_dry_run') and generated_plan.requires_dry_run:
+                            logger.info(f"Performing dry run to validate plan safety...")
+                            
+                            dry_run_success = await engine.execute_remediation_plan(
+                                plan=generated_plan,
+                                anomaly_record=anomaly_record,
+                                dependencies=planner_deps,
+                                app_context=ctx,
+                                dry_run=True  # Execute in dry run mode
+                            )
+                            
+                            # Update plan with validation results based on the dry run
+                            safety_score = getattr(generated_plan, 'safety_score', None)
+                            if dry_run_success and (safety_score is None or safety_score >= 0.8):
+                                generated_plan.validation_status = "validated"
+                                generated_plan.validation_details = f"Plan validated via dry run with safety score {safety_score or 0.0:.2f}"
+                                logger.info(f"Plan validated successfully. Safety score: {safety_score or 0.0:.2f}")
+                            else:
+                                generated_plan.validation_status = "rejected"
+                                generated_plan.validation_details = f"Plan rejected based on dry run results. Safety score: {safety_score or 0.0:.2f}"
+                                logger.warning(f"Plan validation failed. Safety score: {safety_score or 0.0:.2f}")
+                                
+                                # Update anomaly record with rejected status
+                                await ctx.db["anomalies"].update_one(
+                                    {"_id": anomaly_record.id},
+                                    {"$set": {
+                                        "remediation_status": "validation_failed",
+                                        "remediation_error": generated_plan.validation_details,
+                                        "remediation_plan": generated_plan.model_dump()
+                                    }}
+                                )
+                                
+                                # Skip execution since validation failed
+                                ctx.remediation_queue.task_done()
+                                continue
+                        else:
+                            # If dry run not required, mark as validated
+                            generated_plan.validation_status = "validated"
+                            generated_plan.validation_details = "Plan validated (dry run not required)"
+                    
+                    # Only proceed with validated plans if validation is required
+                    should_execute = not has_validation_fields or generated_plan.validation_status == "validated"
+                    
+                    if should_execute:
+                        logger.info(f"Executing remediation plan...")
+                        
+                        # Use existing planner_deps to provide dependencies
+                        execution_success = await engine.execute_remediation_plan(
+                            plan=generated_plan,
+                            anomaly_record=anomaly_record,
+                            dependencies=planner_deps,
+                            app_context=ctx,  # Pass context for metrics
+                            dry_run=False     # Ensure not in dry run mode
+                        )
+                        
+                        # Update last remediation time in state *only if execution was successful*
+                        if execution_success and entity_id and ctx.anomaly_detector is not None:
+                            # Use the 'now' timestamp captured earlier
+                            ctx.anomaly_detector._entity_states[entity_id]["last_remediation_time"] = now
+                            logger.info(f"Updated last remediation timestamp for entity '{entity_id}'.")
+                    elif has_validation_fields:
+                        logger.warning(f"Skipping execution: Plan validation status is '{generated_plan.validation_status}'")
+                        
+                        # Update anomaly record to indicate we're skipping due to validation
+                        validation_details = getattr(generated_plan, 'validation_details', "No validation details available")
+                        await ctx.db["anomalies"].update_one(
+                            {"_id": anomaly_record.id},
+                            {"$set": {
+                                "remediation_status": "validation_failed", 
+                                "remediation_error": f"Validation status: {generated_plan.validation_status}. Details: {validation_details}"
+                            }}
+                        )
                 elif generated_plan: # Plan exists but has no actions
-                     logger.info(f"Final remediation plan has no actions. Skipping execution.")
-                     # Update status only if it wasn't already planning_failed
-                     await ctx.db["anomalies"].update_one(
-                         {"_id": anomaly_record.id, "remediation_status": {"$ne": "planning_failed"}},
-                         {"$set": {"remediation_status": "completed", "remediation_error": "No actions generated by planner(s)."}}
-                     )
+                    logger.info(f"Final remediation plan has no actions. Skipping execution.")
+                    # Update status only if it wasn't already planning_failed
+                    await ctx.db["anomalies"].update_one(
+                        {"_id": anomaly_record.id, "remediation_status": {"$ne": "planning_failed"}},
+                        {"$set": {"remediation_status": "completed", "remediation_error": "No actions generated by planner(s)."}}
+                    )
                 else: # No plan could be generated by either method
                     logger.error(f"Skipping execution as no plan could be generated.")
                     # Status should have been updated within the planner function
@@ -778,55 +819,84 @@ async def run_detector_state_saver(ctx: AppContext, interval_seconds: Optional[i
     # Keep track of last memory cleanup time
     last_memory_cleanup = datetime.datetime.now()
     memory_cleanup_interval = interval_seconds * 6  # Clean memory every 6 save intervals
+    
+    # Import pymongo errors for specific handling
+    from pymongo.errors import _OperationCancelled, NetworkTimeout, ConnectionFailure, AutoReconnect
+    from kubewise.utils.retry import with_exponential_backoff
+    
+    # Define save state function with retry decorator
+    @with_exponential_backoff(max_retries=3, initial_delay=1.0, max_delay=30.0)
+    async def save_detector_state_with_retry():
+        """Save detector state with automatic retries on connection errors."""
+        await ctx.anomaly_detector.save_state()
 
     while True:
         try:
             await asyncio.sleep(interval_seconds)
             logger.info("Attempting to save detector state...")
-            await ctx.anomaly_detector.save_state()
-            logger.info("Detector state saved successfully.")
             
-            # Perform memory cleanup periodically
+            try:
+                # Use the retry-wrapped function
+                await save_detector_state_with_retry()
+                logger.info("Detector state saved successfully.")
+            except (_OperationCancelled, NetworkTimeout, ConnectionFailure, AutoReconnect) as db_err:
+                # These errors should be handled by the retry decorator, but if we still get here,
+                # it means all retries failed
+                logger.error(f"MongoDB connection error during state save after multiple retries: {db_err}")
+                
+                # Attempt to reconnect to MongoDB
+                try:
+                    logger.info("Attempting to reconnect to MongoDB...")
+                    if ctx.mongo_client is not None:
+                        # Check if we need to reinitialize the connection
+                        try:
+                            # Ping the database to check connection
+                            await ctx.mongo_client.admin.command('ping')
+                            logger.info("MongoDB connection is still valid")
+                        except Exception:
+                            logger.warning("MongoDB connection is invalid, reinitializing...")
+                            # Reinitialize client
+                            mongo_connection_uri = str(settings.mongo_uri)
+                            ctx.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
+                                mongo_connection_uri,
+                                maxPoolSize=100, 
+                                minPoolSize=10,
+                                maxIdleTimeMS=30000,
+                                serverSelectionTimeoutMS=5000,
+                                connectTimeoutMS=5000,
+                                socketTimeoutMS=10000,
+                                waitQueueTimeoutMS=5000,
+                                retryWrites=True,
+                                w="majority"
+                            )
+                            ctx.db = ctx.mongo_client[settings.mongo_db_name]
+                            # Update detector's database reference
+                            if ctx.anomaly_detector is not None:
+                                ctx.anomaly_detector.db = ctx.db
+                except Exception as reconnect_err:
+                    logger.exception(f"Failed to reconnect to MongoDB: {reconnect_err}")
+            except Exception as e:
+                logger.exception(f"Error saving detector state: {e}")
+                
+            # Periodic memory cleanup to avoid unbounded growth
             now = datetime.datetime.now()
             time_since_cleanup = (now - last_memory_cleanup).total_seconds()
-            if time_since_cleanup >= memory_cleanup_interval:
-                logger.info("Performing detector memory cleanup...")
-                # Clean up entity state for entities without recent activity
-                if hasattr(ctx.anomaly_detector, '_entity_state'):
-                    entities_before = len(ctx.anomaly_detector._entity_state)
-                    # Keep only entities with activity in the last 24 hours
-                    cleanup_cutoff = now - datetime.timedelta(hours=24)
-                    stale_entities = []
+            
+            if time_since_cleanup >= memory_cleanup_interval and ctx.anomaly_detector is not None:
+                logger.info("Performing memory cleanup for detector state...")
+                try:
+                    cleanup_count = ctx.anomaly_detector.cleanup_old_data()
+                    last_memory_cleanup = now
+                    logger.info(f"Memory cleanup complete. Removed {cleanup_count} old records.")
+                except Exception as cleanup_err:
+                    logger.exception(f"Error during memory cleanup: {cleanup_err}")
                     
-                    for entity_id, state in ctx.anomaly_detector._entity_state.items():
-                        last_activity = state.get('last_activity_time', state.get('last_remediation_time'))
-                        if last_activity and last_activity < cleanup_cutoff:
-                            stale_entities.append(entity_id)
-                    
-                    # Remove stale entities
-                    for entity_id in stale_entities:
-                        del ctx.anomaly_detector._entity_state[entity_id]
-                    
-                    entities_after = len(ctx.anomaly_detector._entity_state)
-                    logger.info(f"Memory cleanup complete: removed {entities_before - entities_after} stale entities")
-                
-                last_memory_cleanup = now
-
         except asyncio.CancelledError:
             logger.info("Detector state saver task cancelled.")
-            # Attempt one final save on cancellation if possible
-            if ctx.anomaly_detector:
-                try:
-                    logger.info("Attempting final detector state save on cancellation...")
-                    await ctx.anomaly_detector.save_state()
-                    logger.info("Final detector state saved.")
-                except Exception as final_save_err:
-                    logger.error(f"Error during final detector state save: {final_save_err}")
             break
         except Exception as e:
-            logger.exception(f"Detector state saver task failed during save attempt: {e}")
-            # Avoid tight loop on error, wait before retrying
-            await asyncio.sleep(interval_seconds)
+            logger.exception(f"Unhandled error in detector state saver task: {e}")
+            await asyncio.sleep(min(60, interval_seconds))  # Wait before retrying, but not too long
 
 
 # --- FastAPI App Creation ---
@@ -835,9 +905,71 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application instance."""
     app = FastAPI(
         title="KubeWise",
-        description="Autonomous Kubernetes Anomaly Detection & Self-Remediation",
+        description="""
+        Autonomous Kubernetes Anomaly Detection & Self-Remediation
+        
+        KubeWise monitors Kubernetes clusters using Prometheus metrics and Kubernetes API events, 
+        detects anomalies using online machine learning (River ML), and attempts automated remediation 
+        using AI-generated plans (Pydantic-AI + Gemini) executed via a DSL.
+
+        Core Components:
+        
+        · Collectors: Poll Prometheus for metrics and watch Kubernetes API events
+        · Detector: Process metrics and events to detect anomalies using River ML
+        · Remediation Planner: Generate action plans using AI (Gemini)
+        · Remediation Engine: Execute action plans through Kubernetes API
+        
+        API Documentation:
+        
+        Use the endpoints below to interact with the KubeWise system. Key endpoints include:
+        · /health - Basic health check
+        · /health/detail - Detailed health information about all system components
+        · /metrics - Prometheus metrics for monitoring KubeWise itself
+        · /anomalies - List detected anomalies
+        · /config - View and update system configuration
+        """,
         version="0.1.0",
         lifespan=lifespan, # Use the async context manager for startup/shutdown
+        swagger_ui_parameters={
+            "docExpansion": "list",  # Expand the operation list by default
+            "defaultModelsExpandDepth": 3,  # Expand models to show nested objects
+            "deepLinking": True,  # Enable deep linking for sharing URLs to specific operations
+            "displayRequestDuration": True,  # Show response time in the UI
+            "syntaxHighlight.theme": "monokai",  # Use a more modern syntax highlighting theme
+            "filter": True,  # Enable filtering of operations
+            "persistAuthorization": True,  # Keep auth data between page refreshes
+        },
+        contact={
+            "name": "Lohit Kolluri",
+            "url": "https://github.com/lohitkolluri/KubeWise",
+            "email": "me@lohit.is-a.dev",
+        },
+        license_info={
+            "name": "MIT",
+            "url": "https://opensource.org/licenses/MIT",
+        },
+        openapi_tags=[
+            {
+                "name": "Health",
+                "description": "Endpoints for checking system health and status",
+            },
+            {
+                "name": "Metrics",
+                "description": "Prometheus metrics endpoint for monitoring KubeWise",
+            },
+            {
+                "name": "Anomalies",
+                "description": "Retrieve information about detected anomalies",
+            },
+            {
+                "name": "Configuration",
+                "description": "View and update system configuration",
+            },
+            {
+                "name": "Validation",
+                "description": "Tools to validate Prometheus queries",
+            },
+        ],
     )
     
     # Add metrics middleware
@@ -897,3 +1029,37 @@ if __name__ == "__main__":
     import uvicorn
     # Uvicorn needs the import string for the factory or app instance
     uvicorn.run("kubewise.api.server:create_app", host="0.0.0.0", port=8000, reload=True, factory=True)
+
+async def cancel_and_wait(tasks: Set[asyncio.Task], name: str, timeout: float):
+    """Helper to cancel tasks and wait for them with a timeout."""
+    tasks_to_cancel = [t for t in list(tasks) if t and not t.done()]
+    if not tasks_to_cancel:
+        logger.info(f"No active {name} tasks to cancel.")
+        return
+
+    logger.info(f"Cancelling {len(tasks_to_cancel)} {name} task(s)...")
+    for task in tasks_to_cancel:
+        task.cancel()
+
+    logger.info(f"Waiting up to {timeout}s for {name} tasks to finish after cancellation...")
+    done, pending = await asyncio.wait(tasks_to_cancel, timeout=timeout, return_when=asyncio.ALL_COMPLETED)
+
+    if pending:
+        logger.warning(f"{len(pending)} {name} tasks did not finish within the {timeout}s timeout:")
+        for task in pending:
+            try:
+                logger.warning(f"  - Task still pending: {task.get_name()} (State: {task._state})")
+            except AttributeError:
+                logger.warning(f"  - Task still pending: {task.get_name()}")
+    else:
+        logger.info(f"All cancelled {name} tasks finished within timeout.")
+
+    # Log exceptions from completed tasks
+    for task in done:
+        if task.cancelled():
+            logger.debug(f"Task {task.get_name()} was cancelled successfully.")
+        elif task.exception():
+            try:
+                task.result()  # Re-raise to log
+            except Exception as task_exc:
+                logger.error(f"Task {task.get_name()} finished with exception: {task_exc!r}")

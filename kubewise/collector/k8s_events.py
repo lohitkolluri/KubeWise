@@ -187,7 +187,8 @@ class KubernetesEventWatcher:
         self,
         events_queue: asyncio.Queue[KubernetesEvent],
         db: motor.motor_asyncio.AsyncIOMotorDatabase,
-        k8s_client: client.ApiClient, # Accept the client instance
+        k8s_client: client.ApiClient,
+        k8s_core_api: client.CoreV1Api,
         watch_timeout: int = 300,
         resource_version_collection: str = "k8s_resource_versions",
         **kwargs
@@ -196,46 +197,63 @@ class KubernetesEventWatcher:
         Initialize the Kubernetes event watcher.
         
         Args:
-            events_queue: Queue to put parsed events onto
-            db: MongoDB database connection
-            k8s_client: Kubernetes API client instance
-            watch_timeout: Timeout for watch connection in seconds
-            resource_version_collection: Collection name for persisting resource version
+            events_queue: Queue to put events into
+            db: MongoDB database for state persistence
+            k8s_client: Kubernetes API client for authentication
+            k8s_core_api: Kubernetes Core API client
+            watch_timeout: Timeout for watch requests in seconds
+            resource_version_collection: Collection name for resource version persistence
+            **kwargs: Additional options
         """
-        self._events_queue = events_queue
-        self._db = db
-        self._resource_version = None
-        self._watch_timeout = watch_timeout
-        self._resource_version_collection = resource_version_collection
+        self.events_queue = events_queue
+        self.db = db
+        self.k8s_client = k8s_client
+        self.k8s_core_api = k8s_core_api
+        self.watch_timeout = watch_timeout
+        self.resource_version_collection = resource_version_collection
+        
+        # Extract any namespace restrictions from kwargs
+        self.watch_namespaces = kwargs.get('namespaces')
+        
+        # Initialize state fields
+        self._running = False
+        self._resource_version = ""  # Will be updated from DB on start
+        self._watch_tasks: Set[asyncio.Task] = set()
+        self._watcher_task: Optional[asyncio.Task] = None
+        self._health_check_task: Optional[asyncio.Task] = None
+        self._resource_state_task: Optional[asyncio.Task] = None
+        self._task_group: Optional[asyncio.Task] = None
+        self._exit_stack = AsyncExitStack()
+        
+        # For use in stop() method
         self._shutdown_event = asyncio.Event()
-        self._k8s_client = k8s_client
-        self._api_client = None  # Will be initialized in start()
-        self._core_api = None  # Will be initialized in start()
-        self._watch_task = None
-        self._health_check_task = None
-        self._resource_state_task = None
         
-        # Track Kubernetes resource states to avoid detecting resolved failures
-        self._resource_states = {}  # {resource_key: {"healthy": bool, "checked_at": datetime}}
-        self._resource_state_queue = asyncio.Queue()  # Queue for resource states updates
+        # Resource health tracking
+        self._resource_states: Dict[str, Dict[str, Any]] = {}
+        self._resource_state_queue: asyncio.Queue = asyncio.Queue()
+        self._last_health_check: Dict[str, datetime.datetime] = {}
+        self._health_check_interval = 60.0  # seconds
         
-        # Shared state between watch tasks
-        self._last_successful_watch = None
-        self._watch_failures = 0
-        self._watch_restarts = 0
-        self._connection_backoff = 1.0  # Initial backoff in seconds
+        # Add missing attribute for watch success tracking
+        self._last_watch_success = time.monotonic()
         
-        # Logger initialization
-        self._logger = logger.bind(
-            module="k8s_events",
-            component="watcher"
-        )
+        # Configuration
+        self.min_backoff_delay = kwargs.get("min_backoff_delay", 1.0)
+        self.max_backoff_delay = kwargs.get("max_backoff_delay", 60.0)
+        self.jitter_factor = kwargs.get("jitter_factor", 0.1)
         
-        self._logger.info("Initialized KubernetesEventWatcher")
+        # Watch statistics
+        self.events_received = 0
+        self.events_queued = 0
+        self.errors_encountered = 0
+        self.reconnections = 0
+        self._watch_restarts = 0  # Counter for watch restarts
+        
+        logger.info(f"Initialized KubernetesEventWatcher (timeout: {watch_timeout}s)")
 
     async def start(self) -> None:
         """Start the event watcher with proper connection setup."""
-        if self._watch_task:
+        if self._watch_tasks:
             logger.warning("KubernetesEventWatcher is already running")
             return
             
@@ -248,10 +266,10 @@ class KubernetesEventWatcher:
         self._resource_version = await self._get_last_resource_version()
         
         # Start background tasks
-        self._watch_task = asyncio.create_task(
+        self._watch_tasks.add(asyncio.create_task(
             self._event_watch_loop(),
             name="kubernetes_event_watcher"
-        )
+        ))
         self._health_check_task = asyncio.create_task(
             self._health_check_loop(), 
             name="kubernetes_event_watcher_health"
@@ -264,65 +282,51 @@ class KubernetesEventWatcher:
         logger.info(f"Kubernetes event watcher started successfully with resource_version: {self._resource_version or 'latest'}")
     
     async def stop(self) -> None:
-        """Stop the event watcher and clean up connections."""
-        if not self._watch_task:
-            logger.debug("KubernetesEventWatcher is not running")
+        """Safely stop the Kubernetes event watcher and clean up resources."""
+        if not self._running:
+            logger.info("Kubernetes event watcher is not running")
             return
             
         logger.info("Stopping Kubernetes event watcher...")
-        self._shutdown_event.set() # Signal loops to stop
-
-        # Save current resource version before stopping (with timeout)
-        if self._resource_version:
+        self._running = False
+        
+        # Cancel the main task if running
+        if self._watcher_task and not self._watcher_task.done():
+            self._watcher_task.cancel()
             try:
-                logger.info("Attempting to save resource version before stopping...")
-                await asyncio.wait_for(self._save_resource_version(self._resource_version), timeout=10.0) # Add 10s timeout
-                logger.info("Successfully saved resource version.")
-            except asyncio.TimeoutError:
-                logger.error("Timeout occurred while saving resource version during stop.")
-            except Exception as e:
-                logger.exception(f"Error saving resource version during stop: {e}")
-
-
-        # Cancel tasks
-        tasks_to_await = []
-        for task in [self._watch_task, self._health_check_task, self._resource_state_task]:
+                await self._watcher_task
+            except asyncio.CancelledError:
+                pass
+            
+        # Cancel the health check task if running
+        if self._health_check_task and not self._health_check_task.done():
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+                
+        # Cancel resource state task if running
+        if self._resource_state_task and not self._resource_state_task.done():
+            self._resource_state_task.cancel()
+            try:
+                await self._resource_state_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Cancel any active watch tasks
+        for task in list(self._watch_tasks):
             if task and not task.done():
-                logger.info(f"Cancelling task: {task.get_name()}")
                 task.cancel()
-                tasks_to_await.append(task)
-
-        # Wait for cancelled tasks to finish (with timeout)
-        if tasks_to_await:
-            logger.info(f"Waiting for {len(tasks_to_await)} tasks to finish after cancellation...")
-            # Wait for all cancelled tasks concurrently with a timeout
-            # Use wait instead of gather to handle timeouts more gracefully for individual tasks
-            done, pending = await asyncio.wait(tasks_to_await, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
-
-            if pending:
-                logger.warning(f"{len(pending)} tasks did not finish within the 15s timeout after cancellation:")
-                for task in pending:
-                    # Attempt to log task state if possible (may vary by Python version)
-                    try:
-                        logger.warning(f"  - Task still pending: {task.get_name()} (State: {task._state})")
-                    except AttributeError:
-                         logger.warning(f"  - Task still pending: {task.get_name()}")
-            else:
-                 logger.info("All cancelled tasks finished within timeout.")
-
-            # Log any exceptions from tasks that completed (even if cancelled)
-            for task in done:
-                 if task.cancelled():
-                     logger.debug(f"Task {task.get_name()} was cancelled successfully.")
-                 elif task.exception():
-                     # Log the exception raised by the task
-                     try:
-                         task.result() # This will re-raise the exception for logging
-                     except Exception as task_exc:
-                         logger.error(f"Task {task.get_name()} finished with exception: {task_exc!r}")
-
-
-        # Close the exit stack (with timeout)
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        # Set the shutdown event to signal we're shutting down
+        self._shutdown_event.set()
+        
+        # Close the async exit stack
         try:
             logger.info("Closing async exit stack...")
             await asyncio.wait_for(self._shutdown_event.wait(), timeout=5.0) # Add 5s timeout
@@ -334,83 +338,79 @@ class KubernetesEventWatcher:
 
         logger.info("Kubernetes event watcher stop sequence finished.")
     
+    async def _event_watch_loop(self) -> None:
+        """Background task that watches for Kubernetes events."""
+        logger.info("Starting Kubernetes event watch loop")
+        
+        # Create Watch instance
+        w = watch.Watch()
+        
+        try:
+            # Try to get the last stored resource version
+            self._resource_version = await self._get_last_resource_version()
+            if self._resource_version:
+                logger.info(f"Resuming event watch from resourceVersion {self._resource_version}")
+            else:
+                logger.info("Starting event watch from current state (no stored resourceVersion)")
+            
+            # Start the actual watch with built-in retry
+            await self._watch_stream_with_backoff(self.k8s_core_api, w)
+                
+        except asyncio.CancelledError:
+            logger.info("Event watch loop cancelled")
+            w.stop()
+            raise
+            
+        except Exception as e:
+            logger.exception(f"Unhandled error in event watch loop: {e}")
+            w.stop()
+            raise
+
     @with_exponential_backoff(max_retries=None) # Use decorator for retries, retry indefinitely until stop is called
     async def _watch_stream_with_backoff(self, v1: client.CoreV1Api, w: watch.Watch) -> None:
-        """Starts and processes the Kubernetes event watch stream."""
-        logger.info(
-            f"Starting Kubernetes event watch stream with resource_version='{self._resource_version or 'latest'}'"
-        )
-
-        # Configure watch options
-        watch_options = {
-            'timeout_seconds': self._watch_timeout,
-            'resource_version': self._resource_version,
-            'allow_watch_bookmarks': True  # Enable bookmarks for tracking resourceVersion
-        }
-
-        # Start the watch stream
-        stream = w.stream(v1.list_event_for_all_namespaces, **watch_options)
-
-        # Process events from stream
-        async for event_obj in stream:
-            if not self._shutdown_event.is_set():
-                await self._process_event(event_obj)
-                self._last_successful_watch = time.monotonic()
-            else:
-                logger.info("Watch stream stopped during stream processing")
-                break
-
-        logger.info("Watch stream ended normally.") # No longer "Will restart." as the loop handles restart
-
-    async def _event_watch_loop(self) -> None:
-        """Main loop for watching Kubernetes events."""
-        logger.info("Starting Kubernetes event watch loop")
-
-        # Use the provided ApiClient instance
-        if not self._k8s_client:
-             logger.error("Kubernetes API client not provided to watcher. Exiting loop.")
-             return
-        v1 = client.CoreV1Api(self._k8s_client)
-        w = watch.Watch()
-
-        while not self._shutdown_event.is_set():
+        """Watch the Kubernetes event stream with backoff/retry on failures."""
+        if not self._running:
+            return  # Don't start if we're stopping
+            
+        self.reconnections += 1
+        field_selector = None  # Optional: can filter with 'type=Warning'
+        
+        # Define which namespaces to watch
+        namespaces = self.watch_namespaces or ['']  # Empty string means all namespaces
+        
+        for namespace in namespaces:
+            name_str = f"namespace '{namespace}'" if namespace else "all namespaces"
+            logger.info(f"Starting event watch for {name_str} from resourceVersion {self._resource_version or 'current'}")
+            
+            stream = w.stream(
+                v1.list_namespaced_event if namespace else v1.list_event_for_all_namespaces,
+                namespace=namespace if namespace else None,
+                timeout_seconds=self.watch_timeout,
+                resource_version=self._resource_version,
+                field_selector=field_selector,
+                _request_timeout=self.watch_timeout + 60
+            )
+            
+            self._last_watch_success = time.monotonic()
+            
             try:
-                # Call the decorated function
-                await self._watch_stream_with_backoff(v1, w)
-
-            except client.ApiException as e:
-                self._watch_failures += 1
-
-                if e.status == 410:  # Gone - resource version too old
-                    # Log as INFO since this is expected behavior when RV expires
-                    logger.info(f"Resource version '{self._resource_version}' too old (410 Gone). Resetting watch to latest.")
-                    self._resource_version = ""
-                    await self._save_resource_version(self._resource_version) # Save the reset state
-                else:
-                    # Generic API errors are handled by the decorator's retry logic
-                    # If the decorator's retries are exhausted, the exception will propagate here
-                    logger.error(
-                        f"Kubernetes API error during event watch after retries: {e.status} - {e.reason}. "
-                        f"Restarting watch loop." # The while loop handles the restart
-                    )
-
-            except asyncio.TimeoutError:
-                # Expected timeout after watch_timeout
-                logger.info("Kubernetes watch stream timed out as expected. Reconnecting with same resource_version.")
-                # The while loop will continue, effectively reconnecting
-
+                async for event in stream:
+                    if not self._running:
+                        logger.info("Watch terminated due to watcher stopping")
+                        w.stop()
+                        return
+                        
+                    await self._process_event(event)
             except asyncio.CancelledError:
-                logger.info("Kubernetes event watch task cancelled")
-                await self._save_resource_version(self._resource_version)
+                logger.info("Watch stream cancelled")
+                w.stop()
+                break
+            except Exception as e:
+                self.errors_encountered += 1
+                logger.exception(f"Error in event watch stream: {e}")
+                w.stop()
                 break
 
-            except Exception as e:
-                self._watch_failures += 1
-                logger.exception(
-                    f"Unexpected error in Kubernetes event watch loop: {e}. "
-                    f"Restarting watch loop." # The while loop handles the restart
-                )
-    
     async def _process_event(self, event_obj: Dict[str, Any]) -> None:
         """Process a single event from the watch stream."""
         try:
@@ -573,27 +573,45 @@ class KubernetesEventWatcher:
         """Periodically check the health of the watcher connection."""
         logger.info(f"Starting Kubernetes event watcher health check loop (every {HEALTH_CHECK_INTERVAL}s)")
         
-        while not self._shutdown_event.is_set():
+        while self._watch_tasks:
             try:
                 await asyncio.sleep(HEALTH_CHECK_INTERVAL)
                 
-                # Skip health check if we've had a recent event
-                if (self._last_successful_watch and 
-                    time.monotonic() - self._last_successful_watch < HEALTH_CHECK_INTERVAL):
-                    logger.debug("Skipping health check, recent successful event processing")
+                # Safely check for recent event processing
+                try:
+                    # Make sure the attribute exists
+                    if not hasattr(self, '_last_watch_success'):
+                        self._last_watch_success = time.monotonic()
+                        logger.warning("Initialized missing _last_watch_success attribute")
+                    
+                    # Now safely check for recent activity
+                    recent_activity = (self._last_watch_success is not None and 
+                        time.monotonic() - self._last_watch_success < HEALTH_CHECK_INTERVAL)
+                    
+                    if recent_activity:
+                        logger.debug("Skipping health check, recent successful event processing")
+                        continue
+                    
+                except AttributeError:
+                    # Reinitialize the attribute if missing for some reason
+                    self._last_watch_success = time.monotonic()
+                    logger.warning("Reinitialized missing _last_watch_success attribute")
                     continue
+                except Exception as attr_err:
+                    logger.error(f"Error checking _last_watch_success: {attr_err}")
+                    # Continue with health check as if it needs checking
                 
                 # Check if watch task is still running
-                if not self._watch_task or self._watch_task.done():
-                    if self._watch_task and self._watch_task.exception():
-                        logger.error(f"Watch task failed with exception: {self._watch_task.exception()}")
+                if not any(task and not task.done() for task in self._watch_tasks):
+                    if any(task and task.exception() for task in self._watch_tasks):
+                        logger.error(f"Watch task failed with exception: {[task.exception() for task in self._watch_tasks if task.exception()]}")
                     
                     logger.warning("Watch task is not running. Restarting event watcher.")
                     # Restart the watch task
-                    self._watch_task = asyncio.create_task(
+                    self._watch_tasks.add(asyncio.create_task(
                         self._event_watch_loop(),
                         name="kubernetes_event_watcher_restarted"
-                    )
+                    ))
                     
             except asyncio.CancelledError:
                 logger.info("Health check loop cancelled")
@@ -624,7 +642,7 @@ class KubernetesEventWatcher:
         if not resource_version:  # Don't save empty string
             return
         
-        await self._db[STATE_COLLECTION_NAME].update_one(
+        await self.db[STATE_COLLECTION_NAME].update_one(
             {"_id": WATCHER_STATE_DOC_ID},
             {"$set": {
                 "last_resource_version": resource_version,
@@ -644,7 +662,7 @@ class KubernetesEventWatcher:
             check_interval = 300.0  # Check resource states every 5 minutes
             self._logger.info(f"Starting Kubernetes resource state checker loop (every {check_interval}s)")
             
-            while not self._shutdown_event.is_set():
+            while self._watch_tasks:
                 try:
                     # Check health of resources that have had events
                     await self._check_all_resources_health()
@@ -866,7 +884,7 @@ class KubernetesEventWatcher:
                     deployments_by_namespace[namespace] = []
                 deployments_by_namespace[namespace].append(name)
                 
-            apps_api = client.AppsV1Api(self._k8s_client)
+            apps_api = client.AppsV1Api(self.k8s_client)
             
             for namespace, deployment_names in deployments_by_namespace.items():
                 try:
@@ -935,7 +953,7 @@ class KubernetesEventWatcher:
                     statefulsets_by_namespace[namespace] = []
                 statefulsets_by_namespace[namespace].append(name)
                 
-            apps_api = client.AppsV1Api(self._k8s_client)
+            apps_api = client.AppsV1Api(self.k8s_client)
             
             for namespace, statefulset_names in statefulsets_by_namespace.items():
                 try:
@@ -1004,7 +1022,7 @@ class KubernetesEventWatcher:
                     daemonsets_by_namespace[namespace] = []
                 daemonsets_by_namespace[namespace].append(name)
                 
-            apps_api = client.AppsV1Api(self._k8s_client)
+            apps_api = client.AppsV1Api(self.k8s_client)
             
             for namespace, daemonset_names in daemonsets_by_namespace.items():
                 try:
@@ -1097,7 +1115,7 @@ class KubernetesEventWatcher:
     async def _get_pods(self, namespace="default"):
         """Get pods in the specified namespace."""
         try:
-            core_api = client.CoreV1Api(self._k8s_client)
+            core_api = client.CoreV1Api(self.k8s_client)
             # This method returns a coroutine that must be awaited
             pod_list = await core_api.list_namespaced_pod(namespace=namespace)
             # Ensure we have a response with items attribute
@@ -1115,7 +1133,7 @@ class KubernetesEventWatcher:
     async def _get_nodes(self):
         """Get all nodes in the cluster."""
         try:
-            core_api = client.CoreV1Api(self._k8s_client)
+            core_api = client.CoreV1Api(self.k8s_client)
             # This method returns a coroutine that must be awaited
             node_list = await core_api.list_node()
             # Ensure we have a response with items attribute

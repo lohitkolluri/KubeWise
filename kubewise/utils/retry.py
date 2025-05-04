@@ -6,19 +6,18 @@ from typing import Any, Callable, Coroutine, Dict, Optional, TypeVar, cast
 
 from loguru import logger
 
-# --- Type Definitions ---
+# Type Definitions
 T = TypeVar('T')
 F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
 
-# --- Constants ---
-# These constants are defaults, they can be overridden by the calling function
+# Default retry configuration
 DEFAULT_MAX_RETRY_ATTEMPTS = 3
 DEFAULT_INITIAL_RETRY_DELAY = 1.0  # seconds
 DEFAULT_MAX_RETRY_DELAY = 30.0  # seconds
 DEFAULT_RETRY_BACKOFF_FACTOR = 2.0
 DEFAULT_JITTER_FACTOR = 0.1  # 10% jitter
 
-# Circuit breaker constants
+# Circuit breaker configuration
 CIRCUIT_OPEN_TIMEOUT = 60.0  # seconds to keep circuit open before trying half-open state
 ERROR_THRESHOLD = 5  # number of errors before opening circuit
 HALF_OPEN_MAX_CALLS = 3  # max calls to allow in half-open state
@@ -57,7 +56,6 @@ def with_exponential_backoff(
             delay = initial_delay
             attempt = 0
             
-            # Get function name for logging
             func_name = func.__qualname__
             
             while True:
@@ -66,19 +64,15 @@ def with_exponential_backoff(
                 try:
                     return await func(*args, **kwargs)
                 except Exception as e:
-                    # Check if we've reached max retries
                     if max_retries is not None and attempt >= max_retries:
                         logger.error(f"Function {func_name} failed after {attempt} attempts. Last error: {repr(e)}")
-                        # Preserve the original exception by raising it directly
                         raise
                     
-                    # Log the error and prepare for retry
                     logger.warning(
                         f"Function {func_name} failed on attempt {attempt}"
                         f"{f'/{max_retries}' if max_retries else ''}: {repr(e)}"
                     )
                     
-                    # Calculate jitter
                     jitter = delay * jitter_factor
                     actual_delay = delay + random.uniform(-jitter, jitter)
                     actual_delay = max(0.1, actual_delay)  # Ensure minimum delay
@@ -88,7 +82,6 @@ def with_exponential_backoff(
                     
                     await asyncio.sleep(actual_delay)
                     
-                    # Increase delay for next attempt with backoff
                     delay = min(delay * backoff_factor, max_delay)
         
         return cast(F, wrapper)

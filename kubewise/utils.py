@@ -1,5 +1,7 @@
 import math
 
+# NOTE: This implementation is superseded by the version in utils/__init__.py.
+# TODO: This file should be removed, and any unique functionality merged into utils/__init__.py
 def format_metric_value(metric_name: str, value: float) -> str:
     """
     Formats a raw metric value into a human-readable string based on the metric name.
@@ -29,22 +31,19 @@ def format_metric_value(metric_name: str, value: float) -> str:
         else:
             return f"{value / (1024**4):.1f} TiB"
 
-    # CPU (Cores or Seconds Total -> Cores) - Assuming values are in cores or core-seconds
-    # Convert core-seconds to cores if it's a rate, otherwise format directly
-    # Simple heuristic: if 'usage' or 'seconds' is in the name, treat as cores/millicores
+    # CPU (Cores or Seconds Total -> Cores)
     if "cpu" in name_lower and ("usage" in name_lower or "seconds" in name_lower or "utilization" in name_lower):
-         # Handle percentages separately
+         # Handle percentages
         if "pct" in name_lower or "utilization_pct" in name_lower:
              return f"{value:.1f}%"
         # Handle core values
         if abs(value) < 1.0:
-            return f"{value * 1000:.1f} mCores" # Millicores
+            return f"{value * 1000:.1f} mCores"
         else:
             return f"{value:.2f} Cores"
 
     # Network/Disk Rates (Bytes/Second)
     if ("network" in name_lower or "disk" in name_lower or "fs_" in name_lower) and ("rate" in name_lower or "bytes" in name_lower or "iops" in name_lower):
-         # Handle IOPS separately
         if "iops" in name_lower:
              return f"{value:.1f} IOPS"
         # Handle Bytes/Second
@@ -57,8 +56,8 @@ def format_metric_value(metric_name: str, value: float) -> str:
         else:
             return f"{value / (1024**3):.1f} GiB/s"
 
-    # Time (Seconds)
-    if "seconds" in name_lower and "cpu" not in name_lower: # Avoid re-matching CPU seconds
+    # Time (Seconds) - non-CPU metrics
+    if "seconds" in name_lower and "cpu" not in name_lower:
         if abs(value) < 1:
             return f"{value * 1000:.1f} ms"
         elif abs(value) < 60:
@@ -74,17 +73,16 @@ def format_metric_value(metric_name: str, value: float) -> str:
 
     # Counts (e.g., restarts, events)
     if "count" in name_lower or "restarts" in name_lower:
-        return f"{int(value)}" # Integer count
+        return f"{int(value)}"
 
     # Default formatting for unknown types
     if isinstance(value, int):
         return str(value)
     elif isinstance(value, float):
-         # Basic float formatting if no specific unit matched
         if abs(value) > 1000 or abs(value) < 0.01 and value != 0:
-             return f"{value:.2e}" # Scientific notation for very large/small numbers
+             return f"{value:.2e}"  # Scientific notation for very large/small numbers
         else:
-             return f"{value:.2f}" # Standard decimal format
+             return f"{value:.2f}"  # Standard decimal format
     else:
         return str(value)
 

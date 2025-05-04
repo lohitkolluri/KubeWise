@@ -1,10 +1,26 @@
 # KubeWise Architecture
 
-This document outlines the architecture of the KubeWise system, detailing the flow of data from collection to remediation.
+This document outlines the architecture of the KubeWise system, detailing the core components, data flow patterns, and fundamental design principles.
 
 ## Overview
 
-KubeWise is designed as an autonomous system that monitors Kubernetes clusters, detects anomalies in real-time using online machine learning, and attempts automated remediation based on AI-generated plans.
+KubeWise is designed as an autonomous system that monitors Kubernetes clusters, detects anomalies in real-time using online machine learning, and implements automated remediation based on AI-generated plans.
+
+## Architectural Principles
+
+KubeWise adheres to several core architectural principles:
+
+1. **Event-Driven Design:** The system operates on event streams and message queues, enabling loose coupling between components and asynchronous processing.
+
+2. **Online Learning:** Unlike traditional batch-oriented machine learning approaches, KubeWise uses online learning algorithms that continuously adapt to incoming data streams without requiring periodic retraining.
+
+3. **Separation of Concerns:** Components are modularized with clear responsibilities - collection, detection, planning, and execution are distinct phases.
+
+4. **Kubernetes-Native Design:** The architecture leverages Kubernetes patterns and API semantics, treating it as both a platform and a first-class integration point.
+
+5. **Observability by Default:** All components expose metrics, health information, and detailed logs for comprehensive monitoring.
+
+6. **Resilient Communication:** All external dependencies implement circuit breakers and exponential backoff patterns to handle transient failures gracefully.
 
 ## Data Flow Diagram
 
@@ -56,7 +72,7 @@ graph TD
             FastAPI -- Exposes --> Metrics[/metrics]
             FastAPI -- Exposes --> AnomaliesAPI[/anomalies]
             FastAPI -- Exposes --> ConfigAPI[/config]
-            TyperCLI -- Interacts via --> FastAPI # Or directly with components for some actions
+            TyperCLI -- Interacts via --> FastAPI
             TyperCLI -- Reads --> Config
             TyperCLI -- Reads --> MongoDB
         end
@@ -93,169 +109,334 @@ graph TD
 
 ```
 
-*(To generate the SVG for `docs/images/architecture.svg` and the README, copy the Mermaid code above and use a tool like the Mermaid Live Editor ([https://mermaid.live](https://mermaid.live)) or a command-line tool (`mmdc`) to export it as an SVG file.)*
+## Component Architecture
 
-## Component Breakdown
+### 1. Collectors Layer
 
-1.  **Collectors:**
-    *   **Prometheus Poller (`prometheus.py`):** Periodically queries a Prometheus instance (defined by `PROM_URL`) for configured metrics (e.g., CPU, memory usage). Parsed metrics (`MetricPoint`) are placed onto the `metric_queue`. Runs as an asynchronous background task.
-    *   **K8s Event Watcher (`k8s_events.py`):** Establishes a long-lived watch stream with the Kubernetes API server. Filters for relevant event types (e.g., `Warning`) and reasons (`Failed`, `CrashLoopBackOff`). Parsed events (`KubernetesEvent`) are placed onto the `event_queue`. Runs as an asynchronous background task. *(Optionally, relevant events could also be persisted directly to MongoDB for later querying by the Planner).*
+The collectors layer is responsible for gathering observability data from various sources and transforming it into standardized formats:
 
-2.  **Processing & Detection:**
-    *   **Anomaly Detector (`detector.py`):** Consumes metrics and events from their respective queues.
-        *   **Feature Extraction:** Transforms incoming data points into feature vectors suitable for the anomaly detection model. This involves mapping metrics to features and potentially using event data to update stateful features (like recent warning counts) associated with specific Kubernetes resources (e.g., pods).
-        *   **Detector Types:**
-            *   **OnlineAnomalyDetector:** Base detector using a dual-model approach:
-                *   `preprocessing.MinMaxScaler`: Scales features to a [0, 1] range, learned online.
-                *   `anomaly.HalfSpaceTrees`: An online anomaly detection algorithm that scores incoming feature vectors.
-                *   A secondary `AdaptiveRandomForestClassifier` from River for supervised classification.
-            *   **SequentialAnomalyDetector:** Enhanced detector that builds on the base functionality:
-                *   Adds temporal pattern recognition to identify problematic sequences of events.
-                *   Implements trend detection to catch gradually worsening metrics.
-                *   Maintains historical context for each entity to identify recurring patterns.
-                *   Uses predefined critical sequences and metric patterns for known failure modes.
-        *   **Scoring & Thresholding:** Compares the anomaly score against the configurable thresholds, which are differentiated by metric type (CPU, memory, network, etc.).
-        *   **Persistence:** If an anomaly is detected (score > threshold), an `AnomalyRecord` containing the score, features, timestamp, threshold, and triggering data is created and persisted to the `anomalies` collection in MongoDB Atlas.
-        *   **Triggering Remediation:** The persisted `AnomalyRecord` (including its database ID) is placed onto the `remediation_queue`.
-    *   Runs as an asynchronous background task (`detection_loop` in `server.py`).
+* **Prometheus Poller:**
+  * Implements a polling pattern to query Prometheus time-series data
+  * Transforms metrics into normalized representations with consistent units and formats
+  * Operates asynchronously with configurable intervals to manage load
+  * Employs circuit breakers to handle Prometheus unavailability
 
-3.  **Remediation:**
-    *   **Remediation Trigger (`server.py`):** Consumes `AnomalyRecord` objects from the `remediation_queue`. Orchestrates the planning and execution steps. Runs as an asynchronous background task.
-    *   **Context Gathering (`planner.py`):** Before calling the AI, the trigger fetches relevant context:
-        *   Recent related Kubernetes events (from MongoDB or live API query).
-        *   Current status/metadata of the affected Kubernetes resource (via Kubernetes API client).
-    *   **AI Planner (`planner.py`):**
-        *   Uses `pydantic-ai`'s `Agent` configured with a Google Gemini model (`GEMINI_API_KEY`, `GEMINI_MODEL_ID` from settings).
-        *   Constructs a detailed prompt containing the anomaly details, recent events, and resource metadata.
-        *   Invokes the LLM to generate a structured `RemediationPlan` (defined in `schema.py`), which includes the LLM's reasoning and a list of `RemediationAction` objects.
-        *   Updates the `AnomalyRecord` in MongoDB with the generated plan and sets the status to `generated`.
-    *   **Remediation Engine (`engine.py`):**
-        *   Receives the `RemediationPlan` from the trigger.
-        *   Iterates through the `actions` in the plan.
-        *   Uses a registry (`@register_action`) to find the appropriate Python function for each `action_type`.
-        *   Executes the action function (e.g., `scale_deployment_action`, `delete_pod_action`) using the Kubernetes API client and the provided `parameters`.
-        *   Logs the outcome (success/failure, details) of each executed action to the `executed_actions` collection in MongoDB.
-        *   Updates the final `remediation_status` and `remediation_error` (if any) on the `AnomalyRecord` in MongoDB.
+* **Kubernetes Event Watcher:**
+  * Establishes a long-lived watch connection to the Kubernetes API
+  * Filters events by type, reason, and resource kinds
+  * Normalizes event data into a consistent schema
+  * Implements reconnection logic for watch stream failures
 
-4.  **API & CLI:**
-    *   **FastAPI Server (`server.py`, `routers.py`, `deps.py`):**
-        *   Provides RESTful endpoints (`/health`, `/livez`, `/metrics`, `/anomalies`, `/config`).
-        *   Manages application lifecycle (startup/shutdown) using `lifespan`.
-        *   Initializes shared resources (DB client, K8s client) and background tasks.
-        *   Uses dependency injection (`Depends`) to provide access to resources like the database.
-    *   **Typer CLI (`cli.py`):**
-        *   Offers command-line tools for interacting with the system (e.g., viewing config, listing anomalies, checking connections).
-        *   Connects directly to MongoDB or uses helper functions where appropriate.
+Both collectors feed their data into respective in-memory queues for further processing, effectively decoupling the collection process from the analysis process.
 
-5.  **Configuration (`config.py`):**
-    *   Uses `pydantic-settings` to load configuration from environment variables or a `.env` file.
-    *   Provides type-safe access to settings like `MONGO_URI`, `PROM_URL`, `GEMINI_API_KEY`, `ANOMALY_THRESHOLD`, etc.
+### 2. Detection Layer
 
-6.  **Persistence (MongoDB Atlas):**
-    *   Stores `AnomalyRecord` objects.
-    *   Stores `ExecutedActionRecord` objects.
-    *   (Optionally) Could store processed `KubernetesEvent` objects.
+The detection layer consumes normalized metrics and events from the collection layer queues:
 
-## Key Design Principles
+* **Feature Engineering:**
+  * Extracts relevant features from raw metrics and events
+  * Combines metrics with event context for holistic analysis
+  * Maps Kubernetes resource hierarchies to correctly associate metrics
+  * Performs real-time feature scaling and normalization
 
-*   **Asynchronous:** Uses `asyncio` extensively for I/O-bound operations (API calls, DB interactions, event watching).
-*   **Online Learning:** Employs River ML for incremental learning and anomaly detection without requiring batch retraining.
-*   **Modularity:** Components are separated into distinct modules (collectors, detector, planner, engine, api).
-*   **Configuration Driven:** Key parameters are managed via environment variables/`.env` file.
-*   **AI-Powered Remediation:** Leverages an LLM via Pydantic-AI to generate structured, context-aware remediation plans.
-*   **Declarative Actions:** Uses a simple DSL for remediation actions, making the engine extensible.
-*   **Observability:** Provides standard `/health`, `/livez`, and `/metrics` endpoints. Uses Loguru for structured logging.
-*   **Resilience:** Implements circuit breakers and retry mechanisms to handle external dependencies failures gracefully.
-*   **Graceful Shutdown:** Ensures proper cleanup of resources during termination.
+* **Anomaly Detection Models:**
+  * **OnlineAnomalyDetector:** 
+    * Implements River ML's Half-Space Trees for anomaly score generation
+    * Uses adaptive MinMax scaling for data normalization
+    * Leverages AdaptiveRandomForestClassifier for supervised classification
+    * Maintains separate models per metric type for specialized detection
+
+  * **SequentialAnomalyDetector:**
+    * Extends base detection with temporal sequence analysis
+    * Recognizes patterns over time windows rather than point anomalies
+    * Implements trend detection for gradually degrading conditions
+    * Maintains entity-specific historical context for improved accuracy
+  
+* **Thresholding Framework:**
+  * Applies metric-specific configurable thresholds
+  * Implements dynamic thresholding for adaptive sensitivity
+  * Uses temporal dampening to prevent flapping detections
+
+When anomalies are detected, they are both persisted to MongoDB and enqueued for remediation consideration.
+
+### 3. Remediation Layer
+
+The remediation layer is responsible for analyzing detected anomalies and implementing appropriate corrective actions:
+
+* **Context Gathering:**
+  * Retrieves comprehensive context about the anomalous entity
+  * Collects recent related events to understand the anomaly timeline
+  * Queries Kubernetes API for current resource state
+  * Builds a complete contextual picture for intelligent planning
+
+* **AI Planning System:**
+  * Leverages Gemini large language model through Pydantic-AI
+  * Constructs detailed prompts with anomaly context and system state
+  * Guides the LLM to generate structured remediation plans
+  * Validates generated plans against schema definitions
+  * Applies safety constraints to prevent destructive actions
+
+* **Remediation Engine:**
+  * Implements a Domain-Specific Language (DSL) for standardized actions
+  * Maps action declarations to concrete Kubernetes operations
+  * Uses an extensible registry pattern for adding new action types
+  * Implements transaction-like semantics with partial rollback capabilities
+  * Enforces cooldown periods to prevent action flooding
+
+* **Action Types:**
+  * **Resource Scaling:** Adjusting replica counts for deployments
+  * **Pod Management:** Restarting or deleting problematic pods
+  * **Resource Requests/Limits:** Adjusting resource configurations
+  * **External System Notifications:** Alerting external systems about issues
+
+### 4. Interface Layer
+
+The interface layer provides consistent access points for interacting with the system:
+
+* **FastAPI Server:**
+  * Implements RESTful endpoints for system interaction
+  * Provides comprehensive OpenAPI documentation
+  * Manages application lifecycle and resource initialization
+  * Implements structured error handling and validation
+  * Uses dependency injection for access to shared resources
+
+* **Typer CLI:**
+  * Offers command-line tools for operational tasks
+  * Provides intuitive interface for system interaction
+  * Enables scriptable automation of routine operations
+
+### 5. Persistence Layer
+
+The persistence layer handles data storage and retrieval:
+
+* **MongoDB Atlas:**
+  * Stores structured records with flexible schema evolution
+  * Enables high-performance querying with proper indexing
+  * Supports asynchronous operations for non-blocking I/O
+  * Implements connection pooling for efficient resource usage
+
+* **Data Models:**
+  * **AnomalyRecord:** Captures anomaly details, scores, context, and remediation status
+  * **ExecutedActionRecord:** Logs remediation actions, parameters, and outcomes
+  * **EventRecord:** Optionally stores relevant Kubernetes events
 
 ## Resilience Patterns
 
 ### Circuit Breaker Pattern
 
-KubeWise implements the circuit breaker pattern for calls to external services, providing increased resilience when those services are experiencing issues:
+KubeWise implements the circuit breaker pattern for external service interactions:
 
-1. **Components:**
-   * Implemented in `kubewise/utils/retry.py` as the `with_circuit_breaker` decorator
-   * Applied to Prometheus queries, Kubernetes API operations, and MongoDB database operations
+1. **State Machine:**
+   * **Closed:** Normal operation with requests passing through
+   * **Open:** After failure threshold is reached, immediately rejects requests
+   * **Half-Open:** After timeout period, allows limited test requests
 
-2. **States:**
-   * **Closed:** Normal operation - requests pass through to the service
-   * **Open:** After `ERROR_THRESHOLD` consecutive failures, requests are immediately rejected without attempting to call the failing service
-   * **Half-Open:** After `CIRCUIT_OPEN_TIMEOUT` seconds in the Open state, allows up to `HALF_OPEN_MAX_CALLS` test requests to verify service recovery
+2. **Implementation:**
+   * Decorates critical external-facing functions
+   * Tracks failure counts and success rates
+   * Implements timeout-based state transitions
+   * Exposes state as observable metrics
 
-3. **Metrics:**
-   * Circuit breaker status is exposed via Prometheus metrics (`kubewise_circuit_breaker_status`)
-   * External service availability is tracked (`kubewise_external_service_up`)
-
-4. **Benefits:**
-   * Prevents cascading failures when a dependency is degraded
-   * Provides automatic recovery when services become available again
-   * Reduces system load during partial outages
+3. **Application:**
+   * Applied to Prometheus queries, Kubernetes API operations, and MongoDB database access
+   * Prevents overwhelming already struggling services
+   * Enables faster recovery during partial outages
+   * Provides automatic service recovery testing
 
 ### Retry with Exponential Backoff
 
-For transient errors, KubeWise uses exponential backoff retry logic:
+For transient failures that may resolve quickly:
 
-1. **Implementation:**
-   * `with_exponential_backoff` decorator in `kubewise/utils/retry.py`
-   * Configurable parameters for initial delay, max delay, backoff factor, and jitter
-
-2. **Features:**
-   * Preserves original exception context for better error reporting
-   * Adds random jitter to prevent thundering herd problems
-   * Detailed logging of retry attempts and outcomes
-
-## Observability Features
-
-### Metrics
-
-KubeWise exposes comprehensive metrics via Prometheus for monitoring system health and performance:
-
-1. **Application Metrics:**
-   * `kubewise_anomalies_detected_total`: Anomaly counts by source, entity type, and namespace
-   * `kubewise_false_positives_total`: False positive counts for anomaly detection
-   * `kubewise_remediations_total`: Remediation action counts by type, entity, namespace, and status
-   * `kubewise_remediation_duration_seconds`: Time required to execute remediation actions
-
-2. **API Metrics:**
-   * `kubewise_api_request_duration_seconds`: API request latency by endpoint, method, and status code
-
-3. **External Service Metrics:**
-   * `kubewise_external_request_duration_seconds`: External service call durations
-   * `kubewise_external_request_errors_total`: External service error counts
-   * `kubewise_circuit_breaker_status`: Circuit breaker status for each external service
-   * `kubewise_external_service_up`: External service availability status
-
-### Health Checks
-
-The system provides multiple health check endpoints:
-
-1. **Basic Health:** `GET /health` returns service status and uptime
-2. **Liveness Probe:** `GET /livez` for Kubernetes liveness probes
-3. **Enhanced Health:** `GET /health/extended` provides detailed component status including:
-   * Database connectivity
-   * Kubernetes API connectivity
-   * Prometheus connectivity
-   * Queue sizes and processing status
-   * Memory usage statistics
-   * Last successful operations for each component
-
-### Graceful Shutdown
-
-KubeWise implements a structured shutdown sequence to ensure proper resource cleanup:
-
-1. **Shutdown Flow:**
-   * Stop accepting new API requests
-   * Complete in-flight requests (with timeout)
-   * Drain the queues in order: metrics/events, remediation, execution
-   * Stop collectors (Prometheus poller, K8s event watcher)
-   * Stop processors (anomaly detector, remediation engine)
-   * Close external clients (K8s, MongoDB, HTTP)
+1. **Strategy:**
+   * Initial retry delay with exponential growth
+   * Maximum retry limit to prevent infinite attempts
+   * Random jitter to prevent thundering herd problems
 
 2. **Implementation:**
-   * Uses FastAPI's `lifespan` context manager for application lifecycle
-   * Implements comprehensive exception handling and timeout management
-   * Cancels background tasks in correct dependency order
-   * Properly closes database connections
+   * Decorator-based application to critical functions
+   * Configurable parameters for timeout and retry counts
+   * Preserves exception context for accurate error reporting
 
-This ensures clean shutdown during container termination, deployment updates, or regular process restarts.
+## Observability Architecture
+
+### Metrics Framework
+
+KubeWise exposes comprehensive metrics for operational visibility:
+
+1. **Metric Categories:**
+   * **Application Metrics:** Anomaly detection rates, remediation success
+   * **API Metrics:** Request durations, error rates, endpoint usage
+   * **External Service Metrics:** Dependency health, response times
+   * **Resource Metrics:** Memory usage, queue sizes, processing rates
+
+2. **Implementation:**
+   * Prometheus client integration
+   * Labeled metrics for detailed segmentation
+   * Counters, gauges, histograms, and summaries as appropriate
+   * Consistent naming convention for better dashboarding
+
+### Health Check System
+
+Multiple health check levels for different monitoring needs:
+
+1. **Basic Health:** Quick liveness verification
+2. **Detailed Health:** Component-level status reporting
+3. **Dependency Health:** External system connectivity verification
+
+### Graceful Shutdown Architecture
+
+Structured shutdown process for clean termination:
+
+1. **Signal Handling:**
+   * Captures termination signals (SIGTERM, SIGINT)
+   * Initiates orderly shutdown sequence
+
+2. **Shutdown Sequence:**
+   * API server stops accepting new requests
+   * In-flight requests complete with timeout
+   * Queues drain in dependency order
+   * Background tasks cancel in correct sequence
+   * External connections close properly
+
+3. **Implementation:**
+   * FastAPI lifespan context managers
+   * Asyncio task management and cancellation
+   * Timeout-based safety mechanisms
+
+## Data Models
+
+### Core Data Structures
+
+1. **NormalizedMetric:**
+   * Standard representation of metrics regardless of source
+   * Contains entity references, metric type, value, and timestamp
+   * Provides consistent interface for detector components
+
+2. **AnomalyRecord:**
+   * Captures detected anomalies with comprehensive context
+   * Stores anomaly score, feature vector, threshold, and timestamp
+   * Tracks remediation status, plan, and execution results
+   * Links to related events and executed actions
+
+3. **RemediationPlan:**
+   * Structured Pydantic model for AI-generated plans
+   * Contains reasoning, action sequence, and priority
+   * Includes safety constraints and verification steps
+   * Maps to concrete Kubernetes API operations
+
+4. **ExecutedActionRecord:**
+   * Logs all remediation actions taken
+   * Records success/failure status and detailed results
+   * Maintains audit trail for compliance and analysis
+   * Links back to originating anomaly
+
+### Schema Evolution Strategy
+
+KubeWise implements a schema evolution approach that allows:
+
+1. **Backward Compatibility:** New code can read old data
+2. **Forward Compatibility:** Old code can read new data (ignoring new fields)
+3. **Migration Support:** For substantial schema changes
+
+This is achieved through:
+
+* Pydantic models with optional fields
+* MongoDB's flexible document structure
+* Version fields on persisted records
+* Default values for evolving schemas
+
+## Operational Characteristics
+
+### Asynchronous Processing
+
+KubeWise leverages Python's asyncio throughout the codebase:
+
+1. **Benefits:**
+   * Non-blocking I/O for high concurrency
+   * Efficient resource utilization
+   * Simplified concurrency model
+   * Natural fit for event-driven architecture
+
+2. **Implementation:**
+   * Async API clients (kubernetes-asyncio, motor)
+   * AsyncIO queues for inter-component communication
+   * FastAPI for asynchronous HTTP endpoints
+   * Structured task management for background processes
+
+### Resource Efficiency
+
+1. **Memory Management:**
+   * Streaming processing to avoid large in-memory datasets
+   * Efficient data structures for frequent operations
+   * Connection pooling for external services
+   * Garbage collection-friendly object lifecycle
+
+2. **CPU Optimization:**
+   * River ML's efficient online algorithms
+   * Batched database operations
+   * Throttled polling frequencies for external services
+   * Event-driven processing to minimize idle CPU
+
+3. **I/O Efficiency:**
+   * Connection pooling for MongoDB
+   * Kubernetes watch API instead of polling
+   * HTTP connection reuse through HTTPX client
+   * Batched database operations where possible
+
+### Scalability Considerations
+
+1. **Vertical Scalability:**
+   * Configurable worker threads and process counts
+   * Memory tuning parameters for different workload sizes
+   * Adjustable queue sizes and batch processing parameters
+
+2. **Horizontal Scalability:**
+   * Stateless API design enables multiple replicas
+   * MongoDB Atlas for scalable persistence
+   * Independent scaling of collection, detection, and remediation components
+
+## Security Model
+
+1. **Authentication & Authorization:**
+   * Kubernetes RBAC for API access control
+   * MongoDB connection string authentication
+   * API key for Gemini model access
+   * FastAPI endpoint authorization
+
+2. **Secure Communications:**
+   * TLS for all external communications
+   * Kubernetes API TLS certificate validation
+   * MongoDB TLS/SSL connection
+
+3. **Least Privilege:**
+   * Kubernetes service account with minimal permissions
+   * Database user with required access only
+   * Container runs as non-root user
+
+4. **Secret Management:**
+   * Environment variables for local configuration
+   * Kubernetes Secrets for deployment
+   * No hard-coded credentials
+   * Masking of sensitive values in logs and API responses
+
+## Deployment Model
+
+KubeWise is designed for Kubernetes deployment with:
+
+1. **Kubernetes Manifests:**
+   * Deployment for core application
+   * Service for API access
+   * RBAC resources for permissions
+   * ConfigMap/Secrets for configuration
+
+2. **Docker Containers:**
+   * Multi-stage builds for minimal image size
+   * Non-root user for security
+   * Health checks for proper orchestration
+   * Resource requests and limits for scheduler efficiency
+
+3. **Configuration:**
+   * Environment variables with sensible defaults
+   * Kubernetes ConfigMap for non-sensitive configuration
+   * Kubernetes Secrets for sensitive values
+   * Runtime configuration updates through API

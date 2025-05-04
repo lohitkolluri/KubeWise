@@ -1,6 +1,4 @@
-"""
-Utility functions for KubeWise.
-"""
+"""Utility functions for KubeWise."""
 
 from .retry import with_exponential_backoff
 

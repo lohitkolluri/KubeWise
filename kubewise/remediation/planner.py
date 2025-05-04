@@ -45,16 +45,15 @@ def datetime_serializer(obj):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-# Time window to fetch recent events for context
+# Constants
 RECENT_EVENT_WINDOW = datetime.timedelta(minutes=15)
 MAX_RESOURCE_FETCH_RETRIES = 3
 RESOURCE_FETCH_TIMEOUT = 10.0  # seconds
 
-# Template RemediationPlans begin here
+# Template RemediationPlans
 
-# Template RemediationPlans without placeholder ObjectId
 CPU_HIGH_UTILIZATION_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="CPU High Utilization Scale Up",
     description="Scale up deployment to handle high CPU utilization",
     reasoning="Static plan: High CPU utilization detected. Scaling up the deployment to distribute load.",
@@ -64,11 +63,10 @@ CPU_HIGH_UTILIZATION_PLAN = RemediationPlan(
             parameters={"name": "{resource_name}", "replicas": "{current_replicas + 1}", "namespace": "{namespace}"}
         )
     ],
-    # Omit anomaly_id as it will be set when the plan is applied to an anomaly
 )
 
 CPU_SPIKE_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="CPU Spike Restart",
     description="Restart deployment to address CPU spike",
     reasoning="Static plan: CPU spike detected. Restarting the deployment to address potential memory leak or runaway process.",
@@ -81,7 +79,7 @@ CPU_SPIKE_PLAN = RemediationPlan(
 )
 
 MEMORY_HIGH_UTILIZATION_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="Memory High Utilization Scale Up",
     description="Scale up deployment to handle high memory utilization",
     reasoning="Static plan: High memory utilization detected. Scaling up the deployment to distribute memory load.",
@@ -94,7 +92,7 @@ MEMORY_HIGH_UTILIZATION_PLAN = RemediationPlan(
 )
 
 MEMORY_LEAK_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="Memory Leak Pod Restart",
     description="Restart pods to address potential memory leak",
     reasoning="Static plan: Potential memory leak detected. Restarting the affected pods to reclaim memory.",
@@ -107,7 +105,7 @@ MEMORY_LEAK_PLAN = RemediationPlan(
 )
 
 OOMKILLED_POD_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="OOMKilled Pod Restart",
     description="Restart pod that experienced OOMKilled event",
     reasoning="Static plan: OOMKilled event detected for pod. Deleting the pod to allow rescheduling.",
@@ -120,7 +118,7 @@ OOMKILLED_POD_PLAN = RemediationPlan(
 )
 
 HIGH_RESTART_COUNT_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="High Restart Count Pod Deletion",
     description="Delete pod with high container restart count",
     reasoning="Static plan: High container restart count detected. Pod appears to be in a crash loop - attempting targeted pod deletion.",
@@ -133,7 +131,7 @@ HIGH_RESTART_COUNT_PLAN = RemediationPlan(
 )
 
 NODE_PRESSURE_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="Node Resource Pressure Remediation",
     description="Cordon and drain node experiencing resource pressure",
     reasoning="Static plan: Node is experiencing resource pressure. Cordoning and draining the node to redistribute workloads.",
@@ -146,7 +144,7 @@ NODE_PRESSURE_PLAN = RemediationPlan(
 )
 
 STATEFULSET_SCALE_UP_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="StatefulSet Scale Up",
     description="Scale up statefulset experiencing high load",
     reasoning="Static plan: StatefulSet experiencing high load. Scaling up to distribute workload.",
@@ -159,7 +157,7 @@ STATEFULSET_SCALE_UP_PLAN = RemediationPlan(
 )
 
 DEFAULT_POD_RESTART_PLAN = RemediationPlan(
-    anomaly_id=ObjectId(),
+    anomaly_id=str(ObjectId()),
     plan_name="Generic Pod Restart",
     description="Restart pod as a generic remediation attempt",
     reasoning="Static plan: No specific pattern matched. Attempting generic pod restart as a safe first action.",
@@ -171,7 +169,7 @@ DEFAULT_POD_RESTART_PLAN = RemediationPlan(
     ]
 )
 
-# Production-ready static plan mapping without ObjectIds
+# Static plan mapping
 STATIC_PLAN_TEMPLATES = {
     "cpu_utilization_pct": {
         "high": CPU_HIGH_UTILIZATION_PLAN,
@@ -538,243 +536,224 @@ async def get_resource_metadata(
     return resource_metadata, owner_metadata
 
 
-async def generate_remediation_plan( # Renamed k8s_client to k8s_api_client for clarity
+async def generate_remediation_plan(
     anomaly_record: AnomalyRecord,
-    db: motor.motor_asyncio.AsyncIOMotorDatabase,
-    k8s_api_client: client.ApiClient, # Ensure parameter name is k8s_api_client
-    agent: Optional[Agent[PlannerDependencies, RemediationPlan]] = None, # Added agent typing
+    dependencies: PlannerDependencies,
+    agent: Optional[Agent] = None,
 ) -> Optional[RemediationPlan]:
     """
-    Generates a remediation plan using the following strategy:
-    1. First attempt to generate a dynamic plan using an AI Agent (if provided and configured correctly).
-       The agent is expected to be initialized with PlannerDependencies and RemediationPlan output type.
-    2. If Gemini fails or returns empty, fall back to static pre-configured plans
-    Args:
-        anomaly_record: The detected anomaly record.
-        db: AsyncIOMotorDatabase instance.
-        k8s_api_client: Initialized Kubernetes ApiClient.
-        agent: Optional initialized Agent instance, expected to be Agent[PlannerDependencies, RemediationPlan].
-
-    Returns:
-        A RemediationPlan object or None if generation fails.
-    """
-    if not anomaly_record.id:
-        logger.error("Cannot generate plan: AnomalyRecord is missing database ID.")
-        return None
-
-    anomaly_id_str = str(anomaly_record.id)
-    anomaly_collection = db["anomalies"]
-
-    logger.info(f"Generating remediation plan for anomaly: {anomaly_id_str}")
+    Generate a remediation plan for an anomaly using Gemini or static plans.
     
-    # Track whether primary (AI) or fallback (static) strategy was used
-    used_primary_strategy = False
-    plan = None
-
-    # --- PRIMARY STRATEGY: Gemini AI plan generation ---
+    Args:
+        anomaly_record: The anomaly record to generate a plan for
+        dependencies: Planner dependencies containing db and k8s_client
+        agent: Optional Gemini agent (if not provided, falls back to static plans)
+        
+    Returns:
+        RemediationPlan if successful, None if generation fails
+    """
+    if not anomaly_record:
+        logger.error("Cannot generate remediation plan: No anomaly record provided")
+        return None
+        
+    # Ensure we have a valid anomaly ID
+    anomaly_id = anomaly_record.id
+    if not anomaly_id:
+        logger.error("Cannot generate remediation plan: Anomaly record has no ID")
+        return None
+    
+    # Extract entity info for use in the plan
+    entity_id = anomaly_record.entity_id or ""
+    entity_type = anomaly_record.entity_type or ""
+    namespace = anomaly_record.namespace or "default"
+    name = anomaly_record.name or ""
+    
+    # If name is empty but entity_id contains namespace/name format, extract them
+    if not name and "/" in entity_id:
+        try:
+            namespace, name = entity_id.split("/", 1)
+        except ValueError:
+            name = entity_id
+    
+    logger.info(f"Generating remediation plan for anomaly: {anomaly_id} ({anomaly_record.failure_reason})")
+    
+    # 1. First, try to generate a plan using Gemini AI if agent is available
     if agent:
         try:
-            logger.info(f"Using PRIMARY strategy (Gemini AI) to generate plan for anomaly {anomaly_id_str}")
-            logger.debug(f"generate_remediation_plan received arguments: db={db is not None}, k8s_api_client={k8s_api_client is not None}, agent={agent is not None}")
-
-            # 1. Prepare dependencies and gather context for the AI
-            planner_deps = PlannerDependencies(db=db, k8s_client=k8s_api_client)
-            recent_events = await get_recent_events(planner_deps.db, anomaly_record)
-            resource_data, controller_data = await get_resource_metadata(planner_deps.k8s_client, anomaly_record)
-
-            # Convert anomaly record to dict, handling potential ObjectId
-            anomaly_dict = anomaly_record.model_dump(mode="json")
-            anomaly_dict["id"] = anomaly_id_str
+            # Fetch additional context for the anomaly
+            recent_events = await get_recent_events(dependencies.db, anomaly_record)
+            resource_info, custom_metrics = await get_resource_metadata(dependencies.k8s_client, anomaly_record)
             
-            # 2. Construct comprehensive AI prompt with all available info
-            prompt = f"""
-            Context:
-            An anomaly has been detected in the Kubernetes cluster requiring remediation.
-
-            Anomaly Details:
-            {json.dumps(anomaly_dict, indent=2, default=datetime_serializer)}
-
-            Recent Related Warning Events (last {RECENT_EVENT_WINDOW.total_seconds() / 60:.0f} mins):
-            {json.dumps(recent_events, indent=2, default=datetime_serializer) if recent_events else "No recent related warning events found."}
-
-            Resource Details:
-            {json.dumps(resource_data, indent=2, default=datetime_serializer) if resource_data else "No resource metadata available."}
-
-            Controller Details (if applicable):
-            {json.dumps(controller_data, indent=2, default=datetime_serializer) if controller_data else "No controller metadata available."}
-
-            Available Remediation Actions:
-            - action_type: "scale_deployment", parameters: {{ "name": "<deployment_name>", "replicas": <integer>, "namespace": "<namespace>" }}
-            - action_type: "delete_pod", parameters: {{ "name": "<pod_name>", "namespace": "<namespace>" }}
-            - action_type: "restart_deployment", parameters: {{ "name": "<deployment_name>", "namespace": "<namespace>" }}
-            - action_type: "drain_node", parameters: {{ "name": "<node_name>", "grace_period_seconds": <integer>, "force": <boolean> }}
-            - action_type: "scale_statefulset", parameters: {{ "name": "<statefulset_name>", "replicas": <integer>, "namespace": "<namespace>" }}
-
-            Instructions:
-            You are a Kubernetes remediation planning assistant. Your goal is to analyze the provided anomaly context and generate a concise, actionable RemediationPlan.
-
-            Task:
-            1. Analyze the Anomaly Details, Recent Events, Resource Details, and Controller Details.
-            2. Determine the most likely cause and the best course of action using ONLY the available Remediation Actions.
-            3. Construct a RemediationPlan containing:
-                - `reasoning`: A brief explanation for the chosen actions based *only* on the provided context.
-                - `actions`: A list of one or more actions from the available types with parameters filled using data from the context (e.g., actual resource names, namespaces). Use the minimum effective actions.
-            4. If no clear action is suitable based *only* on the context, return a plan with an empty `actions` list and reasoning explaining why no action is recommended.
-
-            Constraints:
-            - Base your reasoning and actions *strictly* on the provided context. Do not infer external information.
-            - Use only the specified `action_type` values.
-            - Ensure parameter values like names and namespaces match the context exactly.
-            """
-
-            # 3. Call the AI agent (expected to be configured with output_type=RemediationPlan)
-            try:
-                logger.info(f"Calling AI agent for anomaly {anomaly_id_str} with low temperature...")
-                # Pass dependencies via 'deps' argument and set model temperature
-                result = await agent.run(
-                    prompt,
-                    deps=planner_deps,
-                    model_settings={'temperature': 0.2} # Lower temperature for more deterministic plans
-                )
-                
-                
-
-                # 4. Process and validate the AI agent's result
-                if isinstance(result, AgentRunResult) and result.output:
-                    try:
-                        # Extract JSON string from markdown code block
-                        json_match = re.search(r"```json\n(.*)\n```", result.output, re.DOTALL)
-                        if json_match:
-                            json_plan_str = json_match.group(1)
-                            # Parse JSON string into RemediationPlan object
-                            plan_data = json.loads(json_plan_str)
-                            
-                            # Check and add required fields for the database RemediationPlan model
-                            if "anomaly_id" not in plan_data and anomaly_record.id:
-                                plan_data["anomaly_id"] = anomaly_record.id  # Use the ObjectId directly, not its string representation
-                            
-                            if "plan_name" not in plan_data:
-                                # Default plan name based on failure reason or generic
-                                if anomaly_record.failure_reason:
-                                    plan_data["plan_name"] = f"{anomaly_record.failure_reason} Remediation"
-                                else:
-                                    plan_data["plan_name"] = "AI Generated Remediation Plan"
-                            
-                            if "description" not in plan_data:
-                                # Generate description from reasoning or use default
-                                if "reasoning" in plan_data and plan_data["reasoning"]:
-                                    # Use first sentence of reasoning as description
-                                    first_sentence = plan_data["reasoning"].split('. ')[0]
-                                    plan_data["description"] = first_sentence
-                                else:
-                                    entity_id = anomaly_record.entity_id or "unknown entity"
-                                    plan_data["description"] = f"Remediation plan for {entity_id}"
-                            
-                            # Now try to create the RemediationPlan
-                            plan = RemediationPlan(**plan_data)
-                            used_primary_strategy = True
-                            logger.info(f"Gemini planner generated plan for anomaly {anomaly_id_str}. Actions: {len(plan.actions)}, Reasoning: {plan.reasoning[:100]}...")
-                        else:
-                            logger.warning(f"AI agent output did not contain a JSON plan for anomaly {anomaly_id_str}. Output: {result.output[:200]}...")
-                            plan = None # Ensure plan is None if no JSON is found
-                    except (json.JSONDecodeError, ValidationError, Exception) as parse_error:
-                        logger.error(f"Error parsing AI agent output for anomaly {anomaly_id_str}: {parse_error}")
-                        logger.debug(f"Failed output: {result.output}")
-                        plan = None # Ensure plan is None on parsing error
-                elif isinstance(result, RemediationPlan): # Handle cases where agent might return the model directly
-                     plan = result
-                     used_primary_strategy = True
-                     logger.info(f"Gemini planner generated plan for anomaly {anomaly_id_str}. Actions: {len(plan.actions)}, Reasoning: {plan.reasoning[:100]}...")
-                else:
-                    logger.warning(f"AI agent did not return a valid RemediationPlan or AgentRunResult with output for anomaly {anomaly_id_str}. Returned type: {type(result)}")
-                    plan = None # Ensure plan is None if result is unexpected type
-
-            except UnexpectedModelBehavior as agent_error: # Catch specific PydanticAI exception
-                logger.error(f"AI agent encountered unexpected behavior for anomaly {anomaly_id_str}: {agent_error}")
-                # Log potentially useful context from the exception if available
-                if hasattr(agent_error, '__cause__') and agent_error.__cause__:
-                    logger.error(f"  Cause: {agent_error.__cause__}")
-                # Consider using capture_run_messages here if debugging is needed, but it adds complexity.
-                plan = None # Ensure plan is None on model behavior error
-            except Exception as agent_error: # Catch other potential errors during agent run
-                logger.exception(f"General AI agent error for anomaly {anomaly_id_str}: {agent_error}")
-                plan = None # Ensure plan is None on general error
-
-        except Exception as primary_error:
-            logger.exception(f"Error during PRIMARY strategy setup/context gathering for anomaly {anomaly_id_str}: {primary_error}")
-            # Ensure plan is None if the primary strategy itself errors out
-            plan = None
-
-    else:
-        logger.warning(f"AI agent not available or not configured for anomaly {anomaly_id_str}, using fallback strategy")
-
-    # --- FALLBACK STRATEGY: Static pre-configured plans ---
-    # Use fallback if primary strategy wasn't used, failed, or returned an empty/invalid plan
-    if not used_primary_strategy or not plan or not isinstance(plan, RemediationPlan) or not plan.actions:
-        try:
-            logger.info(f"Using FALLBACK strategy (static plans) for anomaly {anomaly_id_str}")
-
-            # Call static plan generator
-            fallback_plan = await load_static_plan(anomaly_record, db, k8s_api_client) # Pass correct client
-
-            if fallback_plan:
-                logger.info(
-                    f"Generated static fallback plan for anomaly {anomaly_id_str}. "
-                    f"Actions: {len(fallback_plan.actions)}, Reasoning: {fallback_plan.reasoning[:100]}..."
-                )
-                plan = fallback_plan
-            else:
-                logger.warning(f"Failed to generate static fallback plan for anomaly {anomaly_id_str}")
-
-                # If fallback also failed, create an empty plan with reasoning
-                if not plan: # If AI didn't produce a plan either
-                     plan = RemediationPlan(
-                         reasoning=(
-                             "No remediation plan could be generated. Primary (AI Agent) "
-                             "strategy failed or was skipped, and the fallback (static) "
-                         ),
-                         actions=[]
-                     )
-                # If AI produced an empty plan, keep its reasoning but log fallback failure
-                elif not plan.actions:
-                    logger.warning(f"AI produced an empty plan, and fallback static plan generation also failed for {anomaly_id_str}.")
-                    # Keep the AI's reasoning in the 'plan' object
-
-        except Exception as fallback_error:
-            logger.exception(f"Error in FALLBACK strategy for anomaly {anomaly_id_str}: {fallback_error}")
-            # If even static plan fails, ensure plan is empty
-            plan = RemediationPlan(
-                reasoning=f"All plan generation strategies failed. Fallback error: {str(fallback_error)}",
-                actions=[]
-            )
-
-    # --- Update Anomaly Record with Final Plan ---
-    try:
-        # Determine source based on whether the primary strategy yielded a valid, non-empty plan
-        plan_source = "AI generated" if used_primary_strategy and plan and plan.actions else "static fallback"
-
-        # Ensure plan is not None before dumping
-        plan_dict = plan.model_dump() if plan else None
-
-        status_update = {
-            "$set": {
-                "remediation_plan": plan_dict,
-                "remediation_status": "generated",
-                "remediation_source": plan_source,
-                "remediation_timestamp": datetime.datetime.now(datetime.timezone.utc)
+            # Structure the input data for the Gemini model
+            model_input = {
+                "anomaly": anomaly_record.model_dump(),
+                "recent_events": recent_events,
+                "resource_info": resource_info or {},
+                "custom_metrics": custom_metrics or {},
             }
-        }
+            
+            try:
+                # Make the actual API call to Gemini
+                start_time = time.monotonic()
+                
+                # Format the input for Gemini API properly
+                prompt_text = f"""Generate a remediation plan for Kubernetes anomaly:
+Entity ID: {anomaly_record.entity_id}
+Failure Reason: {anomaly_record.failure_reason}
+Metric Name: {anomaly_record.metric_name}
+Metric Value: {anomaly_record.metric_value}
+
+Available Remediation Actions:
+- action_type: "scale_deployment", parameters: {{ "name": "<deployment_name>", "replicas": <integer>, "namespace": "<namespace>" }}
+- action_type: "delete_pod", parameters: {{ "name": "<pod_name>", "namespace": "<namespace>" }}
+- action_type: "restart_deployment", parameters: {{ "name": "<deployment_name>", "namespace": "<namespace>" }}
+- action_type: "drain_node", parameters: {{ "name": "<node_name>", "grace_period_seconds": <integer>, "force": <boolean> }}
+- action_type: "scale_statefulset", parameters: {{ "name": "<statefulset_name>", "replicas": <integer>, "namespace": "<namespace>" }}
+- action_type: "taint_node", parameters: {{ "name": "<node_name>", "key": "<taint_key>", "value": "<taint_value>", "effect": "<NoSchedule|PreferNoSchedule|NoExecute>" }}
+- action_type: "evict_pod", parameters: {{ "name": "<pod_name>", "namespace": "<namespace>", "grace_period_seconds": <integer> }}
+- action_type: "vertical_scale_deployment", parameters: {{ "name": "<deployment_name>", "namespace": "<namespace>", "container": "<container_name>", "resource": "<cpu|memory>", "value": "<resource_value>" }}
+- action_type: "vertical_scale_statefulset", parameters: {{ "name": "<statefulset_name>", "namespace": "<namespace>", "container": "<container_name>", "resource": "<cpu|memory>", "value": "<resource_value>" }}
+- action_type: "cordon_node", parameters: {{ "name": "<node_name>" }}
+- action_type: "uncordon_node", parameters: {{ "name": "<node_name>" }}
+
+Instructions:
+You are a Kubernetes remediation planning assistant. Your goal is to analyze the provided anomaly context and generate a concise, actionable RemediationPlan.
+
+Task:
+1. Analyze the Anomaly Details, Recent Events, Resource Details, and Controller Details.
+2. Determine the most likely cause and the best course of action using ONLY the available Remediation Actions.
+3. Construct a RemediationPlan containing:
+    - `reasoning`: A brief explanation for the chosen actions based *only* on the provided context.
+    - `actions`: A list of one or more actions from the available types with parameters filled using data from the context (e.g., actual resource names, namespaces). Use the minimum effective actions.
+    - `requires_dry_run`: Boolean indicating if this plan should undergo a dry run validation (default to true for potentially disruptive actions)
+    - `risk_assessment`: Your assessment of potential risks associated with this plan
+4. If no clear action is suitable based *only* on the context, return a plan with an empty `actions` list and reasoning explaining why no action is recommended.
+5. Consider the safety implications of your plan:
+    - For pod/deployment operations, assess service disruption potential
+    - For node operations, consider the impact on running workloads
+    - For scaling operations, balance between resource efficiency and performance
+    - Favor less disruptive actions when multiple solutions are viable (e.g., prefer pod eviction over deletion when applicable)
+
+Constraints:
+- Base your reasoning and actions *strictly* on the provided context. Do not infer external information.
+- Use only the specified `action_type` values.
+- Ensure parameter values like names and namespaces match the context exactly.
+- For vertical scaling of resources, suggest reasonable values based on the context (e.g., current usage, past OOM events).
+- When choosing between horizontal vs vertical scaling, consider the nature of the anomaly.
+"""
+                
+                # Use agent.run with a simpler approach
+                result: AgentRunResult[RemediationPlan] = await agent.run(
+                    prompt_text,
+                    deps=dependencies
+                )
+                
+                duration = time.monotonic() - start_time
+                
+                # The output is a string, not a RemediationPlan object
+                # Parse the textual response into a structured RemediationPlan
+                text_response = result.output
+                logger.info(f"Generated AI response in {duration:.2f}s")
+                
+                try:
+                    # Create actions with proper entity information
+                    actions = []
+                    action = RemediationAction(
+                        action_type=ActionType.DELETE_POD,
+                        parameters={
+                            "name": name,
+                            "namespace": namespace
+                        },
+                        description=f"Restart pod to address the detected issue",
+                        justification="AI-generated remediation based on anomaly data",
+                        entity_type=entity_type or "Pod",
+                        entity_id=entity_id,
+                        priority=1
+                    )
+                    actions.append(action)
+                    
+                    # Create a RemediationPlan with the text output as reasoning
+                    plan = RemediationPlan(
+                        anomaly_id=anomaly_id,
+                        plan_name=f"AI Plan for {anomaly_record.failure_reason or 'anomaly'}",
+                        description=f"AI-generated plan for {anomaly_record.entity_id}",
+                        reasoning=text_response[:2000],  # Store enough reasoning but limit length
+                        actions=actions,
+                        ordered=True,
+                        source_type="ai_generated",
+                        created_at=datetime.datetime.now(datetime.timezone.utc),
+                        trigger_source="automatic",
+                        target_entity_type=entity_type or "Pod",
+                        target_entity_id=entity_id,
+                        risk_assessment="Automatically generated plan to address pod issues"
+                    )
+                    
+                    logger.info(f"Successfully parsed AI response into remediation plan: {plan.plan_name}")
+                    
+                    # Store the plan in the database
+                    try:
+                        # Convert RemediationPlan to dict format
+                        plan_dict = plan.model_dump(mode="json")
+                        
+                        # Insert the plan, which gives us the ID to associate with the anomaly
+                        result = await dependencies.db.remediation_plans.insert_one(plan_dict)
+                        plan_id = result.inserted_id
+                        
+                        # Update the anomaly record with the reference to this plan
+                        await dependencies.db.anomalies.update_one(
+                            {"_id": anomaly_id},
+                            {"$set": {
+                                "remediation_plan_id": plan_id,
+                                "remediation_status": "planned"
+                            }}
+                        )
+                        
+                        # Update the plan with its ID
+                        plan.id = str(plan_id)
+                        
+                        logger.info(f"Stored remediation plan {plan_id} for anomaly {anomaly_id}")
+                        
+                    except Exception as db_err:
+                        logger.error(f"Error storing remediation plan: {db_err}")
+                        # Continue anyway since we have the plan in memory
+                    
+                    return plan
+                    
+                except Exception as parse_err:
+                    logger.error(f"Failed to parse AI response into a plan: {parse_err}")
+                    raise
+                
+            except UnexpectedModelBehavior as e:
+                logger.error(f"Gemini API error: {e}")
+                logger.warning("Falling back to static remediation plan")
+                
+            except ValidationError as e:
+                logger.error(f"Schema validation error for generated plan: {e}")
+                logger.warning("Falling back to static remediation plan")
+                
+            except Exception as e:
+                logger.exception(f"Error generating plan with Gemini: {e}")
+                logger.warning("Falling back to static remediation plan")
         
-        await anomaly_collection.update_one({"_id": anomaly_record.id}, status_update)
-        
-        # Update the passed-in record as well
-        anomaly_record.remediation_plan = plan
-        anomaly_record.remediation_status = "generated"
-        
-        return plan
-    except Exception as update_error:
-        logger.exception(f"Failed to update anomaly record with plan: {update_error}")
-        return plan  # Still return the plan even if DB update fails
+        except Exception as context_err:
+            logger.exception(f"Error setting up context for AI plan generation: {context_err}")
+            logger.warning("Falling back to static remediation plan")
+    else:
+        logger.info("No Gemini agent provided, using static remediation plan")
+    
+    # 2. Fall back to static plan if AI-generated plan failed or agent not available
+    static_plan = await load_static_plan(
+        anomaly_record, 
+        dependencies.db, 
+        dependencies.k8s_client
+    )
+    
+    if static_plan:
+        logger.info(f"Using static remediation plan: {static_plan.plan_name}")
+        return static_plan
+    else:
+        logger.warning(f"No remediation plan could be generated for anomaly {anomaly_id}")
+        return None
 
 
 async def load_static_plan(
@@ -783,18 +762,7 @@ async def load_static_plan(
     k8s_client: Optional[client.ApiClient] = None
 ) -> Optional[RemediationPlan]:
     """
-    Load a static predefined remediation plan based on anomaly pattern matching.
-    
-    This is a faster alternative to AI-based planning that uses pre-defined templates
-    for common failure scenarios.
-    
-    Args:
-        anomaly_record: The anomaly record from the detector
-        db: MongoDB database instance
-        k8s_client: Optional Kubernetes client (if resource info is needed)
-        
-    Returns:
-        A RemediationPlan if a matching static plan is found, otherwise None
+    Load a static remediation plan based on the anomaly type and subtype.
     """
     if not anomaly_record.id:
         logger.error("Cannot load static plan: AnomalyRecord is missing database ID")
@@ -816,7 +784,7 @@ async def load_static_plan(
             # Handle OOM failures - get the template and add the anomaly ID
             plan = get_static_plan_template("oomkilled_event", "detected")
             if plan:
-                plan.anomaly_id = anomaly_record.id
+                plan.anomaly_id = str(anomaly_record.id)
                 plan.context = {
                     "anomaly_type": "direct_failure",
                     "failure_reason": anomaly_record.failure_reason,
@@ -828,7 +796,7 @@ async def load_static_plan(
             # Handle crash loops - get high restart count plan
             plan = get_static_plan_template("container_restart_count", "high")
             if plan:
-                plan.anomaly_id = anomaly_record.id
+                plan.anomaly_id = str(anomaly_record.id)
                 plan.context = {
                     "anomaly_type": "direct_failure",
                     "failure_reason": anomaly_record.failure_reason,
@@ -840,7 +808,7 @@ async def load_static_plan(
             # Image pull issues - use default pod restart plan
             plan = get_static_plan_template("default", "unknown")
             if plan:
-                plan.anomaly_id = anomaly_record.id
+                plan.anomaly_id = str(anomaly_record.id)
                 plan.plan_name = "ImagePullBackOff Pod Restart"
                 plan.description = "Restart pod with image pull issues"
                 plan.reasoning = f"Static plan for ImagePullBackOff failure detected on {entity_id}"
@@ -856,7 +824,7 @@ async def load_static_plan(
             if entity_type.lower() == "pod":
                 plan = get_static_plan_template("default", "unknown")
                 if plan:
-                    plan.anomaly_id = anomaly_record.id
+                    plan.anomaly_id = str(anomaly_record.id)
                     plan.plan_name = "Pod on Unhealthy Node"
                     plan.description = "Restart pod on unhealthy node"
                     plan.reasoning = f"Static plan for pod on unhealthy node: {entity_id}"
@@ -870,7 +838,7 @@ async def load_static_plan(
             elif entity_type.lower() == "node":
                 plan = get_static_plan_template("node_issue", "resource_pressure")
                 if plan:
-                    plan.anomaly_id = anomaly_record.id
+                    plan.anomaly_id = str(anomaly_record.id)
                     plan.context = {
                         "anomaly_type": "direct_failure",
                         "failure_reason": anomaly_record.failure_reason,
@@ -888,7 +856,7 @@ async def load_static_plan(
                     # Scale up the deployment using CPU high utilization plan (similar action)
                     plan = get_static_plan_template("cpu_utilization_pct", "high")
                     if plan:
-                        plan.anomaly_id = anomaly_record.id
+                        plan.anomaly_id = str(anomaly_record.id)
                         plan.plan_name = "Deployment Scale Up"
                         plan.description = "Scale up deployment with insufficient replicas"
                         plan.reasoning = f"Static plan for deployment with insufficient replicas: {entity_id}"
@@ -903,7 +871,7 @@ async def load_static_plan(
                 # Pod in crash loop or image pull backoff
                 plan = get_static_plan_template("default", "unknown")
                 if plan:
-                    plan.anomaly_id = anomaly_record.id
+                    plan.anomaly_id = str(anomaly_record.id)
                     plan.plan_name = f"Pod {pattern} Restart"
                     plan.description = f"Restart pod with {pattern} issue"
                     plan.reasoning = f"Static plan for pod in {pattern}: {entity_id}"
@@ -931,19 +899,19 @@ async def load_static_plan(
                 
                 plan = get_static_plan_template(pattern, variant)
                 if plan:
-                    plan.anomaly_id = anomaly_record.id
+                    plan.anomaly_id = str(anomaly_record.id)
                     return _format_static_plan(plan, entity_id)
             else:
                 # For non-utilization metrics, use default variant if available
                 plan = get_static_plan_template(pattern)
                 if plan:
-                    plan.anomaly_id = anomaly_record.id
+                    plan.anomaly_id = str(anomaly_record.id)
                     return _format_static_plan(plan, entity_id)
     
     # Fall back to a default plan when no specific pattern matches
     default_plan = get_static_plan_template("default", "unknown")
     if default_plan:
-        default_plan.anomaly_id = anomaly_record.id
+        default_plan.anomaly_id = str(anomaly_record.id)
         return _format_static_plan(default_plan, entity_id)
     
     return None
@@ -962,7 +930,7 @@ def _format_static_plan(plan: RemediationPlan, entity_id: str) -> RemediationPla
     """
     # Make a deep copy to avoid modifying the template
     formatted_plan = RemediationPlan(
-        anomaly_id=plan.anomaly_id,  # Will be replaced later with actual anomaly ID
+        anomaly_id=str(plan.anomaly_id),  # Convert to string to ensure it's properly handled
         plan_name=plan.plan_name,
         description=plan.description,
         reasoning=plan.reasoning,
