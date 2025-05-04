@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: imageloop-pod
+spec:
+  restartPolicy: Always
+  containers:
+    - name: imageloop-container
+      image: nginx:doesnotexist

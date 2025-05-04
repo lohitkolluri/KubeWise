@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victoria-metrics-deployment
+  namespace: monitoring
+  labels:
+    app: victoria-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victoria-metrics
+  template:
+    metadata:
+      labels:
+        app: victoria-metrics
+    spec:
+      securityContext:
+        fsGroup: 65534
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: victoria-metrics
+        image: victoriametrics/victoria-metrics:v1.96.0  # Pin to specific version
+        args:
+          - "-storageDataPath=/victoria-metrics-data"
+          - "-retentionPeriod=3"  # 3 months retention
+          - "-httpListenAddr=:8428"
+          - "-search.maxUniqueTimeseries=1000000"  # Limit to prevent OOM
+          - "-memory.allowedPercent=80"  # Allow VM to use 80% of container memory
+          - "-search.maxConcurrentRequests=16"  # Limit concurrent requests
+          - "-search.maxQueryDuration=30s"  # Timeout long-running queries
+        ports:
+        - containerPort: 8428
+          name: http
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8428
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8428
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: vm-data
+          mountPath: /victoria-metrics-data
+      volumes:
+      - name: vm-data
+        persistentVolumeClaim:
+          claimName: victoria-metrics-pvc
+---
+# Update the PVC with better storage configuration
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victoria-metrics-pvc
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi  # Increase storage for longer retention 

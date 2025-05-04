@@ -1,0 +1,411 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      scrape_timeout: 10s
+      evaluation_interval: 15s
+
+    # Add alert rules and recording rules
+    rule_files:
+      - /etc/prometheus/recording_rules.yml
+      - /etc/prometheus/alerting_rules.yml
+
+    # Configure Alertmanager
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager-service.monitoring.svc.cluster.local:9093
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+          - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        authorization:
+          type: Bearer
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+            separator: ;
+            regex: default;kubernetes;https
+            replacement: $1
+            action: keep
+
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - monitoring
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: node-exporter-service
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_name
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: replace
+            target_label: node
+
+      - job_name: 'cadvisor'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - monitoring
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: cadvisor-service
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_name
+          # Add standardized label relabeling for container metrics
+          - source_labels: [container_label_io_kubernetes_pod_name]
+            target_label: pod
+            action: replace
+          - source_labels: [container_label_io_kubernetes_pod_namespace]
+            target_label: namespace
+            action: replace
+          - source_labels: [container_label_io_kubernetes_container_name]
+            target_label: container
+            action: replace
+          # Keep original labels for backward compatibility
+          - source_labels: [container_label_io_kubernetes_pod_name]
+            target_label: kubernetes_pod_name
+            action: replace
+          - source_labels: [container_label_io_kubernetes_pod_namespace]
+            target_label: kubernetes_namespace
+            action: replace
+
+      - job_name: 'kubernetes-service-endpoints'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            separator: ;
+            regex: "true"
+            replacement: $1
+            action: keep
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+            separator: ;
+            regex: (https?)
+            target_label: __scheme__
+            replacement: $1
+            action: replace
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            separator: ;
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: $1
+            action: replace
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            separator: ;
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            target_label: __address__
+            replacement: $1:$2
+            action: replace
+          - separator: ;
+            regex: __meta_kubernetes_service_label_(.+)
+            replacement: $1
+            action: labelmap
+          - source_labels: [__meta_kubernetes_namespace]
+            separator: ;
+            regex: (.*)
+            target_label: kubernetes_namespace
+            replacement: $1
+            action: replace
+          - source_labels: [__meta_kubernetes_service_name]
+            separator: ;
+            regex: (.*)
+            target_label: kubernetes_name
+            replacement: $1
+            action: replace
+          # Drop targets in the monitoring namespace to exclude anomaly detection
+          - source_labels: [__meta_kubernetes_namespace]
+            regex: monitoring
+            action: drop
+
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            separator: ;
+            regex: "true"
+            replacement: $1
+            action: keep
+          # Drop targets in the monitoring namespace to exclude anomaly detection
+          - source_labels: [__meta_kubernetes_namespace]
+            regex: monitoring
+            action: drop
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            separator: ;
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: $1
+            action: replace
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            separator: ;
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            target_label: __address__
+            replacement: $1:$2
+            action: replace
+          - separator: ;
+            regex: __meta_kubernetes_pod_label_(.+)
+            replacement: $1
+            action: labelmap
+          - source_labels: [__meta_kubernetes_namespace]
+            separator: ;
+            regex: (.*)
+            target_label: kubernetes_namespace
+            replacement: $1
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_name]
+            separator: ;
+            regex: (.*)
+            target_label: kubernetes_pod_name
+            replacement: $1
+            action: replace
+          # Add additional standardized labels
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+            action: replace
+
+      - job_name: 'kube-state-metrics'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - monitoring
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: kube-state-metrics
+          # Add relabeling for standardized label formats
+          - source_labels: [namespace]
+            target_label: kubernetes_namespace
+            action: replace
+          - source_labels: [pod]
+            target_label: kubernetes_pod_name
+            action: replace
+
+    remote_write:
+      - url: http://victoria-metrics-service.monitoring.svc.cluster.local:8428/api/v1/write
+        remote_timeout: 30s
+        follow_redirects: true
+        enable_http2: true
+        queue_config:
+          capacity: 10000
+          max_shards: 50
+          min_shards: 1
+          max_samples_per_send: 2000
+          batch_send_deadline: 5s
+          min_backoff: 30ms
+          max_backoff: 5s
+        metadata_config:
+          send: true
+          send_interval: 1m
+          max_samples_per_send: 2000
+
+  recording_rules.yml: |
+    groups:
+      - name: kubewise_recording_rules
+        interval: 30s
+        rules:
+          # CPU utilization - rate over 5 min
+          - record: pod:container_cpu_usage_seconds_total:rate5m
+            expr: sum by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name) (rate(container_cpu_usage_seconds_total{container_label_io_kubernetes_container_name!="POD", container_label_io_kubernetes_container_name!=""}[5m]))
+          
+          # Memory utilization in bytes
+          - record: pod:container_memory_usage_bytes:sum
+            expr: sum by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name) (container_memory_working_set_bytes{container_label_io_kubernetes_container_name!="POD", container_label_io_kubernetes_container_name!=""})
+          
+          # Memory utilization as percentage of limit (if specified)
+          - record: pod:container_memory_utilization_percentage
+            expr: 100 * sum(container_memory_working_set_bytes{job="kubelet", metrics_path="/metrics/cadvisor", container!="POD"}) by (namespace, pod) / sum(kube_pod_container_resource_limits{resource="memory"}) by (namespace, pod)
+          # Container restarts by pod
+          - record: pod:container_restarts:sum
+            expr: sum by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name) (kube_pod_container_status_restarts_total)
+          
+          # Node filesystem usage percentage
+          - record: node:filesystem_usage_percentage
+            expr: 100 - ((node_filesystem_avail_bytes{mountpoint="/", fstype!="rootfs"} * 100) / node_filesystem_size_bytes{mountpoint="/", fstype!="rootfs"})
+          
+          # Network bandwidth usage recording rules
+          - record: node:network_receive_bytes:rate5m
+            expr: sum by(instance) (rate(node_network_receive_bytes_total[5m]))
+          
+          # Network transmit bandwidth
+          - record: node:network_transmit_bytes:rate5m
+            expr: sum by(instance) (rate(node_network_transmit_bytes_total[5m]))
+          
+          # Standardized label mappings for alerting
+          - record: kube_pod_standardized_labels
+            expr: |
+              max by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name, namespace, pod) (
+                label_replace(
+                  label_replace(
+                    kube_pod_info{},
+                    "container_label_io_kubernetes_pod_namespace", "$1", "namespace", "(.+)"
+                  ),
+                  "container_label_io_kubernetes_pod_name", "$1", "pod", "(.+)"
+                )
+              )
+
+  alerting_rules.yml: |
+    groups:
+      - name: kubewise_alerts
+        rules:
+          # Node failures alert
+          - alert: NodeDown
+            expr: up{job="node-exporter"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node {{ $labels.instance }} is down"
+              description: "Node {{ $labels.instance }} has been down for more than 2 minutes."
+              remediation: "Check node status and try to restart it or replace with a new node."
+              
+          # Node high load alert
+          - alert: NodeHighLoad
+            expr: node_load5 > on(instance) 0.8 * count by(instance) (node_cpu_seconds_total{mode="idle"})
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Node {{ $labels.instance }} under high load"
+              description: "Node {{ $labels.instance }} is under high load for more than 10 minutes."
+              remediation: "Check which processes are consuming CPU and consider scaling or optimizing them."
+              
+          # Disk space alert (critical at 90%, warning at 80%)
+          - alert: NodeDiskSpaceCritical
+            expr: node:filesystem_usage_percentage > 90
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node {{ $labels.instance }} disk space critical"
+              description: "Node {{ $labels.instance }} has less than 10% free disk space."
+              remediation: "Clean up disk space by removing unused files, or add storage capacity."
+              
+          - alert: NodeDiskSpaceWarning
+            expr: node:filesystem_usage_percentage > 80
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Node {{ $labels.instance }} disk space warning"
+              description: "Node {{ $labels.instance }} has less than 20% free disk space."
+              remediation: "Plan to clean up disk or add capacity soon."
+              
+          # Memory exhaustion alerts
+          - alert: NodeMemoryExhaustion
+            expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100 < 10
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node {{ $labels.instance }} memory exhaustion"
+              description: "Node {{ $labels.instance }} has less than 10% available memory."
+              remediation: "Check memory-hungry processes and consider scaling up or adding nodes."
+              
+          # Container resource exhaustion alerts - CPU
+          - alert: PodCPUThrottling
+            expr: sum by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name) (increase(container_cpu_cfs_throttled_periods_total{container_label_io_kubernetes_container_name!="POD", container_label_io_kubernetes_container_name!=""}[5m])) / sum by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name) (increase(container_cpu_cfs_periods_total{container_label_io_kubernetes_container_name!="POD", container_label_io_kubernetes_container_name!=""}[5m])) > 0.25
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} in {{ $labels.container_label_io_kubernetes_pod_namespace }} namespace is being CPU throttled"
+              description: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} is being throttled by more than 25% for 15 minutes."
+              remediation: "Consider increasing CPU limits for affected containers or optimize code."
+              
+          # Container resource exhaustion alerts - Memory
+          - alert: PodMemoryUsageHigh
+            expr: pod:container_memory_utilization_percentage > 90
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} in {{ $labels.container_label_io_kubernetes_pod_namespace }} memory usage exceeds 90%"
+              description: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} is using more than 90% of its memory limit."
+              remediation: "Check for memory leaks, optimize memory usage, or increase memory limits."
+              
+          # OOM killed container alert
+          - alert: ContainerOOMKilled
+            expr: sum by(container_label_io_kubernetes_pod_namespace, container_label_io_kubernetes_pod_name) (kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}) > 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} in {{ $labels.container_label_io_kubernetes_pod_namespace }} was OOM killed"
+              description: "One or more containers in pod {{ $labels.container_label_io_kubernetes_pod_name }} in namespace {{ $labels.container_label_io_kubernetes_pod_namespace }} were killed due to Out Of Memory."
+              remediation: "Increase memory limits for the container or optimize application memory usage."
+              
+          # Pod restart alerts
+          - alert: PodHighRestartRate
+            expr: increase(pod:container_restarts:sum[1h]) > 5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} in {{ $labels.container_label_io_kubernetes_pod_namespace }} restarting frequently"
+              description: "Pod {{ $labels.container_label_io_kubernetes_pod_name }} has restarted more than 5 times in the last hour."
+              remediation: "Check pod logs and events to determine the cause of restarts."
+              
+          # Network-related alerts
+          - alert: NetworkPacketLoss
+            expr: |
+              (
+                rate(node_network_receive_packets_total{device!~"lo|veth.+|docker.+|flannel.+|cali.+|cbr.+"}[5m])
+                -
+                rate(node_network_receive_packets_total{device!~"lo|veth.+|docker.+|flannel.+|cali.+|cbr.+"}[5m])
+              ) 
+              / 
+              rate(node_network_receive_packets_total{device!~"lo|veth.+|docker.+|flannel.+|cali.+|cbr.+"}[5m]) > 0.05
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Network packet loss detected on {{ $labels.instance }}"
+              description: "{{ $labels.instance }} is experiencing more than 5% packet loss on interface {{ $labels.device }}."
+              remediation: "Check network conditions and device connectivity."
+              
+          # Endpoint/Service alerts
+          - alert: ServiceEndpointDown
+            expr: kube_endpoint_address_available{endpoint!~"prometheus-operated|alertmanager-operated"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Service {{ $labels.service }} endpoint is down"
+              description: "Service {{ $labels.service }} in namespace {{ $labels.namespace }} has no available endpoints."
+              remediation: "Check the pods backing this service and their health status."

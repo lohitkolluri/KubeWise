@@ -1,0 +1,37 @@
+# Core Application & Web Framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+httpx==0.28.1 # Updated to satisfy google-genai dependency
+
+# Kubernetes Interaction
+# kubernetes==29.0.0 # Replaced by kubernetes_asyncio
+kubernetes_asyncio==29.0.0 # Use the async fork
+
+# Monitoring & Anomaly Detection
+prometheus-client==0.20.0
+river==0.22.0 # Corrected version based on availability
+
+# AI & Data Modeling
+pydantic==2.10.0 # Updated to meet pydantic-ai dependency requirement
+pydantic-ai==0.1.6 # Corrected version based on availability
+# Note: pydantic-ai might pull in specific google-generativeai versions
+
+# Database
+pymongo[srv]==4.7.2 # Includes dnspython for srv lookup
+motor==3.4.0
+
+# CLI
+typer[all]==0.12.3
+
+# Logging
+loguru==0.7.2
+
+# Development & Linting/Formatting/Typing (for local dev)
+ruff==0.4.4
+mypy==1.10.0
+black==24.4.2 # Although config is in pyproject, good to list for consistency
+
+# Testing
+pytest==8.2.0
+pytest-asyncio==0.23.7
+

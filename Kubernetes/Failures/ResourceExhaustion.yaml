@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: memory-hog-pod
+  namespace: default
+spec:
+  restartPolicy: Never # Set to Never so it doesn't restart if it gets OOMKilled immediately
+  containers:
+    - name: memory-hog-container
+      image: busybox:latest
+      command: ["sh", "-c"]
+      args: ["while true; do dd if=/dev/zero of=/dev/shm/memhog bs=1M count=1 oflag=append conv=notrunc; sleep 1; done"] # Allocate 1MB every second to /dev/shm (RAM)
+      resources:
+        limits:
+          memory: "400Mi" # Set a limit to trigger OOMKilled after ~400 seconds (~6-7 minutes)
+        requests:
+          memory: "300Mi" # Set request lower than limit

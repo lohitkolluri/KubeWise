@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      # Add email, Slack, or other notification configurations here
+      # slack_api_url: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'
+      
+    templates:
+      - '/etc/alertmanager/template/*.tmpl'
+      
+    route:
+      group_by: ['alertname', 'namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'default'
+      routes:
+      - receiver: 'critical'
+        matchers:
+          - severity="critical"
+        group_wait: 10s
+      - receiver: 'warnings'
+        matchers:
+          - severity="warning"
+        
+    receivers:
+    - name: 'default'
+      # Add email, Slack or other notification configurations
+      # email_configs:
+      # - to: 'alerts@example.com'
+      #   from: 'alertmanager@example.com'
+      #   smarthost: 'smtp.example.com:587'
+      #   auth_username: 'alertmanager@example.com'
+      #   auth_identity: 'alertmanager@example.com'
+      #   auth_password: 'password'
+
+    - name: 'critical'
+      # Configuration for critical alerts - uncomment when remediation service is implemented
+      # webhook_configs:
+      # - url: 'http://remediation-service.monitoring.svc.cluster.local:8080/api/remediate'
+      #   send_resolved: true
+
+    - name: 'warnings'
+      # Configuration for warning alerts - uncomment when remediation service is implemented
+      # webhook_configs:
+      # - url: 'http://remediation-service.monitoring.svc.cluster.local:8080/api/predict'
+      #   send_resolved: true
+
+    inhibit_rules:
+    - source_matchers:
+        - severity="critical"
+      target_matchers:
+        - severity="warning"
+      equal: ['alertname', 'namespace']
+      
+  template.tmpl: |
+    {{ define "slack.kubewise.text" }}
+      {{ range .Alerts }}
+        *Alert:* {{ .Annotations.summary }}
+        *Description:* {{ .Annotations.description }}
+        *Details:*
+          {{ range .Labels.SortedPairs }} • *{{ .Name }}:* `{{ .Value }}`
+          {{ end }}
+        *Remediation:* {{ .Annotations.remediation }}
+      {{ end }}
+    {{ end }} 
