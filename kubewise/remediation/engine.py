@@ -1,11 +1,16 @@
 import asyncio
 import datetime
-import json
-import random
 import time
-from functools import wraps
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple, TypeVar, Union
 import traceback
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    List,
+    Tuple,
+    TypeVar,
+)
 
 import motor.motor_asyncio
 from bson import ObjectId
@@ -24,12 +29,18 @@ from kubewise.models import (
     RemediationAction,
     RemediationPlan,
 )
-from kubewise.remediation.planner import PlannerDependencies, generate_remediation_plan, load_static_plan
-from kubewise.utils.retry import with_exponential_backoff
+from kubewise.utils.email import send_email
+from kubewise.remediation.planner import (
+    PlannerDependencies,
+    generate_remediation_plan,
+    load_static_plan,
+)
 
 # Type definitions
-T = TypeVar('T')
-ActionCoroutine = Callable[[client.ApiClient, Dict[str, Any]], Coroutine[Any, Any, Tuple[bool, str]]]
+T = TypeVar("T")
+ActionCoroutine = Callable[
+    [client.ApiClient, Dict[str, Any]], Coroutine[Any, Any, Tuple[bool, str]]
+]
 
 # Constants
 ACTION_TIMEOUT = 60.0  # seconds before action times out
@@ -37,26 +48,34 @@ ACTION_TIMEOUT = 60.0  # seconds before action times out
 # Registry for remediation actions
 ACTION_REGISTRY: Dict[ActionType, ActionCoroutine] = {}
 
-def register_action(action_type: ActionType) -> Callable[[ActionCoroutine], ActionCoroutine]:
+
+def register_action(
+    action_type: ActionType,
+) -> Callable[[ActionCoroutine], ActionCoroutine]:
     """
     Decorator to register a function as a handler for a specific remediation action.
-    
+
     Args:
         action_type: The action type identifier (e.g., 'scale_deployment').
-        
+
     Returns:
         The decorator function.
     """
+
     def decorator(func: ActionCoroutine) -> ActionCoroutine:
         if action_type in ACTION_REGISTRY:
-            logger.warning(f"Action type '{action_type}' is already registered. Overwriting.")
+            logger.warning(
+                f"Action type '{action_type}' is already registered. Overwriting."
+            )
         logger.debug(f"Registering action handler for '{action_type}'")
         ACTION_REGISTRY[action_type] = func
         return func
+
     return decorator
 
 
 # Registered DSL Actions
+
 
 @register_action("scale_deployment")
 async def scale_deployment_action(
@@ -80,22 +99,36 @@ async def scale_deployment_action(
     if not name or replicas is None:
         return False, "Missing 'name' or 'replicas' parameter for scale_deployment"
 
-    logger.debug(f"scale_deployment_action received replicas: type={type(replicas)}, value='{replicas}'")
+    logger.debug(
+        f"scale_deployment_action received replicas: type={type(replicas)}, value='{replicas}'"
+    )
 
     target_replicas: int
     expected_placeholder = "{current_replicas + 1}"
-    is_placeholder = isinstance(replicas, str) and replicas.strip() == expected_placeholder
-    logger.debug(f"Checking for placeholder: received='{replicas}', expected='{expected_placeholder}', is_match={is_placeholder}")
+    is_placeholder = (
+        isinstance(replicas, str) and replicas.strip() == expected_placeholder
+    )
+    logger.debug(
+        f"Checking for placeholder: received='{replicas}', expected='{expected_placeholder}', is_match={is_placeholder}"
+    )
 
     # Handle placeholder string for replicas
     if is_placeholder:
         try:
             logger.debug(f"Attempting to fetch current replicas for {namespace}/{name}")
-            current_scale = await apps_v1_api.read_namespaced_deployment_scale(name=name, namespace=namespace)
-            current_replicas = current_scale.spec.replicas if current_scale.spec and current_scale.spec.replicas is not None else 0
+            current_scale = await apps_v1_api.read_namespaced_deployment_scale(
+                name=name, namespace=namespace
+            )
+            current_replicas = (
+                current_scale.spec.replicas
+                if current_scale.spec and current_scale.spec.replicas is not None
+                else 0
+            )
             logger.debug(f"Fetched current replicas: {current_replicas}")
             target_replicas = current_replicas + 1
-            logger.info(f"Placeholder detected. Current replicas: {current_replicas}. Target replicas: {target_replicas}")
+            logger.info(
+                f"Placeholder detected. Current replicas: {current_replicas}. Target replicas: {target_replicas}"
+            )
         except client.ApiException as e:
             msg = f"Failed to get current replica count for deployment '{namespace}/{name}': {e.status} - {e.reason}"
             logger.error(msg)
@@ -107,11 +140,16 @@ async def scale_deployment_action(
     elif isinstance(replicas, int) and replicas >= 0:
         target_replicas = replicas
     else:
-        return False, f"Invalid 'replicas' value: {replicas}. Must be a non-negative integer or '{{current_replicas + 1}}'."
+        return (
+            False,
+            f"Invalid 'replicas' value: {replicas}. Must be a non-negative integer or '{{current_replicas + 1}}'.",
+        )
 
     patch_body = {"spec": {"replicas": target_replicas}}
     try:
-        logger.info(f"Scaling deployment '{namespace}/{name}' to {target_replicas} replicas...")
+        logger.info(
+            f"Scaling deployment '{namespace}/{name}' to {target_replicas} replicas..."
+        )
         await apps_v1_api.patch_namespaced_deployment_scale(
             name=name, namespace=namespace, body=patch_body
         )
@@ -119,8 +157,10 @@ async def scale_deployment_action(
         logger.info(msg)
         return True, msg
     except client.ApiException as e:
-        msg = (f"Failed to scale deployment '{namespace}/{name}': "
-               f"{e.status} - {e.reason} - {e.body}")
+        msg = (
+            f"Failed to scale deployment '{namespace}/{name}': "
+            f"{e.status} - {e.reason} - {e.body}"
+        )
         logger.error(msg)
         return False, msg
     except Exception as e:
@@ -176,10 +216,12 @@ async def delete_pod_action(
         if e.status == 404:
             msg = f"Pod '{namespace}/{name}' not found. Assuming already deleted."
             logger.warning(msg)
-            return True, msg # Treat as success if already gone
+            return True, msg  # Treat as success if already gone
         else:
-            msg = (f"Failed to delete pod '{namespace}/{name}': "
-                   f"{e.status} - {e.reason} - {e.body}")
+            msg = (
+                f"Failed to delete pod '{namespace}/{name}': "
+                f"{e.status} - {e.reason} - {e.body}"
+            )
             logger.error(msg)
             return False, msg
     except Exception as e:
@@ -216,14 +258,12 @@ async def restart_deployment_action(
             "spec": {
                 "template": {
                     "metadata": {
-                        "annotations": {
-                            "kubectl.kubernetes.io/restartedAt": timestamp
-                        }
+                        "annotations": {"kubectl.kubernetes.io/restartedAt": timestamp}
                     }
                 }
             }
         }
-        
+
         logger.info(f"Restarting deployment '{namespace}/{name}'...")
         await apps_v1_api.patch_namespaced_deployment(
             name=name, namespace=namespace, body=patch_body
@@ -232,8 +272,10 @@ async def restart_deployment_action(
         logger.info(msg)
         return True, msg
     except client.ApiException as e:
-        msg = (f"Failed to restart deployment '{namespace}/{name}': "
-               f"{e.status} - {e.reason} - {e.body}")
+        msg = (
+            f"Failed to restart deployment '{namespace}/{name}': "
+            f"{e.status} - {e.reason} - {e.body}"
+        )
         logger.error(msg)
         return False, msg
     except Exception as e:
@@ -269,54 +311,67 @@ async def drain_node_action(
         logger.info(f"Cordoning node '{name}'...")
         body = {"spec": {"unschedulable": True}}
         await core_v1_api.patch_node(name=name, body=body)
-        
+
         # Step 2: Get all pods on the node
-        field_selector = f"spec.nodeName={name},status.phase!=Failed,status.phase!=Succeeded"
-        pods = await core_v1_api.list_pod_for_all_namespaces(field_selector=field_selector)
-        
+        field_selector = (
+            f"spec.nodeName={name},status.phase!=Failed,status.phase!=Succeeded"
+        )
+        pods = await core_v1_api.list_pod_for_all_namespaces(
+            field_selector=field_selector
+        )
+
         pods_count = len(pods.items)
         logger.info(f"Node '{name}' has {pods_count} pods to evict")
-        
+
         if pods_count == 0:
             return True, f"Node '{name}' successfully cordoned with no pods to evict"
-        
+
         # Step 3: Evict each pod with grace period
         evicted_count = 0
         for pod in pods.items:
             # Skip DaemonSet pods if not force
-            if not force and any(owner.kind == "DaemonSet" for owner in pod.metadata.owner_references or []):
-                logger.info(f"Skipping DaemonSet pod '{pod.metadata.namespace}/{pod.metadata.name}'")
+            if not force and any(
+                owner.kind == "DaemonSet"
+                for owner in pod.metadata.owner_references or []
+            ):
+                logger.info(
+                    f"Skipping DaemonSet pod '{pod.metadata.namespace}/{pod.metadata.name}'"
+                )
                 continue
-                
-            logger.info(f"Evicting pod '{pod.metadata.namespace}/{pod.metadata.name}' from node '{name}'")
+
+            logger.info(
+                f"Evicting pod '{pod.metadata.namespace}/{pod.metadata.name}' from node '{name}'"
+            )
             # Create eviction object
             eviction_body = {
                 "apiVersion": "policy/v1",
                 "kind": "Eviction",
                 "metadata": {
                     "name": pod.metadata.name,
-                    "namespace": pod.metadata.namespace
+                    "namespace": pod.metadata.namespace,
                 },
-                "deleteOptions": {
-                    "gracePeriodSeconds": grace_period
-                }
+                "deleteOptions": {"gracePeriodSeconds": grace_period},
             }
-            
+
             try:
                 # We use the generic API since evictions are special
                 await api_client.post(
                     f"/api/v1/namespaces/{pod.metadata.namespace}/pods/{pod.metadata.name}/eviction",
-                    body=eviction_body
+                    body=eviction_body,
                 )
                 evicted_count += 1
             except client.ApiException as pod_e:
                 if pod_e.status == 429:  # Too Many Requests
-                    logger.warning(f"Pod eviction throttled, waiting 10s: '{pod.metadata.namespace}/{pod.metadata.name}'")
+                    logger.warning(
+                        f"Pod eviction throttled, waiting 10s: '{pod.metadata.namespace}/{pod.metadata.name}'"
+                    )
                     await asyncio.sleep(10)
                     # Continue with next pod, we'll let caller retry the drain if needed
                 else:
-                    logger.error(f"Failed to evict pod '{pod.metadata.namespace}/{pod.metadata.name}': {pod_e.reason}")
-        
+                    logger.error(
+                        f"Failed to evict pod '{pod.metadata.namespace}/{pod.metadata.name}': {pod_e.reason}"
+                    )
+
         msg = f"Node '{name}' drained: cordoned successfully and evicted {evicted_count}/{pods_count} pods"
         logger.info(msg)
         return True, msg
@@ -347,30 +402,46 @@ async def scale_statefulset_action(
     apps_v1_api = client.AppsV1Api(api_client)
     name = params.get("name")
     replicas = params.get("replicas")
-    namespace = params.get("namespace", "default")  # Default to 'default' if not provided
+    namespace = params.get(
+        "namespace", "default"
+    )  # Default to 'default' if not provided
 
     if not name or replicas is None:
         return False, "Missing 'name' or 'replicas' parameter for scale_statefulset"
 
     # --- Debugging Replica Value ---
-    logger.debug(f"scale_statefulset_action received replicas: type={type(replicas)}, value='{replicas}'")
+    logger.debug(
+        f"scale_statefulset_action received replicas: type={type(replicas)}, value='{replicas}'"
+    )
     # --- End Debugging ---
 
     target_replicas: int
     expected_placeholder = "{current_replicas + 1}"
     # More robust check: strip whitespace from input 'replicas' before comparison
-    is_placeholder = isinstance(replicas, str) and replicas.strip() == expected_placeholder
-    logger.debug(f"Checking for placeholder: received='{replicas}', expected='{expected_placeholder}', is_match={is_placeholder}")
+    is_placeholder = (
+        isinstance(replicas, str) and replicas.strip() == expected_placeholder
+    )
+    logger.debug(
+        f"Checking for placeholder: received='{replicas}', expected='{expected_placeholder}', is_match={is_placeholder}"
+    )
 
     # Handle placeholder string for replicas
     if is_placeholder:
         try:
             logger.debug(f"Attempting to fetch current replicas for {namespace}/{name}")
-            current_scale = await apps_v1_api.read_namespaced_stateful_set_scale(name=name, namespace=namespace)
-            current_replicas = current_scale.spec.replicas if current_scale.spec and current_scale.spec.replicas is not None else 0
+            current_scale = await apps_v1_api.read_namespaced_stateful_set_scale(
+                name=name, namespace=namespace
+            )
+            current_replicas = (
+                current_scale.spec.replicas
+                if current_scale.spec and current_scale.spec.replicas is not None
+                else 0
+            )
             logger.debug(f"Fetched current replicas: {current_replicas}")
             target_replicas = current_replicas + 1
-            logger.info(f"Placeholder detected. Current replicas: {current_replicas}. Target replicas: {target_replicas}")
+            logger.info(
+                f"Placeholder detected. Current replicas: {current_replicas}. Target replicas: {target_replicas}"
+            )
         except client.ApiException as e:
             msg = f"Failed to get current replica count for statefulset '{namespace}/{name}': {e.status} - {e.reason}"
             logger.error(msg)
@@ -382,11 +453,16 @@ async def scale_statefulset_action(
     elif isinstance(replicas, int) and replicas >= 0:
         target_replicas = replicas
     else:
-        return False, f"Invalid 'replicas' value: {replicas}. Must be a non-negative integer or '{{current_replicas + 1}}'."
+        return (
+            False,
+            f"Invalid 'replicas' value: {replicas}. Must be a non-negative integer or '{{current_replicas + 1}}'.",
+        )
 
     patch_body = {"spec": {"replicas": target_replicas}}
     try:
-        logger.info(f"Scaling statefulset '{namespace}/{name}' to {target_replicas} replicas...")
+        logger.info(
+            f"Scaling statefulset '{namespace}/{name}' to {target_replicas} replicas..."
+        )
         await apps_v1_api.patch_namespaced_stateful_set_scale(
             name=name, namespace=namespace, body=patch_body
         )
@@ -394,8 +470,10 @@ async def scale_statefulset_action(
         logger.info(msg)
         return True, msg
     except client.ApiException as e:
-        msg = (f"Failed to scale statefulset '{namespace}/{name}': "
-               f"{e.status} - {e.reason} - {e.body}")
+        msg = (
+            f"Failed to scale statefulset '{namespace}/{name}': "
+            f"{e.status} - {e.reason} - {e.body}"
+        )
         logger.error(msg)
         return False, msg
     except Exception as e:
@@ -410,7 +488,7 @@ async def taint_node_action(
 ) -> Tuple[bool, str]:
     """
     Apply a taint to a node.
-    
+
     Args:
         api_client: An initialized Kubernetes ApiClient.
         params: Dictionary containing:
@@ -418,7 +496,7 @@ async def taint_node_action(
             - 'key': Taint key
             - 'value': Taint value
             - 'effect': One of: NoSchedule, PreferNoSchedule, NoExecute
-            
+
     Returns:
         Tuple (success: bool, message: str).
     """
@@ -427,43 +505,46 @@ async def taint_node_action(
     key = params.get("key")
     value = params.get("value")
     effect = params.get("effect")
-    
-    if not name or not key or not value or not effect:
-        return False, "Missing required parameters for taint_node"
-    
+
+    if not name or not key or not effect:
+        return False, "Missing 'name', 'key', or 'effect' parameter for taint_node"
+
     if effect not in ["NoSchedule", "PreferNoSchedule", "NoExecute"]:
-        return False, f"Invalid effect '{effect}'. Must be one of: NoSchedule, PreferNoSchedule, NoExecute"
-    
+        return (
+            False,
+            f"Invalid taint effect: {effect}. Must be one of: NoSchedule, PreferNoSchedule, NoExecute",
+        )
+
     try:
         # Get current node
         node = await core_v1_api.read_node(name=name)
-        
-        # Create the taint to apply
-        new_taint = {"key": key, "value": value, "effect": effect}
-        
-        # Check if the taint already exists
-        current_taints = node.spec.taints or []
-        
-        for taint in current_taints:
-            if taint.key == key and taint.effect == effect:
-                msg = f"Taint with key '{key}' and effect '{effect}' already exists on node '{name}'"
-                logger.info(msg)
-                return True, msg
-        
-        # Add the new taint
-        updated_taints = current_taints + [client.V1Taint(**new_taint)]
-        
-        # Prepare the patch
-        patch_body = {"spec": {"taints": updated_taints}}
-        
-        # Apply the patch
-        logger.info(f"Adding taint {key}={value}:{effect} to node '{name}'")
-        await core_v1_api.patch_node(name=name, body=patch_body)
-        
-        msg = f"Successfully added taint {key}={value}:{effect} to node '{name}'"
-        logger.info(msg)
-        return True, msg
-        
+
+        # Prepare the taint object
+        taint = {"key": key, "effect": effect}
+        if value is not None:
+            taint["value"] = value
+
+        # Add the new taint to the existing taints, if any
+        new_taints = node.spec.taints or []
+        # Avoid adding duplicate taints
+        if not any(
+            t.key == taint["key"] and t.effect == taint["effect"] for t in new_taints
+        ):
+            new_taints.append(client.V1Taint(**taint))
+            patch_body = {"spec": {"taints": new_taints}}
+
+            # Apply the patch
+            logger.info(f"Applying taint {taint} to node '{name}'")
+            await core_v1_api.patch_node(name=name, body=patch_body)
+
+            msg = f"Successfully applied taint {taint} to node '{name}'"
+            logger.info(msg)
+            return True, msg
+        else:
+            msg = f"Taint {taint} already exists on node '{name}'"
+            logger.warning(msg)
+            return True, msg # Consider it a success if the taint is already there
+
     except client.ApiException as e:
         msg = f"Failed to taint node '{name}': {e.status} - {e.reason} - {e.body}"
         logger.error(msg)
@@ -479,69 +560,60 @@ async def evict_pod_action(
     api_client: client.ApiClient, params: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """
-    Evicts a pod using the Pod Eviction API.
-    
-    Unlike delete_pod, this respects PodDisruptionBudgets.
-    
+    Evicts a specific Kubernetes Pod.
+
     Args:
         api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing:
-            - 'name': Pod name
-            - 'namespace': Pod namespace
-            - Optional 'grace_period_seconds': Grace period for pod termination
-            
+        params: Dictionary containing 'name', 'namespace', and optionally 'grace_period_seconds'.
+
     Returns:
         Tuple (success: bool, message: str).
     """
     core_v1_api = client.CoreV1Api(api_client)
-    policy_v1_api = client.PolicyV1Api(api_client)
-    
     name = params.get("name")
     namespace = params.get("namespace")
-    grace_period_seconds = params.get("grace_period_seconds")
-    
+    grace_period = params.get("grace_period_seconds", 30)  # Default 30s grace period
+
     if not name or not namespace:
         return False, "Missing 'name' or 'namespace' parameter for evict_pod"
-    
-    # Create eviction body
-    eviction_body = {
-        "apiVersion": "policy/v1",
-        "kind": "Eviction",
-        "metadata": {
-            "name": name,
-            "namespace": namespace
-        }
-    }
-    
-    # Add grace period if specified
-    if grace_period_seconds is not None:
-        if not isinstance(grace_period_seconds, int) or grace_period_seconds < 0:
-            return False, f"Invalid grace_period_seconds: {grace_period_seconds}. Must be a non-negative integer."
-        eviction_body["deleteOptions"] = {"gracePeriodSeconds": grace_period_seconds}
-    
+
     try:
-        logger.info(f"Evicting pod '{namespace}/{name}'...")
-        # Use the custom API call for evictions
-        await policy_v1_api.create_namespaced_pod_eviction(
-            name=name, 
-            namespace=namespace,
-            body=client.V1Eviction(**eviction_body)
+        # Create eviction object
+        eviction_body = {
+            "apiVersion": "policy/v1",
+            "kind": "Eviction",
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+            },
+            "deleteOptions": {"gracePeriodSeconds": grace_period},
+        }
+
+        logger.info(f"Evicting pod '{namespace}/{name}' with grace period {grace_period}s...")
+        # We use the generic API since evictions are special
+        await api_client.post(
+            f"/api/v1/namespaces/{namespace}/pods/{name}/eviction",
+            body=eviction_body,
         )
         msg = f"Successfully initiated eviction for pod '{namespace}/{name}'."
         logger.info(msg)
+        # Eviction is asynchronous in K8s. We report success on initiating.
         return True, msg
     except client.ApiException as e:
-        # Special handling for eviction blocked by PDB
-        if e.status == 429:  # Too Many Requests
-            msg = f"Cannot evict pod '{namespace}/{name}': blocked by PodDisruptionBudget"
-            logger.warning(msg)
-            return False, msg
-        elif e.status == 404:
-            msg = f"Pod '{namespace}/{name}' not found. Assuming already gone."
+        # Handle 'Not Found' gracefully - maybe the pod was already evicted
+        if e.status == 404:
+            msg = f"Pod '{namespace}/{name}' not found. Assuming already evicted."
             logger.warning(msg)
             return True, msg  # Treat as success if already gone
+        elif e.status == 429: # Too Many Requests (throttled)
+             msg = f"Eviction for pod '{namespace}/{name}' throttled (Too Many Requests)."
+             logger.warning(msg)
+             return False, msg # Indicate failure, caller might retry
         else:
-            msg = f"Failed to evict pod '{namespace}/{name}': {e.status} - {e.reason} - {e.body}"
+            msg = (
+                f"Failed to evict pod '{namespace}/{name}': "
+                f"{e.status} - {e.reason} - {e.body}"
+            )
             logger.error(msg)
             return False, msg
     except Exception as e:
@@ -555,110 +627,65 @@ async def vertical_scale_deployment_action(
     api_client: client.ApiClient, params: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """
-    Vertically scale a deployment by updating resource requests/limits for a specific container.
-    
+    Vertically scales a Kubernetes Deployment by updating resource requests/limits.
+
     Args:
         api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing:
-            - 'name': Deployment name
-            - 'namespace': Deployment namespace
-            - 'container': Container name to scale
-            - 'resource': Resource to scale ('cpu' or 'memory')
-            - 'value': New resource value (e.g. '200m' for CPU, '512Mi' for memory)
-            
+        params: Dictionary containing 'name', optionally 'namespace', and 'resources'.
+                'resources' should be a dictionary like {'cpu': '500m', 'memory': '1Gi'}.
+
     Returns:
         Tuple (success: bool, message: str).
     """
     apps_v1_api = client.AppsV1Api(api_client)
     name = params.get("name")
     namespace = params.get("namespace", "default")
-    container_name = params.get("container")
-    resource_type = params.get("resource")
-    resource_value = params.get("value")
-    
-    # Validate params
-    if not name or not container_name or not resource_type or not resource_value:
-        return False, "Missing required parameters for vertical_scale_deployment"
-    
-    if resource_type not in ["cpu", "memory"]:
-        return False, f"Invalid resource type: {resource_type}. Must be 'cpu' or 'memory'."
-    
+    resources = params.get("resources") # Expected format: {'cpu': '...', 'memory': '...'}
+
+    if not name or not resources or not isinstance(resources, dict):
+        return False, "Missing 'name' or invalid 'resources' parameter for vertical_scale_deployment. 'resources' must be a dictionary."
+
     try:
-        # Get current deployment
+        # Get the current deployment
         deployment = await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
-        
-        # Find the container spec
-        containers = deployment.spec.template.spec.containers
-        target_container = None
-        container_index = -1
-        
-        for i, container in enumerate(containers):
-            if container.name == container_name:
-                target_container = container
-                container_index = i
-                break
-        
-        if target_container is None:
-            return False, f"Container '{container_name}' not found in deployment '{namespace}/{name}'"
-        
-        # Ensure resources exist
-        if not target_container.resources:
-            target_container.resources = client.V1ResourceRequirements()
-        
-        # Ensure requests and limits exist
-        if not target_container.resources.requests:
-            target_container.resources.requests = {}
-        if not target_container.resources.limits:
-            target_container.resources.limits = {}
-        
-        # Update the resources
-        target_container.resources.requests[resource_type] = resource_value
-        target_container.resources.limits[resource_type] = resource_value
-        
-        # Update the container in the list
-        containers[container_index] = target_container
-        
-        # Create the patch
+
+        # Prepare the patch body to update container resources
+        # This assumes all containers in the deployment should have the same resources applied.
+        # A more sophisticated action might allow specifying resources per container.
         patch_body = {
             "spec": {
                 "template": {
                     "spec": {
-                        "containers": [
-                            {
-                                "name": container_name,
-                                "resources": {
-                                    "requests": {
-                                        resource_type: resource_value
-                                    },
-                                    "limits": {
-                                        resource_type: resource_value
-                                    }
-                                }
-                            }
-                        ]
+                        "containers": []
                     }
                 }
             }
         }
-        
-        # Apply the patch with strategic merge patch type
-        logger.info(f"Vertically scaling {resource_type} resources for container '{container_name}' in deployment '{namespace}/{name}' to {resource_value}")
+
+        for container in deployment.spec.template.spec.containers:
+            updated_container = {
+                "name": container.name,
+                "resources": resources # Apply the specified resources to all containers
+            }
+            patch_body["spec"]["template"]["spec"]["containers"].append(updated_container)
+
+
+        logger.info(f"Vertically scaling deployment '{namespace}/{name}' with resources: {resources}...")
         await apps_v1_api.patch_namespaced_deployment(
-            name=name, 
-            namespace=namespace, 
-            body=patch_body
+            name=name, namespace=namespace, body=patch_body
         )
-        
-        msg = f"Successfully updated {resource_type} resources for container '{container_name}' in deployment '{namespace}/{name}' to {resource_value}"
+        msg = f"Successfully initiated vertical scaling for deployment '{namespace}/{name}' with resources {resources}."
         logger.info(msg)
         return True, msg
-        
     except client.ApiException as e:
-        msg = f"Failed to update resources for container '{container_name}' in deployment '{namespace}/{name}': {e.status} - {e.reason} - {e.body}"
+        msg = (
+            f"Failed to vertically scale deployment '{namespace}/{name}': "
+            f"{e.status} - {e.reason} - {e.body}"
+        )
         logger.error(msg)
         return False, msg
     except Exception as e:
-        msg = f"Unexpected error updating resources for container '{container_name}' in deployment '{namespace}/{name}': {e}"
+        msg = f"Unexpected error vertically scaling deployment '{namespace}/{name}': {e}"
         logger.exception(msg)
         return False, msg
 
@@ -668,93 +695,65 @@ async def vertical_scale_statefulset_action(
     api_client: client.ApiClient, params: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """
-    Vertically scale a statefulset by updating resource requests/limits for a specific container.
-    
+    Vertically scales a Kubernetes StatefulSet by updating resource requests/limits.
+
     Args:
         api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing:
-            - 'name': StatefulSet name
-            - 'namespace': StatefulSet namespace
-            - 'container': Container name to scale
-            - 'resource': Resource to scale ('cpu' or 'memory')
-            - 'value': New resource value (e.g. '200m' for CPU, '512Mi' for memory)
-            
+        params: Dictionary containing 'name', optionally 'namespace', and 'resources'.
+                'resources' should be a dictionary like {'cpu': '500m', 'memory': '1Gi'}.
+
     Returns:
         Tuple (success: bool, message: str).
     """
     apps_v1_api = client.AppsV1Api(api_client)
     name = params.get("name")
     namespace = params.get("namespace", "default")
-    container_name = params.get("container")
-    resource_type = params.get("resource")
-    resource_value = params.get("value")
-    
-    # Validate params
-    if not name or not container_name or not resource_type or not resource_value:
-        return False, "Missing required parameters for vertical_scale_statefulset"
-    
-    if resource_type not in ["cpu", "memory"]:
-        return False, f"Invalid resource type: {resource_type}. Must be 'cpu' or 'memory'."
-    
+    resources = params.get("resources") # Expected format: {'cpu': '...', 'memory': '...'}
+
+    if not name or not resources or not isinstance(resources, dict):
+        return False, "Missing 'name' or invalid 'resources' parameter for vertical_scale_statefulset. 'resources' must be a dictionary."
+
     try:
-        # Get current statefulset
+        # Get the current statefulset
         statefulset = await apps_v1_api.read_namespaced_stateful_set(name=name, namespace=namespace)
-        
-        # Find the container spec
-        containers = statefulset.spec.template.spec.containers
-        target_container = None
-        container_index = -1
-        
-        for i, container in enumerate(containers):
-            if container.name == container_name:
-                target_container = container
-                container_index = i
-                break
-        
-        if target_container is None:
-            return False, f"Container '{container_name}' not found in statefulset '{namespace}/{name}'"
-        
-        # Create the patch
+
+        # Prepare the patch body to update container resources
+        # This assumes all containers in the statefulset should have the same resources applied.
+        # A more sophisticated action might allow specifying resources per container.
         patch_body = {
             "spec": {
                 "template": {
                     "spec": {
-                        "containers": [
-                            {
-                                "name": container_name,
-                                "resources": {
-                                    "requests": {
-                                        resource_type: resource_value
-                                    },
-                                    "limits": {
-                                        resource_type: resource_value
-                                    }
-                                }
-                            }
-                        ]
+                        "containers": []
                     }
                 }
             }
         }
-        
-        # Apply the patch with strategic merge patch type
-        logger.info(f"Vertically scaling {resource_type} resources for container '{container_name}' in statefulset '{namespace}/{name}' to {resource_value}")
+
+        for container in statefulset.spec.template.spec.containers:
+            updated_container = {
+                "name": container.name,
+                "resources": resources # Apply the specified resources to all containers
+            }
+            patch_body["spec"]["template"]["spec"]["containers"].append(updated_container)
+
+
+        logger.info(f"Vertically scaling statefulset '{namespace}/{name}' with resources: {resources}...")
         await apps_v1_api.patch_namespaced_stateful_set(
-            name=name, 
-            namespace=namespace, 
-            body=patch_body
+            name=name, namespace=namespace, body=patch_body
         )
-        
-        msg = f"Successfully updated {resource_type} resources for container '{container_name}' in statefulset '{namespace}/{name}' to {resource_value}"
+        msg = f"Successfully initiated vertical scaling for statefulset '{namespace}/{name}' with resources {resources}."
         logger.info(msg)
         return True, msg
-        
     except client.ApiException as e:
-        msg = f"Failed to update resources for container '{container_name}' in statefulset '{namespace}/{name}': {e.status} - {e.reason} - {e.body}"
+        msg = (
+            f"Failed to vertically scale statefulset '{namespace}/{name}': "
+            f"{e.status} - {e.reason} - {e.body}"
+        )
         logger.error(msg)
         return False, msg
     except Exception as e:
-        msg = f"Unexpected error updating resources for container '{container_name}' in statefulset '{namespace}/{name}': {e}"
+        msg = f"Unexpected error vertically scaling statefulset '{namespace}/{name}': {e}"
         logger.exception(msg)
         return False, msg
 
@@ -764,43 +763,42 @@ async def cordon_node_action(
     api_client: client.ApiClient, params: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """
-    Cordon a node (mark it as unschedulable).
-    
+    Cordon a Kubernetes node, marking it as unschedulable.
+
     Args:
         api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing:
-            - 'name': Node name
-            
+        params: Dictionary containing 'name'.
+
     Returns:
         Tuple (success: bool, message: str).
     """
     core_v1_api = client.CoreV1Api(api_client)
     name = params.get("name")
-    
+
     if not name:
         return False, "Missing 'name' parameter for cordon_node"
-    
+
     try:
         # Get current node
         node = await core_v1_api.read_node(name=name)
-        
+
         # Check if already cordoned
         if node.spec.unschedulable:
-            msg = f"Node '{name}' is already cordoned"
+            msg = f"Node '{name}' is already unschedulable"
             logger.info(msg)
             return True, msg
-        
+
         # Prepare the patch
         patch_body = {"spec": {"unschedulable": True}}
-        
+
         # Apply the patch
         logger.info(f"Cordoning node '{name}'")
         await core_v1_api.patch_node(name=name, body=patch_body)
-        
+
         msg = f"Successfully cordoned node '{name}'"
         logger.info(msg)
         return True, msg
-        
+
     except client.ApiException as e:
         msg = f"Failed to cordon node '{name}': {e.status} - {e.reason} - {e.body}"
         logger.error(msg)
@@ -816,43 +814,42 @@ async def uncordon_node_action(
     api_client: client.ApiClient, params: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """
-    Uncordon a node (mark it as schedulable).
-    
+    Uncordon a Kubernetes node, marking it as schedulable.
+
     Args:
         api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing:
-            - 'name': Node name
-            
+        params: Dictionary containing 'name'.
+
     Returns:
         Tuple (success: bool, message: str).
     """
     core_v1_api = client.CoreV1Api(api_client)
     name = params.get("name")
-    
+
     if not name:
         return False, "Missing 'name' parameter for uncordon_node"
-    
+
     try:
         # Get current node
         node = await core_v1_api.read_node(name=name)
-        
+
         # Check if already uncordoned
         if not node.spec.unschedulable:
             msg = f"Node '{name}' is already schedulable"
             logger.info(msg)
             return True, msg
-        
+
         # Prepare the patch
         patch_body = {"spec": {"unschedulable": False}}
-        
+
         # Apply the patch
         logger.info(f"Uncordoning node '{name}'")
         await core_v1_api.patch_node(name=name, body=patch_body)
-        
+
         msg = f"Successfully uncordoned node '{name}'"
         logger.info(msg)
         return True, msg
-        
+
     except client.ApiException as e:
         msg = f"Failed to uncordon node '{name}': {e.status} - {e.reason} - {e.body}"
         logger.error(msg)
@@ -861,6 +858,38 @@ async def uncordon_node_action(
         msg = f"Unexpected error uncordoning node '{name}': {e}"
         logger.exception(msg)
         return False, msg
+
+
+@register_action("manual_intervention")
+async def manual_intervention_action(
+    api_client: client.ApiClient, params: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Handles manual intervention actions by sending an email with instructions.
+
+    Args:
+        api_client: An initialized Kubernetes ApiClient (not used for this action).
+        params: Dictionary containing 'reason' and 'instructions'.
+
+    Returns:
+        Tuple (success: bool, message: str).
+    """
+    reason = params.get("reason", "No reason provided.")
+    instructions = params.get("instructions", "No instructions provided.")
+
+    # TODO: Determine the actual recipient email address.
+    # For now, using a placeholder. This should ideally come from settings or anomaly context.
+    recipient_email = "lk7565@srmist.edu.in" # Placeholder
+
+    subject = f"KubeWise Manual Intervention Required: {reason}"
+    body = f"Manual intervention is required for a detected anomaly.\n\nReason: {reason}\n\nInstructions:\n{instructions}"
+
+    logger.info(f"Sending manual intervention email to {recipient_email}...")
+    send_email(recipient_email, subject, body)
+
+    msg = f"Manual intervention instructions sent via email to {recipient_email}."
+    logger.info(msg)
+    return True, msg
 
 
 async def execute_action_with_timeout(
@@ -873,11 +902,11 @@ async def execute_action_with_timeout(
     entity_id: str,
     anomaly_score: float,
     source_type: str,
-    app_context=None
+    app_context=None,
 ) -> Tuple[bool, str]:
     """
     Execute a remediation action with proper timeout, retry logic, and logging.
-    
+
     Args:
         action: The RemediationAction to execute
         api_client: Kubernetes API client
@@ -889,26 +918,26 @@ async def execute_action_with_timeout(
         anomaly_score: Score of the anomaly
         source_type: Source of the anomaly (e.g., 'metric', 'event')
         app_context: Optional application context for metrics
-        
+
     Returns:
         Tuple of (success, message)
     """
     action_type = action.action_type
-    
+
     # Skip if action doesn't exist
     if action_type not in ACTION_REGISTRY:
         error_msg = f"Unknown action type: {action_type}"
         logger.error(error_msg)
         return False, error_msg
-    
+
     # Prepare to track metrics if app_context is available
     if app_context:
         # Use remediation_stats instead of trying to access metrics
-        if hasattr(app_context, 'record_remediation'):
+        if hasattr(app_context, "record_remediation"):
             # We'll record this after execution completes successfully or fails
             # This is just preparing for execution
             logger.debug(f"Execution context ready for action {action_type}")
-            
+
     # Parse entity info from entity_id
     namespace = "default"
     name = ""
@@ -917,114 +946,157 @@ async def execute_action_with_timeout(
             namespace, name = entity_id.split("/", 1)
         except ValueError:
             name = entity_id
-    
+
     # Extract metadata from the action
     params = action.parameters
     entity_type = action.entity_type or "Pod"  # Default to Pod if not specified
-    
+
     # Update action with entity info if not already set
     if not action.entity_type:
         action.entity_type = entity_type
     if not action.entity_id:
         action.entity_id = entity_id
-        
+
     # Ensure namespace is in parameters if not present
     if "namespace" not in params and namespace:
         params["namespace"] = namespace
-        
+
     # Ensure name is in parameters if not present and action requires it
-    if "name" not in params and name and action_type not in ["cordon_node", "uncordon_node", "drain_node"]:
+    if (
+        "name" not in params
+        and name
+        and action_type not in ["cordon_node", "uncordon_node", "drain_node"]
+    ):
         params["name"] = name
 
     # Set start time for duration tracking
     start_time = time.monotonic()
-    
+
     # Get the action function
     action_func = ACTION_REGISTRY[action_type]
-    
+
     # Define retry wrapper
     retry_count = 0
     max_retries = 2  # Maximum number of retry attempts
-    
+
     async def retry_action() -> Tuple[bool, str]:
         nonlocal retry_count
         retry_count += 1
-        
+
         if retry_count > 1:
-            logger.info(f"Retry {retry_count-1}/{max_retries} for action {action_type} on {entity_id}")
-        
+            logger.info(
+                f"Retry {retry_count-1}/{max_retries} for action {action_type} on {entity_id}"
+            )
+
         try:
             # Use the registry to call the appropriate action function
             return await action_func(api_client, params)
         except Exception as e:
             logger.exception(f"Error executing action {action_type}: {str(e)}")
             return False, f"Exception during execution: {str(e)}"
-    
+
+    # Validate action and entity type compatibility
+    invalid_action = False
+    error_msg = ""
+
+    # Prevent deleting nodes as pods
+    if action_type == "delete_pod" and entity_type == "Node":
+        invalid_action = True
+        error_msg = f"Invalid action: Cannot delete Node {params.get('name', entity_id)} using delete_pod action"
+    # Prevent operating on pods with node actions
+    if (
+        action_type in ["cordon_node", "uncordon_node", "drain_node", "taint_node"]
+        and entity_type != "Node"
+    ):
+        invalid_action = True
+        error_msg = f"Invalid action: Cannot perform {action_type} on non-Node entity {entity_id}"
+
+    # Early return if invalid action is detected
+    if invalid_action:
+        logger.error(error_msg)
+
+        # Update action with execution results
+        action.executed = True
+        action.execution_timestamp = datetime.datetime.now(datetime.timezone.utc)
+        action.execution_status = "failed"
+        action.execution_message = error_msg
+        action.execution_duration = 0.0
+        action.retry_count = 0
+
+        return False, error_msg
+
     # Execute with timeout
     try:
-        logger.info(f"Executing action {action_idx}/{total_actions}: {action_type} with parameters {params}")
-        
+        logger.info(
+            f"Executing action {action_idx}/{total_actions}: {action_type} with parameters {params}"
+        )
+
         # Use exponential backoff for retries
         success = False
         message = ""
         last_error = None
-        
-        for attempt in range(1, max_retries + 2):  # +2 because range starts at 1 and we need to include max_retries
+
+        for attempt in range(
+            1, max_retries + 2
+        ):  # +2 because range starts at 1 and we need to include max_retries
             try:
                 # Set timeout based on action type (node operations need more time)
                 timeout_secs = 60 if "node" in action_type else 30
-                
+
                 # Execute with timeout
                 success, message = await asyncio.wait_for(
-                    retry_action(), 
-                    timeout=timeout_secs
+                    retry_action(), timeout=timeout_secs
                 )
-                
+
                 # Break if successful
                 if success:
                     break
-                    
+
                 # Only retry on specific failures
                 if "not found" in message.lower() or "connection" in message.lower():
                     # These are failures worth retrying (transient issues)
                     if attempt <= max_retries:
-                        retry_delay = 2 ** attempt  # Exponential backoff
-                        logger.warning(f"Action failed, will retry in {retry_delay}s: {message}")
+                        retry_delay = 2**attempt  # Exponential backoff
+                        logger.warning(
+                            f"Action failed, will retry in {retry_delay}s: {message}"
+                        )
                         await asyncio.sleep(retry_delay)
                         continue
-                        
+
                 # Non-retryable failure or max retries reached
                 break
-                
+
             except asyncio.TimeoutError:
                 last_error = "Operation timed out"
                 if attempt <= max_retries:
-                    retry_delay = 2 ** attempt
+                    retry_delay = 2**attempt
                     logger.warning(f"Action timed out, will retry in {retry_delay}s")
                     await asyncio.sleep(retry_delay)
                 else:
                     message = f"Action timed out after {timeout_secs}s and {max_retries} retries"
                     success = False
                     break
-                    
+
             except Exception as e:
                 last_error = str(e)
                 if attempt <= max_retries:
-                    retry_delay = 2 ** attempt
-                    logger.warning(f"Action failed with exception, will retry in {retry_delay}s: {str(e)}")
+                    retry_delay = 2**attempt
+                    logger.warning(
+                        f"Action failed with exception, will retry in {retry_delay}s: {str(e)}"
+                    )
                     await asyncio.sleep(retry_delay)
                 else:
                     message = f"Action failed after {max_retries} retries: {str(e)}"
                     success = False
                     break
-        
+
         # Use last error as message if we didn't get a specific message
         if not message and last_error:
             message = last_error
-            
+
         # Calculate duration
         duration = time.monotonic() - start_time
-        
+
         # Update action with execution results
         action.executed = True
         action.execution_timestamp = datetime.datetime.now(datetime.timezone.utc)
@@ -1032,32 +1104,39 @@ async def execute_action_with_timeout(
         action.execution_message = message
         action.execution_duration = duration
         action.retry_count = retry_count - 1  # Adjust for the initial execution
-        
+
         # Log outcome
         if success:
-            logger.info(f"Action {action_type} executed successfully in {duration:.2f}s: {message}")
+            logger.info(
+                f"Action {action_type} executed successfully in {duration:.2f}s: {message}"
+            )
         else:
-            logger.error(f"Action {action_type} failed after {duration:.2f}s: {message}")
-        
+            logger.error(
+                f"Action {action_type} failed after {duration:.2f}s: {message}"
+            )
+
         # Record execution in database
         try:
             plan_id = None
             try:
                 # Try to get the plan ID from the database
-                result = await action_log_collection.database["remediation_plans"].find_one(
-                    {"anomaly_id": anomaly_id, "completed": False},
-                    {"_id": 1}
-                )
+                result = await action_log_collection.database[
+                    "remediation_plans"
+                ].find_one({"anomaly_id": anomaly_id, "completed": False}, {"_id": 1})
                 if result:
                     plan_id = result["_id"]
             except Exception as e:
                 logger.warning(f"Failed to retrieve plan ID: {e}")
-            
+
             # Create execution record
             execution_record = ExecutedActionRecord(
                 anomaly_id=str(anomaly_id),
-                plan_id=str(plan_id) if plan_id else str(ObjectId()),  # Use a generic ID if no plan found
-                action_id=str(action.id) if action.id else str(ObjectId()),  # Use action ID if available
+                plan_id=str(plan_id)
+                if plan_id
+                else str(ObjectId()),  # Use a generic ID if no plan found
+                action_id=str(action.id)
+                if action.id
+                else str(ObjectId()),  # Use action ID if available
                 action_type=action_type,
                 parameters=params,
                 entity_type=entity_type,
@@ -1065,7 +1144,9 @@ async def execute_action_with_timeout(
                 namespace=namespace,
                 timestamp=datetime.datetime.now(datetime.timezone.utc),
                 success=success,
-                message=message[:500],  # Limit message length to avoid oversized documents
+                message=message[
+                    :500
+                ],  # Limit message length to avoid oversized documents
                 duration_seconds=duration,
                 score=anomaly_score,
                 source_type=source_type,
@@ -1073,35 +1154,37 @@ async def execute_action_with_timeout(
                 error_details={
                     "retry_count": retry_count - 1,
                     "last_error": last_error,
-                    "timeout_seconds": 60 if "node" in action_type else 30
-                } if not success else None
+                    "timeout_seconds": 60 if "node" in action_type else 30,
+                }
+                if not success
+                else None,
             )
-            
+
             # Store in database
             await action_log_collection.insert_one(execution_record.model_dump())
-            
+
         except Exception as db_err:
             logger.error(f"Failed to record action execution failure: {db_err}")
-        
+
         # After execution is complete, record the metrics
         try:
-            if app_context and hasattr(app_context, 'record_remediation'):
+            if app_context and hasattr(app_context, "record_remediation"):
                 app_context.record_remediation(
                     action_type=action_type,
                     entity_type=entity_type,
                     namespace=namespace,
                     success=success,
-                    duration=duration
+                    duration=duration,
                 )
         except Exception as metrics_err:
             logger.warning(f"Failed to record remediation metrics: {metrics_err}")
-        
+
         return success, message
-        
+
     except Exception as e:
         error_msg = f"Unexpected error executing action {action_type}: {str(e)}"
         logger.exception(error_msg)
-        
+
         # Try to record failure in database
         try:
             execution_record = ExecutedActionRecord(
@@ -1117,27 +1200,30 @@ async def execute_action_with_timeout(
                 duration_seconds=time.monotonic() - start_time,
                 score=anomaly_score,
                 source_type=source_type,
-                error_details={"exception": str(e), "traceback": traceback.format_exc()}
+                error_details={
+                    "exception": str(e),
+                    "traceback": traceback.format_exc(),
+                },
             )
-            
+
             await action_log_collection.insert_one(execution_record.model_dump())
-            
+
             # Record metrics for the failed remediation action
-            if app_context and hasattr(app_context, 'record_remediation'):
+            if app_context and hasattr(app_context, "record_remediation"):
                 try:
                     app_context.record_remediation(
                         action_type=action_type,
                         entity_type=entity_type,
                         namespace=namespace,
                         success=False,
-                        duration=time.monotonic() - start_time
+                        duration=time.monotonic() - start_time,
                     )
                 except Exception as metrics_err:
                     logger.warning(f"Failed to record failure metrics: {metrics_err}")
-                
+
         except Exception as db_err:
             logger.error(f"Failed to record action execution failure: {db_err}")
-        
+
         return False, error_msg
 
 
@@ -1150,7 +1236,7 @@ async def execute_remediation_plan(
 ) -> bool:
     """
     Executes the actions defined in a RemediationPlan with robust retry logic.
-    
+
     Implements:
     - Thorough validation of plans
     - Exponential backoff retries for failing actions
@@ -1158,21 +1244,21 @@ async def execute_remediation_plan(
     - Parallel execution of independent actions when possible
     - Metrics tracking for operations monitoring
     - Dry run mode to simulate execution without making changes
-    
+
     Args:
         plan: The RemediationPlan to execute
         anomaly_record: The anomaly that triggered remediation
         dependencies: Database and Kubernetes API client bundled in PlannerDependencies
         app_context: Optional AppContext for recording metrics
         dry_run: If True, simulate execution without making actual changes
-        
+
     Returns:
         True if all actions executed successfully or simulated successfully, False otherwise
     """
     # Extract dependencies
     db = dependencies.db
     k8s_client = dependencies.k8s_client
-    
+
     action_log_collection = db["executed_actions"]
     anomaly_collection = db["anomalies"]
 
@@ -1183,6 +1269,34 @@ async def execute_remediation_plan(
     anomaly_id_obj: PyObjectId = anomaly_record.id
     anomaly_id_str = str(anomaly_id_obj)
 
+    # Get entity ID for structured logging
+    entity_id = "unknown"
+    namespace = anomaly_record.namespace or "default"
+    if anomaly_record.entity_id:
+        entity_id = anomaly_record.entity_id
+        # Extract namespace from entity_id if in format namespace/name
+        if "/" in entity_id and not namespace:
+            namespace = entity_id.split("/")[0]
+
+    # Check if namespace is in blacklist
+    if namespace in settings.blacklisted_namespaces:
+        error_msg = f"Cannot execute remediation in blacklisted namespace: {namespace}"
+        logger.warning(error_msg)
+
+        # Update anomaly status to indicate blacklist prevention
+        if not dry_run:
+            await anomaly_collection.update_one(
+                {"_id": anomaly_record.id},
+                {
+                    "$set": {
+                        "remediation_status": "blocked",
+                        "remediation_error": error_msg,
+                        "remediation_message": f"Remediation blocked: namespace {namespace} is blacklisted for safety",
+                    }
+                },
+            )
+        return False
+
     # --- Plan Validation ---
     try:
         validated_plan = RemediationPlan.model_validate(plan.model_dump())
@@ -1192,24 +1306,26 @@ async def execute_remediation_plan(
         logger.error(error_msg)
         await anomaly_collection.update_one(
             {"_id": anomaly_record.id},
-            {"$set": {"remediation_status": "failed", "remediation_error": error_msg}}
+            {"$set": {"remediation_status": "failed", "remediation_error": error_msg}},
         )
         return False
-    
+
     # If no actions in plan, mark as completed
     if not validated_plan.actions:
-        logger.info(f"Remediation plan has no actions (reasoning: {validated_plan.reasoning})")
+        logger.info(
+            f"Remediation plan has no actions (reasoning: {validated_plan.reasoning})"
+        )
         if not dry_run:
             await anomaly_collection.update_one(
-                {"_id": anomaly_record.id}, 
-                {"$set": {"remediation_status": "completed", "remediation_message": validated_plan.reasoning}}
+                {"_id": anomaly_record.id},
+                {
+                    "$set": {
+                        "remediation_status": "completed",
+                        "remediation_message": validated_plan.reasoning,
+                    }
+                },
             )
         return True
-
-    # Get entity ID for structured logging
-    entity_id = "unknown"
-    if anomaly_record.entity_id:
-        entity_id = anomaly_record.entity_id
 
     run_mode = "dry run" if dry_run else "execution"
     logger.info(
@@ -1217,7 +1333,7 @@ async def execute_remediation_plan(
         f"Entity: {entity_id}. "
         f"Actions: {len(validated_plan.actions)}. Reasoning: \n{validated_plan.reasoning}"
     )
-    
+
     if not dry_run:
         await anomaly_collection.update_one(
             {"_id": anomaly_record.id}, {"$set": {"remediation_status": "executing"}}
@@ -1226,11 +1342,10 @@ async def execute_remediation_plan(
     # Store dry run results
     dry_run_results = []
 
-    # Determine if actions can be executed in parallel
-    # For simplicity, we'll consider each action independent for now
-    # In a more advanced version, you might analyze dependencies between actions
-    # Use the configurable setting for max parallel actions
-    can_parallelize = len(validated_plan.actions) > 1 and len(validated_plan.actions) <= settings.max_parallel_remediation_actions
+    can_parallelize = (
+        len(validated_plan.actions) > 1
+        and len(validated_plan.actions) <= settings.max_parallel_remediation_actions
+    )
 
     overall_success = True
     final_message = ""
@@ -1238,109 +1353,126 @@ async def execute_remediation_plan(
     # Create a custom Kubernetes API client for dry runs if needed
     if dry_run:
         # For dry run, we'll need to create mock clients and simulate actions
-        logger.info(f"Performing DRY RUN for remediation plan on anomaly {anomaly_id_str}")
-        
+        logger.info(
+            f"Performing DRY RUN for remediation plan on anomaly {anomaly_id_str}"
+        )
+
         # Execute actions sequentially in dry run mode (parallelization doesn't make sense for simulation)
         for i, action in enumerate(validated_plan.actions):
             action_type = action.action_type
             params = action.parameters
-            
+
             # Check if action exists in registry
             if action_type not in ACTION_REGISTRY:
                 msg = f"Unknown action type '{action_type}' (Action {i+1}/{len(validated_plan.actions)})"
                 logger.error(msg)
-                dry_run_results.append({
-                    "action_index": i,
-                    "action_type": action_type,
-                    "parameters": params,
-                    "success": False,
-                    "message": msg,
-                    "simulated_impact": "Unknown impact - action type not registered"
-                })
+                dry_run_results.append(
+                    {
+                        "action_index": i,
+                        "action_type": action_type,
+                        "parameters": params,
+                        "success": False,
+                        "message": msg,
+                        "simulated_impact": "Unknown impact - action type not registered",
+                    }
+                )
                 overall_success = False
                 continue
-            
+
             # Simulate the action's impact
             try:
                 # Prepare impact assessment based on action type
                 impact_assessment = await simulate_action_impact(k8s_client, action)
-                
-                logger.info(f"DRY RUN - Simulated action {i+1}/{len(validated_plan.actions)}: {action_type} with parameters {params}")
+
+                logger.info(
+                    f"DRY RUN - Simulated action {i+1}/{len(validated_plan.actions)}: {action_type} with parameters {params}"
+                )
                 logger.info(f"DRY RUN - Impact assessment: {impact_assessment}")
-                
+
                 # Record dry run result
-                dry_run_results.append({
-                    "action_index": i,
-                    "action_type": action_type,
-                    "parameters": params,
-                    "success": True,
-                    "message": f"Simulated execution of {action_type}",
-                    "simulated_impact": impact_assessment
-                })
-                
+                dry_run_results.append(
+                    {
+                        "action_index": i,
+                        "action_type": action_type,
+                        "parameters": params,
+                        "success": True,
+                        "message": f"Simulated execution of {action_type}",
+                        "simulated_impact": impact_assessment,
+                    }
+                )
+
             except Exception as e:
                 msg = f"DRY RUN - Failed to simulate action {action_type}: {str(e)}"
                 logger.error(msg)
-                dry_run_results.append({
-                    "action_index": i,
-                    "action_type": action_type,
-                    "parameters": params,
-                    "success": False,
-                    "message": msg,
-                    "simulated_impact": "Failed to simulate - potential error during execution"
-                })
+                dry_run_results.append(
+                    {
+                        "action_index": i,
+                        "action_type": action_type,
+                        "parameters": params,
+                        "success": False,
+                        "message": msg,
+                        "simulated_impact": "Failed to simulate - potential error during execution",
+                    }
+                )
                 overall_success = False
-        
+
         # Update plan with dry run results if executing as part of a validation sequence
         if plan.dry_run_results is None:
             plan.dry_run_results = []
         plan.dry_run_results.extend(dry_run_results)
-        
+
         # Calculate safety score based on simulation results
-        successful_simulations = sum(1 for result in dry_run_results if result["success"])
+        successful_simulations = sum(
+            1 for result in dry_run_results if result["success"]
+        )
         total_simulations = len(dry_run_results)
-        safety_score = successful_simulations / total_simulations if total_simulations > 0 else 0.0
+        safety_score = (
+            successful_simulations / total_simulations if total_simulations > 0 else 0.0
+        )
         plan.safety_score = safety_score
-        
+
         # Generate risk assessment
-        risk_level = "Low" if safety_score > 0.8 else "Medium" if safety_score > 0.5 else "High"
+        risk_level = (
+            "Low" if safety_score > 0.8 else "Medium" if safety_score > 0.5 else "High"
+        )
         plan.risk_assessment = f"{risk_level} risk. {successful_simulations} of {total_simulations} actions simulated successfully."
-        
         if overall_success:
             final_message = f"Dry run completed successfully. All {len(validated_plan.actions)} action(s) can be executed safely."
             logger.info(final_message)
         else:
             final_message = f"Dry run revealed potential issues with {len(validated_plan.actions) - successful_simulations} of {len(validated_plan.actions)} action(s)."
             logger.warning(final_message)
-        
+
         return overall_success
-    
+
     # Execute the plan for real (not dry run)
     if can_parallelize:
         # Execute actions in parallel with asyncio.gather
-        logger.info(f"Executing {len(validated_plan.actions)} actions in parallel for anomaly {anomaly_id_str}")
-        
+        logger.info(
+            f"Executing {len(validated_plan.actions)} actions in parallel for anomaly {anomaly_id_str}"
+        )
+
         # Prepare coroutines for each action
         action_coroutines = []
         for i, action in enumerate(validated_plan.actions):
             action_coro = execute_action_with_timeout(
                 action=action,
                 api_client=k8s_client,
-                action_idx=i+1,
+                action_idx=i + 1,
                 total_actions=len(validated_plan.actions),
                 anomaly_id=anomaly_id_obj,
                 action_log_collection=action_log_collection,
                 entity_id=entity_id,
                 anomaly_score=anomaly_record.anomaly_score,
                 source_type=anomaly_record.data_source or "unknown",
-                app_context=app_context
+                app_context=app_context,
             )
             action_coroutines.append(action_coro)
-        
+
         # Execute all actions in parallel and collect results
         try:
             results = await asyncio.gather(*action_coroutines, return_exceptions=True)
-            
+
             # Process results, checking for exceptions
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
@@ -1357,13 +1489,17 @@ async def execute_remediation_plan(
                     logger.error(f"Action {i+1} returned unexpected result: {result}")
                     overall_success = False
                     final_message = f"Action {i+1} failed with unexpected result"
-            
+
             if overall_success:
-                logger.info(f"All parallel actions completed successfully for anomaly {anomaly_id_str}")
+                logger.info(
+                    f"All parallel actions completed successfully for anomaly {anomaly_id_str}"
+                )
                 final_message = "All actions executed successfully"
-                
+
         except Exception as e:
-            logger.exception(f"Parallel action execution failed for anomaly {anomaly_id_str}: {e}")
+            logger.exception(
+                f"Parallel action execution failed for anomaly {anomaly_id_str}: {e}"
+            )
             overall_success = False
             final_message = f"Parallel execution failed: {str(e)}"
     else:
@@ -1372,16 +1508,16 @@ async def execute_remediation_plan(
             success, msg = await execute_action_with_timeout(
                 action=action,
                 api_client=k8s_client,
-                action_idx=i+1,
+                action_idx=i + 1,
                 total_actions=len(validated_plan.actions),
                 anomaly_id=anomaly_id_obj,
                 action_log_collection=action_log_collection,
                 entity_id=entity_id,
                 anomaly_score=anomaly_record.anomaly_score,
                 source_type=anomaly_record.data_source or "unknown",
-                app_context=app_context
+                app_context=app_context,
             )
-            
+
             final_message = msg
             if not success:
                 overall_success = False
@@ -1397,408 +1533,401 @@ async def execute_remediation_plan(
     if not overall_success:
         update_doc["$set"]["remediation_error"] = final_message
     else:
-        update_doc["$set"]["remediation_message"] = "Successfully executed all remediation actions"
+        update_doc["$set"]["remediation_message"] = (
+            "Successfully executed all remediation actions"
+        )
 
     try:
         await anomaly_collection.update_one({"_id": anomaly_record.id}, update_doc)
-        logger.info(f"Remediation plan execution for anomaly {anomaly_id_str} finished with status: {final_status}")
+        logger.info(
+            f"Remediation plan execution for anomaly {anomaly_id_str} finished with status: {final_status}"
+        )
     except Exception as e:
-        logger.exception(f"Failed to update final anomaly status for {anomaly_id_str}: {e}")
+        logger.exception(
+            f"Failed to update final anomaly status for {anomaly_id_str}: {e}"
+        )
 
     return overall_success
 
 
 async def simulate_action_impact(
-    api_client: client.ApiClient, 
-    action: RemediationAction
+    api_client: client.ApiClient, action: RemediationAction
 ) -> str:
     """
     Simulates the impact of executing an action without making actual changes.
-    
+
     Args:
-        api_client: An initialized Kubernetes ApiClient
+        api_client: An initialized Kubernetes API client
         action: The RemediationAction to simulate
-        
+
     Returns:
         A string describing the predicted impact
     """
     action_type = action.action_type
     params = action.parameters
-    
-    # Simulate based on action type
-    if action_type == "scale_deployment":
-        # Get current deployment details
-        apps_v1_api = client.AppsV1Api(api_client)
-        name = params.get("name")
-        namespace = params.get("namespace", "default")
-        target_replicas = params.get("replicas")
-        
-        try:
-            # Get current deployment state
-            deployment = await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
-            current_replicas = deployment.spec.replicas
-            
-            # Handle placeholder
-            if isinstance(target_replicas, str) and "{current_replicas + 1}" in target_replicas:
-                target_replicas = current_replicas + 1
-                
-            # Determine impact
-            if current_replicas == target_replicas:
-                return f"No change in replica count (already at {current_replicas})"
-            elif current_replicas < target_replicas:
-                return f"Scale up from {current_replicas} to {target_replicas} replicas. Increased pod count may affect resource usage."
-            else:
-                return f"Scale down from {current_replicas} to {target_replicas} replicas. Decreased capacity may impact service availability."
-                
-        except client.ApiException as e:
-            if e.status == 404:
-                return f"Deployment '{namespace}/{name}' not found - action will fail"
-            return f"Error accessing deployment: {e.reason}"
-            
-    elif action_type == "delete_pod":
-        # Simulate pod deletion
-        core_v1_api = client.CoreV1Api(api_client)
-        name = params.get("name")
-        namespace = params.get("namespace")
-        
-        try:
-            # Get pod details
-            pod = await core_v1_api.read_namespaced_pod(name=name, namespace=namespace)
-            
-            # Check if pod is managed by a controller
-            owner_references = pod.metadata.owner_references or []
-            
-            if owner_references:
-                controller_kind = owner_references[0].kind
-                controller_name = owner_references[0].name
-                return f"Pod will be deleted and replaced by controller {controller_kind}/{controller_name}. Brief service disruption may occur."
-            else:
-                return "Pod will be permanently deleted. No controller will replace it, which may cause service disruption."
-                
-        except client.ApiException as e:
-            if e.status == 404:
-                return f"Pod '{namespace}/{name}' not found - action will effectively do nothing"
-            return f"Error accessing pod: {e.reason}"
-            
-    elif action_type == "restart_deployment":
-        # Simulate deployment restart
-        apps_v1_api = client.AppsV1Api(api_client)
-        name = params.get("name")
-        namespace = params.get("namespace", "default")
-        
-        try:
-            # Get deployment details
-            deployment = await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
-            replicas = deployment.spec.replicas
-            
-            return f"All {replicas} pod(s) of deployment will be restarted. Rolling restart will be performed to minimize disruption."
-                
-        except client.ApiException as e:
-            if e.status == 404:
-                return f"Deployment '{namespace}/{name}' not found - action will fail"
-            return f"Error accessing deployment: {e.reason}"
-    
-    elif action_type == "drain_node":
-        # Simulate node draining
-        core_v1_api = client.CoreV1Api(api_client)
-        name = params.get("name")
-        force = params.get("force", False)
-        
-        try:
-            # Get node details
-            node = await core_v1_api.read_node(name=name)
-            
-            # Get pods on the node
-            field_selector = f"spec.nodeName={name}"
-            pods = await core_v1_api.list_pod_for_all_namespaces(field_selector=field_selector)
-            pod_count = len(pods.items)
-            
-            # Check for daemonsets
-            daemon_pods = [p for p in pods.items if any(
-                owner.kind == "DaemonSet" for owner in (p.metadata.owner_references or [])
-            )]
-            daemon_count = len(daemon_pods)
-            
-            if node.spec.unschedulable:
-                base_message = f"Node is already cordoned. {pod_count} pod(s) will be evicted"
-            else:
-                base_message = f"Node will be cordoned and {pod_count} pod(s) will be evicted"
-                
-            if daemon_count > 0 and not force:
-                return f"{base_message}. {daemon_count} DaemonSet pod(s) will be preserved due to force=False."
-            elif daemon_count > 0:
-                return f"{base_message}, including {daemon_count} DaemonSet pod(s) due to force=True."
-            else:
-                return base_message
-                
-        except client.ApiException as e:
-            if e.status == 404:
-                return f"Node '{name}' not found - action will fail"
-            return f"Error accessing node: {e.reason}"
-    
-    elif action_type == "taint_node":
-        # Simulate node tainting
-        core_v1_api = client.CoreV1Api(api_client)
-        name = params.get("name")
-        key = params.get("key")
-        value = params.get("value")
-        effect = params.get("effect")
-        
-        try:
-            # Get node details
-            node = await core_v1_api.read_node(name=name)
-            
-            # Check current taints
-            current_taints = node.spec.taints or []
-            for taint in current_taints:
-                if taint.key == key and taint.effect == effect:
-                    return f"Node already has taint {key}={value}:{effect} - no change will occur"
-            
-            # Determine impact based on effect
-            if effect == "NoSchedule":
-                return f"Adding taint {key}={value}:{effect} - new pods without matching toleration will not be scheduled on this node"
-            elif effect == "PreferNoSchedule":
-                return f"Adding taint {key}={value}:{effect} - scheduler will try to avoid placing new pods without matching toleration on this node"
-            elif effect == "NoExecute":
-                # Get pods on the node
-                field_selector = f"spec.nodeName={name}"
-                pods = await core_v1_api.list_pod_for_all_namespaces(field_selector=field_selector)
-                
-                # Count pods that would be affected
-                affected_pods = 0
-                for pod in pods.items:
-                    # Check if pod has tolerations for this taint
-                    tolerations = pod.spec.tolerations or []
-                    has_matching_toleration = any(
-                        t.key == key and (t.effect == effect or t.effect == "") for t in tolerations
-                    )
-                    if not has_matching_toleration:
-                        affected_pods += 1
-                
-                return f"Adding taint {key}={value}:{effect} - {affected_pods} existing pod(s) without matching toleration will be evicted"
-        
-        except client.ApiException as e:
-            if e.status == 404:
-                return f"Node '{name}' not found - action will fail"
-            return f"Error accessing node: {e.reason}"
-    
-    elif action_type == "evict_pod":
-        # Similar to delete_pod, but check PodDisruptionBudgets
-        core_v1_api = client.CoreV1Api(api_client)
-        policy_v1_api = client.PolicyV1Api(api_client)
-        name = params.get("name")
-        namespace = params.get("namespace")
-        
-        try:
-            # Get pod details
-            pod = await core_v1_api.read_namespaced_pod(name=name, namespace=namespace)
-            
-            # Check if pod is part of a controller
-            owner_references = pod.metadata.owner_references or []
-            
-            # Try to find matching PDBs
-            pdbs = await policy_v1_api.list_namespaced_pod_disruption_budget(namespace=namespace)
-            matching_pdbs = []
-            
-            for pdb in pdbs.items:
-                selector = pdb.spec.selector
-                # Simplified check - in reality need to match labels
-                if selector and pod.metadata.labels:
-                    # This is a simplification - would need to properly match selectors
-                    matching_pdbs.append(pdb.metadata.name)
-            
-            if matching_pdbs:
-                return f"Pod will be evicted if PDBs allow: {', '.join(matching_pdbs)}. May be blocked if disruption budget is at limit."
-            elif owner_references:
-                controller_kind = owner_references[0].kind
-                controller_name = owner_references[0].name
-                return f"Pod will be evicted and replaced by controller {controller_kind}/{controller_name}. No PDBs found that would block eviction."
-            else:
-                return "Pod will be permanently evicted. No controller will replace it, which may cause service disruption."
-                
-        except client.ApiException as e:
-            if e.status == 404:
-                return f"Pod '{namespace}/{name}' not found - action will effectively do nothing"
-            return f"Error accessing pod: {e.reason}"
-    
-    # Add simulations for other action types
-    else:
-        # Generic simulation for actions without specific handling
-        return f"Will execute {action_type} with parameters {params}. Specific impact cannot be predicted without a custom simulator."
+
+    logger.info(f"Simulating action: {action_type} with params {params}")
+
+    # This is a basic placeholder. Real simulation would involve:
+    # - Checking resource existence and state
+    # - Predicting outcomes based on action type and current state
+    # - Assessing potential risks
+
+    try:
+        # Example simulation logic (replace with actual implementation)
+        if action_type == "scale_deployment":
+            name = params.get("name")
+            namespace = params.get("namespace", "default")
+            replicas = params.get("replicas")
+            if not name or replicas is None:
+                return "Missing 'name' or 'replicas' for simulation", False
+            # Simulate checking if deployment exists
+            try:
+                apps_v1_api = client.AppsV1Api(api_client)
+                await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
+                return f"Simulation: Deployment '{namespace}/{name}' found. Scaling to {replicas} replicas would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Deployment '{namespace}/{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "delete_pod":
+            name = params.get("name")
+            namespace = params.get("namespace")
+            if not name or not namespace:
+                return "Missing 'name' or 'namespace' for simulation", False
+            # Simulate checking if pod exists
+            try:
+                core_v1_api = client.CoreV1Api(api_client)
+                await core_v1_api.read_namespaced_pod(name=name, namespace=namespace)
+                return f"Simulation: Pod '{namespace}/{name}' found. Deletion would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Pod '{namespace}/{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "restart_deployment":
+            name = params.get("name")
+            namespace = params.get("namespace", "default")
+            if not name:
+                return "Missing 'name' for simulation", False
+            # Simulate checking if deployment exists
+            try:
+                apps_v1_api = client.AppsV1Api(api_client)
+                await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
+                return f"Simulation: Deployment '{namespace}/{name}' found. Restart would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Deployment '{namespace}/{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "drain_node":
+            name = params.get("name")
+            if not name:
+                return "Missing 'name' for simulation", False
+            # Simulate checking if node exists
+            try:
+                core_v1_api = client.CoreV1Api(api_client)
+                await core_v1_api.read_node(name=name)
+                # Simulate checking for pods on the node (simplified)
+                # In a real simulation, you'd list pods and check if they are drainable
+                field_selector = (
+                    f"spec.nodeName={name},status.phase!=Failed,status.phase!=Succeeded"
+                )
+                pods = await core_v1_api.list_pod_for_all_namespaces(
+                    field_selector=field_selector
+                )
+                pods_count = len(pods.items)
+                return f"Simulation: Node '{name}' found with {pods_count} pods. Cordon and drain would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Node '{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "scale_statefulset":
+            name = params.get("name")
+            namespace = params.get("namespace", "default")
+            replicas = params.get("replicas")
+            if not name or replicas is None:
+                return "Missing 'name' or 'replicas' for simulation", False
+            # Simulate checking if statefulset exists
+            try:
+                apps_v1_api = client.AppsV1Api(api_client)
+                await apps_v1_api.read_namespaced_stateful_set(name=name, namespace=namespace)
+                return f"Simulation: StatefulSet '{namespace}/{name}' found. Scaling to {replicas} replicas would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: StatefulSet '{namespace}/{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "evict_pod":
+            name = params.get("name")
+            namespace = params.get("namespace")
+            if not name or not namespace:
+                return "Missing 'name' or 'namespace' for simulation", False
+            # Simulate checking if pod exists
+            try:
+                core_v1_api = client.CoreV1Api(api_client)
+                await core_v1_api.read_namespaced_pod(name=name, namespace=namespace)
+                return f"Simulation: Pod '{namespace}/{name}' found. Eviction would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Pod '{namespace}/{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "vertical_scale_deployment":
+             name = params.get("name")
+             namespace = params.get("namespace", "default")
+             if not name:
+                 return "Missing 'name' for simulation", False
+             # Simulate checking if deployment exists
+             try:
+                 apps_v1_api = client.AppsV1Api(api_client)
+                 await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
+                 return f"Simulation: Deployment '{namespace}/{name}' found. Vertical scaling would be attempted.", True
+             except client.ApiException as e:
+                 if e.status == 404:
+                     return f"Simulation: Deployment '{namespace}/{name}' not found.", False
+                 else:
+                     raise # Re-raise other API errors
+        elif action_type == "vertical_scale_statefulset":
+             name = params.get("name")
+             namespace = params.get("namespace", "default")
+             if not name:
+                 return "Missing 'name' for simulation", False
+             # Simulate checking if statefulset exists
+             try:
+                 apps_v1_api = client.AppsV1Api(api_client)
+                 await apps_v1_api.read_namespaced_stateful_set(name=name, namespace=namespace)
+                 return f"Simulation: StatefulSet '{namespace}/{name}' found. Vertical scaling would be attempted.", True
+             except client.ApiException as e:
+                 if e.status == 404:
+                     return f"Simulation: StatefulSet '{namespace}/{name}' not found.", False
+                 else:
+                     raise # Re-raise other API errors
+        elif action_type == "cordon_node":
+            name = params.get("name")
+            if not name:
+                return "Missing 'name' for simulation", False
+            # Simulate checking if node exists
+            try:
+                core_v1_api = client.CoreV1Api(api_client)
+                await core_v1_api.read_node(name=name)
+                return f"Simulation: Node '{name}' found. Cordoning would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Node '{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "uncordon_node":
+            name = params.get("name")
+            if not name:
+                return "Missing 'name' for simulation", False
+            # Simulate checking if node exists
+            try:
+                core_v1_api = client.CoreV1Api(api_client)
+                await core_v1_api.read_node(name=name)
+                return f"Simulation: Node '{name}' found. Uncordoning would be attempted.", True
+            except client.ApiException as e:
+                if e.status == 404:
+                    return f"Simulation: Node '{name}' not found.", False
+                else:
+                    raise # Re-raise other API errors
+        elif action_type == "manual_intervention":
+            reason = params.get("reason", "No reason provided.")
+            instructions = params.get("instructions", "No instructions provided.")
+            return f"Simulation: Manual intervention required. Reason: {reason}. Instructions: {instructions}", True
+        else:
+            return f"Simulation not implemented for action type: {action_type}", False
+
+    except Exception as e:
+        logger.error(f"Unexpected error during simulation of action {action_type}: {e}")
+        return f"Unexpected error during simulation: {e}", False
 
 
 async def process_anomaly(
     anomaly_record: AnomalyRecord,
     db: motor.motor_asyncio.AsyncIOMotorDatabase,
-    ai_agent: Agent,
-) -> bool:
+    k8s_client: client.ApiClient,
+    planner_agent: Agent,
+) -> None:
     """
-    Processes an anomaly by generating and executing a remediation plan.
-    
-    Implements the following flow:
-    1. Check if this anomaly has already been remediated recently
-    2. Generate a remediation plan using AI or static template
-    3. Execute the plan and record results
-    
+    Processes a single anomaly: generates a remediation plan and executes it.
+
     Args:
-        anomaly_record: The anomaly record to process
-        db: MongoDB database instance
-        ai_agent: The Generative AI agent for planning
-        
-    Returns:
-        True if remediation was successful, False otherwise
+        anomaly_record: The anomaly record to process.
+        db: MongoDB database instance.
+        k8s_client: Kubernetes API client.
+        planner_agent: The AI agent for generating remediation plans.
     """
-    entity_id = anomaly_record.entity_id
-    if not entity_id:
-        logger.error(f"Anomaly record {anomaly_record.id} has no entity_id")
-        return False
-    
-    # Initialize API client for Kubernetes operations
-    try:
-        # Load Kubernetes configuration
-        await load_k8s_config()
-        # Create API client
-        k8s_client = client.ApiClient()
-    except Exception as e:
-        logger.exception(f"Failed to initialize Kubernetes client: {e}")
-        return False
-    
-    try:
-        # Check remediation history for this entity
-        action_collection = db["executed_actions"]
-        recent_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-            seconds=settings.remediation_cooldown_seconds
+    logger.info(f"Processing anomaly: {anomaly_record.id}")
+
+    # Check if remediation is disabled
+    if settings.remediation_disabled:
+        logger.info(
+            f"Remediation is disabled. Skipping plan generation and execution for anomaly {anomaly_record.id}."
         )
-        
-        # Look for recent successful actions for this entity
-        recent_actions = await action_collection.find_one({
-            "entity_id": entity_id,
-            "executed_at": {"$gt": recent_timestamp},
-            "success": True
-        })
-        
-        if recent_actions:
+        return
+
+    # Check if anomaly entity is in a blacklisted namespace
+    if anomaly_record.entity_id and "/" in anomaly_record.entity_id:
+        namespace = anomaly_record.entity_id.split("/")[0]
+        if namespace in settings.blacklisted_namespaces:
             logger.info(
-                f"Skipping remediation for {entity_id} - "
-                f"recently remediated within cooldown period "
-                f"({settings.remediation_cooldown_seconds}s)"
+                f"Anomaly entity in blacklisted namespace '{namespace}'. Skipping remediation for anomaly {anomaly_record.id}."
             )
-            return False  # Skip remediation due to cooldown
-        
-        # Generate remediation plan
-        # First try AI-powered plan if agent is available
-        if ai_agent is not None:
-            logger.info(f"Generating AI-powered remediation plan for {entity_id}")
-            remediation_plan = await generate_remediation_plan(
-                anomaly_record=anomaly_record,
-                db=db,
-                k8s_api_client=k8s_client,
-                agent=ai_agent
+            return
+
+    # Check if a remediation plan already exists for this anomaly
+    plans_collection = db["remediation_plans"]
+    existing_plan = await plans_collection.find_one({"anomaly_id": str(anomaly_record.id)})
+    if existing_plan:
+        logger.info(
+            f"Remediation plan already exists for anomaly {anomaly_record.id}. Skipping plan generation."
+        )
+        # Optionally, re-execute the existing plan if needed, but for now we skip
+        return
+
+    # Generate remediation plan
+    logger.info(f"Generating remediation plan for anomaly {anomaly_record.id}...")
+    try:
+        dependencies = PlannerDependencies(db=db, k8s_client=k8s_client)
+        plan = await generate_remediation_plan(
+            planner_agent, anomaly_record, dependencies
+        )
+
+        if plan and plan.actions:
+            logger.info(
+                f"Remediation plan generated for anomaly {anomaly_record.id} with {len(plan.actions)} actions."
+            )
+            # Execute the plan
+            await execute_remediation_plan(k8s_client, anomaly_record, plan, db)
+        elif plan:
+            logger.info(
+                f"Remediation plan generated for anomaly {anomaly_record.id} but contains no actions."
             )
         else:
-            # Fall back to static plan if AI agent unavailable
-            logger.info(f"Generating static remediation plan for {entity_id}")
-            remediation_plan = await load_static_plan(
-                anomaly_record=anomaly_record,
-                db=db,
-                k8s_client=k8s_client
+            logger.warning(
+                f"Failed to generate remediation plan for anomaly {anomaly_record.id}."
             )
-        
-        if not remediation_plan:
-            logger.warning(f"No remediation plan was generated for {entity_id}")
-            return False
-        
-        # Set the anomaly ID on the plan
-        remediation_plan.anomaly_id = str(anomaly_record.id)
-        
-        # Execute the remediation plan
-        success = await execute_remediation_plan(
-            plan=remediation_plan,
-            anomaly_record=anomaly_record,
-            dependencies=PlannerDependencies(db=db, k8s_client=k8s_client),
-            app_context=None
-        )
-        
-        # Close K8s client when done
-        await k8s_client.close()
-        
-        return success
-        
+
     except Exception as e:
-        logger.exception(f"Error processing anomaly {anomaly_record.id} for {entity_id}: {e}")
-        # Make sure to clean up API client even on error
-        try:
-            if 'k8s_client' in locals():
-                await k8s_client.close()
-        except Exception as close_err:
-            logger.error(f"Error closing Kubernetes client: {close_err}")
-        return False
+        logger.exception(
+            f"Error processing anomaly {anomaly_record.id} during plan generation or execution: {e}"
+        )
 
 
 async def main():
     """Production-ready main function for running the engine separately."""
-    from motor.motor_asyncio import AsyncIOMotorClient
-    from kubewise.config import settings
-    from kubewise.models import AnomalyRecord
-    from pydantic_ai import Agent
-    from pydantic_ai.models.gemini import GeminiModel
-    from pydantic_ai.providers.google_gla import GoogleGLAProvider
-    
+    logger.info("Starting KubeWise Remediation Engine...")
+
+    # Load Kubernetes config
     try:
-        # Connect to MongoDB
-        client = AsyncIOMotorClient(str(settings.mongo_uri))
-        db = client[settings.mongo_db_name]
-        
-        # Initialize API client
         await load_k8s_config()
         k8s_client = client.ApiClient()
-        
-        # Initialize Gemini Agent if API key is available
-        ai_agent = None
-        if settings.gemini_api_key and settings.gemini_api_key.get_secret_value() != "changeme":
-            try:
-                # Initialize provider with API key
-                provider = GoogleGLAProvider(api_key=settings.gemini_api_key.get_secret_value())
-                # Initialize model with the provider and model ID from settings
-                model = GeminiModel(settings.gemini_model_id, provider=provider)
-                # Initialize Agent with the configured model
-                ai_agent = Agent(model)
-                logger.info(f"Gemini agent initialized with model '{settings.gemini_model_id}'.")
-            except Exception as agent_err:
-                logger.exception(f"Failed to initialize Gemini agent: {agent_err}")
-                ai_agent = None
-                logger.error("Gemini agent failed to initialize. Using static remediation planning.")
-        
-        # Process an anomaly from the database
-        anomaly_id = input("Enter the ID of the anomaly to process: ")
-        anomaly_record = await db["anomalies"].find_one({"_id": ObjectId(str(anomaly_id))})
-        
-        if not anomaly_record:
-            logger.error(f"Anomaly with ID {anomaly_id} not found")
-            return
-        
-        # Convert to Pydantic model
-        anomaly = AnomalyRecord.model_validate(anomaly_record)
-        
-        # Process the anomaly
-        success = await process_anomaly(anomaly, db, ai_agent)
-        
-        if success:
-            logger.info(f"Successfully remediated anomaly {anomaly_id}")
-        else:
-            logger.error(f"Failed to remediate anomaly {anomaly_id}")
-        
-        # Clean up
-        await k8s_client.close()
-        client.close()
-        
+        logger.info("Kubernetes config loaded and API client created.")
     except Exception as e:
-        logger.exception(f"Error in main: {e}")
+        logger.error(f"Failed to load Kubernetes config or create API client: {e}")
+        return # Exit if K8s client cannot be initialized
+
+    # Connect to MongoDB
+    try:
+        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(settings.mongo_uri)
+        db = mongo_client[settings.mongo_db_name]
+        logger.info(f"Connected to MongoDB database: {settings.mongo_db_name}")
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        return # Exit if DB connection fails
+
+    # Initialize Planner AI Agent
+    try:
+        planner_agent = Agent(
+            model=settings.gemini_model_id,
+            api_key=settings.gemini_api_key.get_secret_value(),
+            temperature=settings.ai_temperature,
+            max_tokens=settings.ai_max_tokens,
+        )
+        logger.info(f"Planner AI Agent initialized with model: {settings.gemini_model_id}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Planner AI Agent: {e}")
+        return # Exit if AI agent fails to initialize
+
+    # Main loop for processing anomalies (simplified for example)
+    # In a real application, this would likely be triggered by new anomalies
+    # from a message queue or database watcher.
+    logger.info("Remediation Engine is running. Waiting for anomalies...")
+
+    # Example: Periodically check for unprocessed anomalies
+    while True:
+        try:
+            anomalies_collection = db["anomalies"]
+            # Find anomalies that have not been remediated and do not have a plan yet
+            # Assuming 'remediated' is a boolean field in AnomalyRecord
+            # and we can check for existence of a plan in the remediation_plans collection
+            unprocessed_anomalies_cursor = anomalies_collection.aggregate([
+                {"$lookup": {
+                    "from": "remediation_plans",
+                    "localField": "_id",
+                    "foreignField": "anomaly_id",
+                    "as": "plans"
+                }},
+                {"$match": {
+                    "$or": [
+                        {"remediated": {"$exists": False}},
+                        {"remediated": False}
+                    ],
+                    "plans": {"$eq": []} # No existing plan
+                }},
+                {"$limit": settings.max_parallel_remediation_actions} # Process a limited number at a time
+            ])
+
+            unprocessed_anomalies: List[AnomalyRecord] = []
+            async for anomaly_doc in unprocessed_anomalies_cursor:
+                try:
+                    # Convert anomaly_doc to AnomalyRecord Pydantic model
+                    # Need to handle ObjectId conversion if necessary
+                    if "_id" in anomaly_doc:
+                        anomaly_doc["id"] = str(anomaly_doc["_id"])
+                        del anomaly_doc["_id"]
+                    unprocessed_anomalies.append(AnomalyRecord(**anomaly_doc))
+                except ValidationError as e:
+                    logger.error(f"Failed to validate AnomalyRecord from DB: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error processing anomaly document from DB: {e}")
+
+
+            if unprocessed_anomalies:
+                logger.info(f"Found {len(unprocessed_anomalies)} unprocessed anomalies.")
+                # Process anomalies concurrently
+                await asyncio.gather(
+                    *[
+                        process_anomaly(anomaly, db, k8s_client, planner_agent)
+                        for anomaly in unprocessed_anomalies
+                    ]
+                )
+            else:
+                logger.debug("No unprocessed anomalies found. Waiting...")
+
+        except Exception as e:
+            logger.error(f"Error in main processing loop: {e}")
+            # Continue loop even on error
+
+        await asyncio.sleep(settings.prom_queries_poll_interval) # Wait before checking again
 
 
 if __name__ == "__main__":
-    from kubewise.logging import setup_logging
-    import asyncio
-    
-    setup_logging()
-    asyncio.run(main())
+    # Configure loguru logger
+    logger.add(
+        "kubewise.log",
+        rotation="1 MB",
+        level=settings.log_level,
+        enqueue=True, # Use a queue for thread safety
+    )
+    logger.info(f"Log level set to: {settings.log_level}")
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Remediation Engine stopped manually.")
+    except Exception as e:
+        logger.exception("Remediation Engine stopped due to an unhandled exception.")

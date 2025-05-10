@@ -7,8 +7,6 @@
 logs/
 *.log
 
-# Models
-models/
 
 # Python
 __pycache__/
