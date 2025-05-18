@@ -9,6 +9,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 import httpx
 from kubernetes_asyncio import client
+from bson import ObjectId, errors
 
 from kubewise.config import Settings, settings
 from kubewise.api.deps import (
@@ -19,8 +20,9 @@ from kubewise.api.deps import (
     get_app_context,
 )
 from kubewise.api.context import AppContext
-from kubewise.models import AnomalyRecord
+from kubewise.models import AnomalyRecord, RemediationPlan
 from kubewise.utils.retry import circuit_breakers
+from kubewise.remediation.diagnosis import DiagnosisEngine
 
 # Router for API endpoints
 router = APIRouter()
@@ -353,6 +355,17 @@ async def list_anomalies(
                 raw_anomaly["id"] = str(raw_anomaly["_id"])
                 # Some validation code may still expect _id but as a string
                 raw_anomaly["_id"] = str(raw_anomaly["_id"])
+            
+            # Convert ObjectId instances in remediation_plan_id field
+            if "remediation_plan_id" in raw_anomaly and isinstance(raw_anomaly["remediation_plan_id"], ObjectId):
+                raw_anomaly["remediation_plan_id"] = str(raw_anomaly["remediation_plan_id"])
+            
+            # Convert ObjectId instances in similar_anomaly_ids list if present
+            if "similar_anomaly_ids" in raw_anomaly and isinstance(raw_anomaly["similar_anomaly_ids"], list):
+                raw_anomaly["similar_anomaly_ids"] = [
+                    str(item) if isinstance(item, ObjectId) else item 
+                    for item in raw_anomaly["similar_anomaly_ids"]
+                ]
 
             try:
                 anomalies_validated.append(AnomalyRecord.model_validate(raw_anomaly))
@@ -369,6 +382,198 @@ async def list_anomalies(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve anomalies from database.",
+        )
+
+
+# --- Remediation Plan Endpoints ---
+
+class RemediationPlanRecord(RemediationPlan):
+    """Pydantic model for a remediation plan record retrieved from the database."""
+    id: Optional[str] = Field(None, alias="_id", description="Unique ID of the remediation plan")
+
+    class Config:
+        populate_by_name = True # Allow using alias _id for id
+        json_schema_extra = {
+            "example": {
+                "id": "60c72b2f9b1e8b3b4c6e4d2a",
+                "anomaly_id": "60c72b2f9b1e8b3b4c6e4d29",
+                "plan_name": "Restart Pod",
+                "description": "Restart the pod 'example-pod-123' in namespace 'default'.",
+                "actions": [
+                    {
+                        "action_type": "restart_pod",
+                        "parameters": {"namespace": "default", "name": "example-pod-123"},
+                        "estimated_impact": "low",
+                        "estimated_confidence": 0.9
+                    }
+                ],
+                "status": "pending",
+                "created_at": "2023-01-01T12:00:00Z",
+                "updated_at": "2023-01-01T12:00:00Z"
+            }
+        }
+
+
+@router.get(
+    "/remediation/plans/{plan_id}",
+    response_model=RemediationPlanRecord,
+    tags=["Remediation"],
+    summary="Get a specific remediation plan by ID",
+    description="""
+    Retrieve detailed information about a specific remediation plan.
+    
+    The response contains:
+    · Unique identifier for the plan
+    · ID of the anomaly it addresses
+    · Plan name and description
+    · Sequence of actions to be performed
+    · Status of the plan (e.g., pending, executing, completed, failed)
+    """,
+    response_description="Detailed information about the remediation plan",
+    responses={
+        404: {
+            "description": "Plan not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Remediation plan with ID 60c72b2f9b1e8b3b4c6e4d2a not found"}
+                }
+            },
+        },
+        500: {
+            "description": "Database error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to retrieve remediation plan from database"}
+                }
+            },
+        }
+    },
+)
+async def get_remediation_plan(
+    plan_id: str,
+    db: motor.motor_asyncio.AsyncIOMotorDatabase = Depends(get_mongo_db),
+):
+    """
+    Retrieve a specific remediation plan by its ID.
+    """
+    try:
+        # Convert string ID to ObjectId
+        try:
+            obj_id = ObjectId(plan_id)
+        except errors.InvalidId:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid plan ID format: {plan_id}",
+            )
+            
+        # Query the database for the plan
+        plan_doc = await db["remediation_plans"].find_one({"_id": obj_id})
+        
+        if not plan_doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Remediation plan with ID {plan_id} not found",
+            )
+        
+        # Convert ObjectId to string for the response
+        if "_id" in plan_doc:
+            plan_doc["id"] = str(plan_doc["_id"])
+            plan_doc["_id"] = str(plan_doc["_id"])  # Ensure _id is also a string for model_validate
+            
+        # Convert any ObjectId in anomaly_id if present
+        if "anomaly_id" in plan_doc and isinstance(plan_doc["anomaly_id"], ObjectId):
+            plan_doc["anomaly_id"] = str(plan_doc["anomaly_id"])
+            
+        try:
+            return RemediationPlanRecord.model_validate(plan_doc)
+        except Exception as e:
+            logger.error(f"Failed to validate remediation plan: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to process remediation plan data: {str(e)}",
+            )
+            
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.exception(f"Error fetching remediation plan from database: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve remediation plan from database",
+        )
+
+@router.get(
+    "/remediation/plans",
+    response_model=List[RemediationPlanRecord],
+    tags=["Remediation"],
+    summary="List remediation plans",
+    description="""
+    Retrieve a paginated list of remediation plans, sorted by creation time (most recent first).
+    
+    Each plan record contains:
+    · Unique identifier for the plan
+    · ID of the anomaly it addresses
+    · Plan name and description
+    · Sequence of actions to be performed
+    · Status of the plan (e.g., pending, executing, completed, failed)
+    
+    Use the 'skip' and 'limit' parameters for pagination.
+    """,
+    response_description="List of remediation plan records sorted by timestamp (descending)",
+    responses={
+        500: {
+            "description": "Database error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to retrieve remediation plans from database."}
+                }
+            },
+        }
+    },
+)
+async def list_remediation_plans(
+    db: motor.motor_asyncio.AsyncIOMotorDatabase = Depends(get_mongo_db),
+    skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
+    limit: int = Query(
+        100, ge=1, le=500, description="Maximum number of records to return"
+    ),
+):
+    """
+    Retrieve a list of remediation plans, sorted by creation time descending.
+    """
+    try:
+        plans_cursor = (
+            db["remediation_plans"]
+            .find()
+            .sort("created_at", -1)  # Sort by creation time descending
+            .skip(skip)
+            .limit(limit)
+        )
+        plans_raw = await plans_cursor.to_list(length=limit)
+
+        plans_validated: List[RemediationPlanRecord] = []
+        for raw_plan in plans_raw:
+            if "_id" in raw_plan:
+                raw_plan["id"] = str(raw_plan["_id"])
+                 # Ensure _id is also a string if present for Pydantic model_validate
+                raw_plan["_id"] = str(raw_plan["_id"])
+
+
+            try:
+                # Validate against RemediationPlanRecord which includes the id
+                plans_validated.append(RemediationPlanRecord.model_validate(raw_plan))
+            except Exception as e:
+                plan_id = raw_plan.get("id", raw_plan.get("_id", "unknown"))
+                logger.warning(
+                    f"Failed to validate remediation plan record {plan_id} from DB: {e}"
+                )
+        return plans_validated
+    except Exception as e:
+        logger.exception(f"Error fetching remediation plans from database: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve remediation plans from database.",
         )
 
 
@@ -724,3 +929,299 @@ async def validate_prometheus_query(
             execution_time_ms=(time.time() - start_time) * 1000,
             timestamp=timestamp,
         )
+
+class RemediationResponse(BaseModel):
+    """Response model for remediation requests."""
+    
+    anomaly_id: str = Field(..., description="ID of the anomaly being remediated")
+    status: str = Field(..., description="Status of the remediation request")
+    message: str = Field(..., description="Message about the remediation request")
+    diagnosis_id: Optional[str] = Field(None, description="ID of the diagnosis if created")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "anomaly_id": "507f1f77bcf86cd799439011",
+                "status": "initiated",
+                "message": "Remediation workflow started. A diagnosis has been created and remediation will be attempted based on findings.",
+                "diagnosis_id": "507f1f77bcf86cd799439012"
+            }
+        }
+
+@router.post(
+    "/anomalies/{anomaly_id}/remediate",
+    response_model=RemediationResponse,
+    tags=["Anomalies"],
+    summary="Trigger remediation for a specific anomaly",
+    description="""
+    Trigger the remediation workflow for a specific anomaly.
+    
+    This endpoint will:
+    1. Validate that the anomaly exists and is eligible for remediation
+    2. Initiate a diagnosis workflow for the anomaly
+    3. Queue the anomaly for remediation processing
+    
+    The remediation will be performed asynchronously. The response includes the status
+    of the request and the ID of the initiated diagnosis.
+    """,
+    response_description="Status of the remediation request",
+    responses={
+        404: {
+            "description": "Anomaly not found",
+            "content": {
+                "application/json": {"example": {"detail": "Anomaly not found or not eligible for remediation"}}
+            },
+        },
+        400: {
+            "description": "Invalid request",
+            "content": {
+                "application/json": {"example": {"detail": "Anomaly already has active remediation in progress"}}
+            },
+        },
+        500: {
+            "description": "Internal server error",
+            "content": {
+                "application/json": {"example": {"detail": "Failed to initiate remediation"}}
+            },
+        },
+    },
+)
+async def remediate_anomaly(
+    anomaly_id: str,
+    ctx: AppContext = Depends(get_app_context),
+    db: motor.motor_asyncio.AsyncIOMotorDatabase = Depends(get_mongo_db),
+    k8s_client: client.ApiClient = Depends(get_k8s_api_client),
+):
+    """Trigger remediation for a specific anomaly."""
+    logger.info(f"Received remediation request for anomaly {anomaly_id}")
+    
+    try:
+        # Convert string ID to ObjectId if necessary
+        try:
+            anomaly_oid = ObjectId(anomaly_id)
+        except errors.InvalidId:
+            logger.warning(f"Invalid ObjectId format for anomaly: {anomaly_id}")
+            raise HTTPException(
+                status_code=404,
+                detail="Anomaly not found or not eligible for remediation",
+            )
+        
+        # Find the anomaly in the database
+        anomaly_record = await db.anomalies.find_one({"_id": anomaly_oid})
+        
+        if not anomaly_record:
+            logger.warning(f"Anomaly not found: {anomaly_id}")
+            raise HTTPException(
+                status_code=404,
+                detail="Anomaly not found or not eligible for remediation",
+            )
+        
+        # Validate if the anomaly is eligible for remediation
+        if anomaly_record.get("remediation_status") in ["in_progress", "pending", "diagnosing"]:
+            logger.warning(f"Anomaly {anomaly_id} already has active remediation")
+            raise HTTPException(
+                status_code=400,
+                detail="Anomaly already has active remediation in progress",
+            )
+        
+        # Create a DiagnosisEngine instance
+        diagnosis_engine = DiagnosisEngine(
+            db=db,
+            k8s_client=k8s_client,
+        )
+        
+        # Initiate diagnosis
+        diagnosis_id = await diagnosis_engine.initiate_diagnosis(anomaly_record)
+        
+        if not diagnosis_id:
+            logger.error(f"Failed to initiate diagnosis for anomaly {anomaly_id}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to initiate diagnosis workflow",
+            )
+        
+        # Queue the remediation task
+        logger.info(f"Queuing anomaly {anomaly_id} for remediation with diagnosis {diagnosis_id}")
+        await ctx.remediation_queue.put({
+            "anomaly_id": str(anomaly_oid),
+            "diagnosis_id": str(diagnosis_id),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        
+        # Update the anomaly record to indicate remediation is in progress
+        update_result = await db.anomalies.update_one(
+            {"_id": anomaly_oid},
+            {"$set": {
+                "remediation_status": "diagnosing",
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }}
+        )
+        
+        if update_result.modified_count == 0:
+            logger.warning(f"Failed to update remediation status for anomaly {anomaly_id}")
+        
+        # Return a successful response
+        return RemediationResponse(
+            anomaly_id=anomaly_id,
+            status="initiated",
+            message="Remediation workflow started",
+            diagnosis_id=str(diagnosis_id),
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions for proper API responses
+        raise
+        
+    except Exception as e:
+        logger.exception(f"Error triggering remediation for anomaly {anomaly_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to initiate remediation: {str(e)}"
+        )
+
+class RemediationStatusResponse(BaseModel):
+    """Response model for remediation status requests."""
+    
+    diagnosis_id: str = Field(..., description="ID of the diagnosis")
+    anomaly_id: str = Field(..., description="ID of the anomaly being remediated")
+    status: str = Field(..., description="Current status of the remediation process")
+    plan_id: Optional[str] = Field(None, description="ID of the remediation plan if created")
+    plan_status: Optional[str] = Field(None, description="Status of the remediation plan")
+    completed: bool = Field(default=False, description="Whether remediation is complete")
+    message: str = Field(..., description="Description of current status")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "diagnosis_id": "507f1f77bcf86cd799439012",
+                "anomaly_id": "507f1f77bcf86cd799439011",
+                "status": "in_progress",
+                "plan_id": "507f1f77bcf86cd799439013",
+                "plan_status": "executing",
+                "completed": False,
+                "message": "Remediation in progress - executing plan actions",
+            }
+        }
+
+@router.get(
+    "/remediation/status/{diagnosis_id}",
+    response_model=RemediationStatusResponse,
+    tags=["Remediation"],
+    summary="Check status of a remediation process",
+    description="""
+    Get the current status of a remediation process by its diagnosis ID.
+    
+    This endpoint provides visibility into:
+    · Current status of the remediation process
+    · Associated remediation plan (if created)
+    · Whether remediation is complete
+    · Any relevant messages about the current state
+    
+    Use this endpoint to track remediation progress from the CLI or other tools.
+    """,
+    response_description="Current status of the remediation process",
+    responses={
+        404: {
+            "description": "Diagnosis not found",
+            "content": {
+                "application/json": {"example": {"detail": "Diagnosis with ID 507f1f77bcf86cd799439012 not found"}}
+            },
+        },
+        500: {
+            "description": "Database error",
+            "content": {
+                "application/json": {"example": {"detail": "Failed to retrieve remediation status"}}
+            },
+        },
+    },
+)
+async def get_remediation_status(
+    diagnosis_id: str,
+    db: motor.motor_asyncio.AsyncIOMotorDatabase = Depends(get_mongo_db),
+):
+    """Get current status of a remediation process by diagnosis ID."""
+    # Validate the diagnosis ID format
+    try:
+        obj_id = ObjectId(diagnosis_id)
+    except errors.InvalidId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid diagnosis ID format: {diagnosis_id}",
+        )
+    
+    # Fetch the diagnosis from the database
+    diagnosis_dict = await db["diagnoses"].find_one({"_id": obj_id})
+    
+    if not diagnosis_dict:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Diagnosis with ID {diagnosis_id} not found",
+        )
+    
+    # Get the anomaly ID associated with this diagnosis
+    anomaly_id = diagnosis_dict.get("anomaly_id")
+    if not anomaly_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Invalid diagnosis record: missing anomaly ID",
+        )
+    
+    # Convert ObjectId to string if needed
+    if isinstance(anomaly_id, ObjectId):
+        anomaly_id = str(anomaly_id)
+    
+    # Check if a remediation plan was created
+    plan_id = diagnosis_dict.get("remediation_plan_id")
+    plan_status = None
+    completed = False
+    
+    if plan_id:
+        # Convert ObjectId to string if needed
+        if isinstance(plan_id, ObjectId):
+            plan_id = str(plan_id)
+            
+        # Try to get the plan details
+        plan_dict = await db["remediation_plans"].find_one({"_id": ObjectId(plan_id)})
+        if plan_dict:
+            # Determine plan status
+            if plan_dict.get("completed", False):
+                plan_status = "completed"
+                completed = True
+            elif plan_dict.get("executing", False):
+                plan_status = "executing"
+            else:
+                plan_status = "planned"
+    
+    # Determine overall status
+    diagnosis_status = diagnosis_dict.get("status", "unknown")
+    
+    if diagnosis_status == "completed" and plan_id and plan_status == "completed":
+        status = "completed"
+        completed = True
+        message = "Remediation completed successfully"
+    elif diagnosis_status == "failed":
+        status = "failed"
+        completed = True
+        message = diagnosis_dict.get("error_message", "Remediation failed")
+    elif not plan_id:
+        status = "diagnosing"
+        message = "Analyzing anomaly and determining remediation actions"
+    elif plan_status == "executing":
+        status = "in_progress"
+        message = "Remediation in progress - executing plan actions"
+    elif plan_status == "planned":
+        status = "planned"
+        message = "Remediation plan created and awaiting execution"
+    else:
+        status = diagnosis_status
+        message = "Remediation status is being updated"
+    
+    return RemediationStatusResponse(
+        diagnosis_id=diagnosis_id,
+        anomaly_id=anomaly_id,
+        status=status,
+        plan_id=plan_id,
+        plan_status=plan_status,
+        completed=completed,
+        message=message,
+    )

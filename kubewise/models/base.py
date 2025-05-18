@@ -5,7 +5,7 @@ Base model for KubeWise models using Pydantic.
 from typing import Any, Optional
 
 from bson import ObjectId
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # Simple function to convert ObjectId to string
@@ -25,6 +25,14 @@ def generate_objectid() -> PyObjectId:
     return str(ObjectId())
 
 
+# Validator function to ensure ObjectId is converted to string
+def validate_object_id(v: Any) -> str:
+    """Convert any ObjectId to string."""
+    if isinstance(v, ObjectId):
+        return str(v)
+    return v
+
+
 class BaseKubeWiseModel(BaseModel):
     """Base model with common configuration using Pydantic v2 style."""
 
@@ -42,3 +50,8 @@ class BaseKubeWiseModel(BaseModel):
         description="Database document ID",
         json_schema_extra={"example": "60b0f0b0a0b0c0d0e0f01020", "type": "string"},
     )
+    
+    @field_validator("id", mode="before")
+    def validate_id(cls, v):
+        """Ensure id is always a string."""
+        return serialize_object_id(v)

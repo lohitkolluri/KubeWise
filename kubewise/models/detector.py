@@ -146,9 +146,9 @@ DEFAULT_THRESHOLDS = {
 
 
 def with_exponential_backoff(
-    max_retries: int = 3,
+    max_retries_override: int = 3,
     retry_on_exceptions: Tuple[Exception, ...] = (Exception,),
-    initial_delay: float = 1.0,
+    initial_delay_override: float = 1.0,
     max_delay: float = 60.0,
     backoff_factor: float = 2.0,
     jitter_factor: float = 0.1,
@@ -165,16 +165,16 @@ def with_exponential_backoff(
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> T:
             retry_count = 0
-            backoff_time = initial_delay
+            backoff_time = initial_delay_override
 
             while True:
                 try:
                     return await func(*args, **kwargs)
                 except retry_on_exceptions as e:
                     retry_count += 1
-                    if retry_count > max_retries:
+                    if retry_count > max_retries_override:
                         logger.error(
-                            f"Maximum retries ({max_retries}) exceeded for {func.__name__}: {e}"
+                            f"Maximum retries ({max_retries_override}) exceeded for {func.__name__}: {e}"
                         )
                         raise
 
@@ -184,7 +184,7 @@ def with_exponential_backoff(
                     actual_backoff = max(0.1, actual_backoff)
 
                     logger.warning(
-                        f"Retry {retry_count}/{max_retries} for {func.__name__} after error: {e}. "
+                        f"Retry {retry_count}/{max_retries_override} for {func.__name__} after error: {e}. "
                         f"Backing off for {actual_backoff:.2f}s"
                     )
 
@@ -528,8 +528,9 @@ class OnlineAnomalyDetector:
             return {**DEFAULT_THRESHOLDS, **settings.anomaly_thresholds}
         return DEFAULT_THRESHOLDS
 
-    async def load_state(self) -> None:
-        """Load all state from storage."""
+    @with_exponential_backoff(max_retries_override=3)
+    async def load_state(self):
+        """Load the detector's state from MongoDB."""
         try:
             logger.info("Loading detector state from storage...")
             start_time = time.time()
@@ -565,7 +566,7 @@ class OnlineAnomalyDetector:
             except Exception as e:
                 logger.error(f"Failed to restore Isolation Forest model: {e}")
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _load_model_state(self, model_name: str) -> Optional[bytes]:
         """Load model state from database."""
         doc = await self.model_states_collection.find_one({"_id": model_name})
@@ -575,7 +576,7 @@ class OnlineAnomalyDetector:
         logger.warning(f"No state found for {model_name}")
         return None
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _load_entity_state(self) -> bool:
         """Load entity state from storage."""
         doc = await self.model_states_collection.find_one({"_id": "entity_state"})
@@ -626,10 +627,9 @@ class OnlineAnomalyDetector:
         """Load entity state from storage - public method that can be called by child classes."""
         return await self._load_entity_state()
 
-    async def save_state(self) -> None:
-        """
-        Save state if enough time has elapsed since last save.
-        """
+    @with_exponential_backoff(max_retries_override=3)
+    async def save_state(self):
+        """Save the current state of the detector to MongoDB."""
         current_time = time.time()
         if current_time - self._last_save_time >= self.save_interval:
             await self._save_detector_states()
@@ -661,7 +661,7 @@ class OnlineAnomalyDetector:
         except Exception as e:
             logger.error(f"Failed to save Isolation Forest model: {e}")
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _save_model_state(self, model_name: str, state: bytes) -> None:
         """Save model state to database."""
         await self.model_states_collection.update_one(
@@ -675,7 +675,7 @@ class OnlineAnomalyDetector:
             upsert=True,
         )
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _save_entity_state(self) -> bool:
         """Save entity state to database."""
         try:
@@ -1810,11 +1810,12 @@ class OnlineAnomalyDetector:
         
         self._dynamic_thresholds[dynamic_key] = max(min_threshold, min(max_threshold, new_threshold))
         
-        # Log threshold updates periodically for visibility
-        if random.random() < 0.01:  # Log ~1% of updates to avoid excessive logging
+        # Log threshold updates much less frequently to reduce spam
+        # Only log 0.1% of updates (1 in 1000) instead of 1% (1 in 100)
+        if random.random() < 0.001:  # Greatly reduced logging frequency
+            # Use standardized format to improve log grouping
             logger.debug(
-                f"Dynamic threshold for {entity_id}:{metric_name}: {self._dynamic_thresholds[dynamic_key]:.3f} "
-                f"(static={static_threshold:.3f}, score={score:.3f})"
+                f"Dynamic threshold updated: {self._dynamic_thresholds[dynamic_key]:.3f}"
             )
 
     def _update_cooldown(self, entity_id: str) -> None:
@@ -1901,9 +1902,9 @@ class OnlineAnomalyDetector:
 
         return record
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _store_anomaly_record(self, record: AnomalyRecord) -> Optional[str]:
-        """Store anomaly record in database."""
+        """Store the anomaly record in the database, returning its ID."""
         result = await self.anomaly_collection.insert_one(record.dict(by_alias=True))
         return result.inserted_id
 
@@ -1946,6 +1947,23 @@ class OnlineAnomalyDetector:
                 normalized[feature_name] = 0.0  # Default to 0 for first occurrence
         
         return normalized
+
+    @with_exponential_backoff(max_retries_override=3)
+    async def _save_anomaly_thresholds(self, thresholds: Dict[str, float]):
+        """Saves anomaly thresholds to MongoDB with retry.
+
+        Args:
+            thresholds: Dictionary of thresholds to save
+        """
+        try:
+            await self.model_states_collection.update_one(
+                {"_id": "anomaly_thresholds"},
+                {"$set": {"thresholds": thresholds}},
+                upsert=True,
+            )
+            logger.info("Anomaly thresholds saved successfully")
+        except Exception as e:
+            logger.error(f"Failed to save anomaly thresholds: {e}")
 
 
 class SequentialAnomalyDetector(OnlineAnomalyDetector):

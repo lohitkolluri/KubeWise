@@ -16,11 +16,14 @@ from typing import (
 
 import motor.motor_asyncio
 from kubernetes_asyncio import client, config, watch
-from loguru import logger
+from kubewise.logging import get_logger
 from pydantic import ValidationError
 
 from kubewise.models import KubernetesEvent
 from kubewise.utils.retry import with_exponential_backoff  # Import from utility file
+
+# Initialize logger with component name
+logger = get_logger("collector.k8s_events")
 
 # --- Type Variables for Generic Functions ---
 T = TypeVar("T")
@@ -68,7 +71,7 @@ HEALTH_CHECK_INTERVAL = 300.0  # Check connection health every 5 minutes
 # --- Utility Functions ---
 
 
-@with_exponential_backoff(max_retries=5)
+@with_exponential_backoff(max_retries_override=5)
 async def load_k8s_config() -> None:
     """
     Load Kubernetes configuration (in-cluster or local kubeconfig) with retry logic.
@@ -117,8 +120,11 @@ def parse_k8s_event(raw_event: dict) -> Optional[KubernetesEvent]:
 
         # Skip events with missing critical involved object details
         if not involved_object_name or not involved_object_kind:
+            # Use debug level with grouping for common filtering operations
+            # The message is intentionally generic to group similar events
             logger.debug(
-                f"Skipping event with missing involved object details - Name: {involved_object_name}, Kind: {involved_object_kind}, Reason: {reason}"
+                "Skipping event with missing object details",
+                quiet=True  # Mark as quiet to avoid console logging
             )
             return None
 
@@ -157,8 +163,11 @@ def parse_k8s_event(raw_event: dict) -> Optional[KubernetesEvent]:
         if event_timestamp and (current_time - event_timestamp).total_seconds() > (
             max_event_age_minutes * 60
         ):
+            # Use debug level with quiet flag for routine filtering
+            # Use a standardized message to improve log grouping
             logger.debug(
-                f"Skipping old event: {reason} from {event_timestamp} (more than {max_event_age_minutes} minutes old)"
+                "Skipping old event",
+                quiet=True
             )
             return None
 
@@ -176,7 +185,8 @@ def parse_k8s_event(raw_event: dict) -> Optional[KubernetesEvent]:
             or not parsed_event.involved_object_kind
         ):
             logger.debug(
-                f"Rejecting event after validation due to missing involved object details: {reason}"
+                "Rejecting event: validation failed",
+                quiet=True
             )
             return None
 
@@ -184,11 +194,11 @@ def parse_k8s_event(raw_event: dict) -> Optional[KubernetesEvent]:
 
     except ValidationError as e:
         event_name = raw_event.get("metadata", {}).get("name", "unknown")
-        logger.warning(f"Failed to validate Kubernetes event '{event_name}': {e}")
+        logger.warning(f"Failed to validate event '{event_name}': {str(e).split('n')[0]}")
         return None
     except Exception as e:
         event_name = raw_event.get("metadata", {}).get("name", "unknown")
-        logger.error(f"Unexpected error parsing Kubernetes event '{event_name}': {e}")
+        logger.error(f"Error parsing event '{event_name}': {str(e)}")
         return None
 
 
@@ -395,9 +405,7 @@ class KubernetesEventWatcher:
             w.stop()
             raise
 
-    @with_exponential_backoff(
-        max_retries=None
-    )  # Use decorator for retries, retry indefinitely until stop is called
+    @with_exponential_backoff(max_retries_override=5)
     async def _watch_stream_with_backoff(
         self, v1: client.CoreV1Api, w: watch.Watch
     ) -> None:
@@ -720,7 +728,7 @@ class KubernetesEventWatcher:
                 logger.error(f"Error in health check loop: {e}")
                 await asyncio.sleep(5.0)  # Short sleep on error
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _get_last_resource_version(self) -> str:
         """
         Retrieve the last known resource version from MongoDB with retry logic.
@@ -735,7 +743,7 @@ class KubernetesEventWatcher:
         )
         return ""
 
-    @with_exponential_backoff(max_retries=3)
+    @with_exponential_backoff(max_retries_override=3)
     async def _save_resource_version(self, resource_version: str) -> None:
         """
         Save the current resource version to MongoDB with retry logic.

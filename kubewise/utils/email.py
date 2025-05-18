@@ -23,10 +23,27 @@ def send_email(to_email: str, subject: str, body: str):
         msg['To'] = to_email
 
         with smtplib.SMTP(settings.smtp_server, settings.smtp_port) as server:
+            # Identify ourselves to the SMTP server
+            server.ehlo()
+            
+            # Enable TLS encryption
+            server.starttls()
+            
+            # Re-identify ourselves over the secure connection
+            server.ehlo()
+            
+            # Login if password is provided
             if settings.smtp_password:
                 server.login(settings.smtp_sender_email, settings.smtp_password.get_secret_value())
+                
+            # Send the email
             server.sendmail(settings.smtp_sender_email, to_email, msg.as_string())
+        
         logger.info(f"Email sent successfully to {to_email}")
 
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP authentication failed for {settings.smtp_sender_email}: {e}")
+    except smtplib.SMTPException as e:
+        logger.error(f"SMTP error occurred while sending email to {to_email}: {e}")
     except Exception as e:
         logger.error(f"Failed to send email to {to_email}: {e}")

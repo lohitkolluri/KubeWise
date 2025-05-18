@@ -1060,7 +1060,7 @@ async def run_detector_state_saver(
     )
 
     # Define save state function with retry decorator
-    @with_exponential_backoff(max_retries=3, initial_delay=1.0, max_delay=30.0)
+    @with_exponential_backoff(max_retries_override=3, initial_delay=1.0, max_delay=30.0)
     async def save_detector_state_with_retry():
         """Save detector state with automatic retries on connection errors."""
         await ctx.anomaly_detector.save_state()
@@ -1271,7 +1271,7 @@ def create_app() -> FastAPI:
 # Note: Uvicorn might call create_app itself depending on factory usage.
 # Using the factory pattern `create_app` is generally preferred.
 
-# app = create_app() # Create instance only if run directly? No, uvicorn needs the factory.
+app = create_app() # Create the application instance for Uvicorn
 
 if __name__ == "__main__":
     # This block is mainly for debugging the server setup directly,

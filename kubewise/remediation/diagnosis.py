@@ -8,15 +8,18 @@ import datetime
 import json
 import re
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 import motor.motor_asyncio
 from bson import ObjectId
 from kubernetes import client
-from loguru import logger
+from kubewise.logging import get_logger
 from pydantic import ValidationError
 from pymongo import ReplaceOne
 from pydantic_ai import Agent
+
+# Initialize logger with component name
+logger = get_logger("remediation.diagnosis")
 
 from kubewise.config import settings
 from kubewise.models import (
@@ -105,8 +108,8 @@ class DiagnosisEngine:
             f"Initiated diagnosis {diagnosis.id} for anomaly {anomaly_record.id}"
         )
 
-        # Run the workflow asynchronously
-        asyncio.create_task(self._diagnosis_workflow(diagnosis, anomaly_record))
+        # Run the workflow sequentially and wait for its completion
+        await self._diagnosis_workflow(diagnosis, anomaly_record)
 
         return diagnosis
 
@@ -134,15 +137,15 @@ class DiagnosisEngine:
             await self._update_diagnosis_status(
                 diagnosis.id, DiagnosisStatus.VALIDATING
             )
-            # Add debug logging here
-            logger.debug(f"Calling _validate_diagnosis with:")
-            logger.debug(f"  diagnosis type: {type(diagnosis)}")
-            logger.debug(f"  anomaly_record type: {type(anomaly_record)}")
-            logger.debug(f"  findings type: {type(findings)}")
-            if isinstance(findings, list):
-                logger.debug(f"  findings count: {len(findings)}")
+            # Log diagnostic validation info in a single message to improve grouping
+            findings_count = len(findings) if isinstance(findings, list) else 0
+            logger.debug(
+                "Validating diagnosis",
+                diagnosis_id=str(diagnosis.id),
+                findings_count=findings_count
+            )
 
-            # Fix: add the findings parameter to the _validate_diagnosis call
+            # Perform validation with findings parameter
             diagnosis = await self._validate_diagnosis(
                 diagnosis, anomaly_record, findings
             )
@@ -403,12 +406,26 @@ class DiagnosisEngine:
         )
         return diagnosis
 
+    @with_exponential_backoff()
+    async def _run_ai_agent_with_retry(self, prompt: str, **kwargs) -> Any:
+        """Helper to run the AI agent with retry logic."""
+        if not self.ai_agent:
+            # This case should ideally be caught before calling, but as a safeguard:
+            logger.error("AI agent not available for _run_ai_agent_with_retry")
+            raise RuntimeError("AI agent not configured.")
+        return await self.ai_agent.run(prompt, **kwargs)
+
     async def _ai_preliminary_diagnosis(
         self, diagnosis: DiagnosisEntry, anomaly_record: AnomalyRecord
     ) -> DiagnosisEntry:
         """Generates a preliminary diagnosis using the AI agent."""
         if not self.ai_agent:
-            raise RuntimeError("AI agent not configured for AI preliminary diagnosis.")
+            # Log and fallback or raise, but _run_ai_agent_with_retry will also check
+            logger.warning("AI agent not configured for AI preliminary diagnosis. Skipping AI step.")
+            diagnosis.preliminary_diagnosis = "AI agent not configured"
+            diagnosis.preliminary_confidence = 0.0
+            diagnosis.diagnosis_reasoning = "AI agent was not available for preliminary diagnosis."
+            return diagnosis
 
         context = anomaly_record.model_dump(mode="json", exclude_none=True)
 
@@ -448,8 +465,10 @@ class DiagnosisEngine:
         Your response should only contain the JSON structure.
         """
 
+        response_text = "" # Initialize for error logging
         try:
-            result = await self.ai_agent.run(prompt)
+            # result = await self.ai_agent.run(prompt)
+            result = await self._run_ai_agent_with_retry(prompt)
             response_text = result.output
 
             # Extract JSON from the response
@@ -476,13 +495,16 @@ class DiagnosisEngine:
                 "reasoning", "AI generated preliminary diagnosis."
             )
 
-        except (json.JSONDecodeError, ValueError, TypeError) as e:
-            logger.error(
-                f"Error parsing AI preliminary diagnosis response: {e}. Response: {response_text}"
-            )
-            diagnosis.preliminary_diagnosis = "AI analysis parsing failed"
+        except RuntimeError as e: # Catch RuntimeError from _run_ai_agent_with_retry if agent is None after all retries
+            logger.error(f"AI preliminary diagnosis failed after retries: {e}. Response: {response_text}")
+            diagnosis.preliminary_diagnosis = "AI analysis failed after retries"
             diagnosis.preliminary_confidence = 0.1
-            diagnosis.diagnosis_reasoning = f"Failed to parse AI response: {e}"
+            diagnosis.diagnosis_reasoning = f"AI agent call failed: {e}"
+        except Exception as e: # Catch other unexpected errors during AI call or processing
+            logger.error(f"Unexpected error during AI preliminary diagnosis: {e}. Response: {response_text}")
+            diagnosis.preliminary_diagnosis = "AI analysis encountered an unexpected error"
+            diagnosis.preliminary_confidence = 0.1
+            diagnosis.diagnosis_reasoning = f"Unexpected AI error: {e}"
 
         return diagnosis
 
@@ -626,7 +648,7 @@ class DiagnosisEngine:
 
     async def _execute_diagnostic_plan(
         self, diagnosis: DiagnosisEntry, anomaly_record: AnomalyRecord
-    ) -> List[DiagnosticResult]:
+    ) -> Tuple[List[DiagnosticResult], List[DiagnosticFinding]]:
         """Executes the diagnostic tools defined in the plan."""
         plan_id = diagnosis.diagnostic_plan_id
         if not plan_id:
@@ -861,81 +883,6 @@ class DiagnosisEngine:
         """Analyzes diagnostic results to generate findings."""
         findings = []
 
-        # Use AI analysis if configured
-        if self.ai_agent and settings.enable_diagnosis_workflow:
-            try:
-                findings = await self._ai_analyze_diagnostic_results(
-                    results, diagnosis, anomaly_record
-                )
-                logger.info(
-                    f"Extracted {len(findings)} findings using AI analysis from {len(results)} diagnostic results"
-                )
-            except Exception as e:
-                logger.error(
-                    f"AI analysis failed: {str(e)}. Falling back to rules-based analysis."
-                )
-                # Fall back to rule-based analysis
-                findings = await self._rules_based_analyze_diagnostic_results(
-                    results, diagnosis, anomaly_record
-                )
-        else:
-            findings = await self._rules_based_analyze_diagnostic_results(
-                results, diagnosis, anomaly_record
-            )
-
-        # Save the findings to the database if we got any
-        if findings:
-            insert_ops = []
-            for finding in findings:
-                if not finding.id:  # Ensure ID is set
-                    finding.id = str(ObjectId())  # Ensure ID is explicitly a string
-                insert_ops.append(
-                    ReplaceOne(
-                        {"_id": ObjectId(finding.id)},
-                        finding.model_dump(exclude={"id"}, by_alias=True),
-                        upsert=True,
-                    )
-                )
-
-            if insert_ops:
-                try:
-                    result = await self._diagnostic_findings_collection.bulk_write(
-                        insert_ops
-                    )
-                    logger.debug(
-                        f"Saved {result.upserted_count + result.modified_count} findings to database"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to save findings to database: {e}")
-
-        # Update the diagnosis record with the finding count
-        diagnosis_id = (
-            ObjectId(diagnosis.id) if isinstance(diagnosis.id, str) else diagnosis.id
-        )
-        await self._diagnosis_collection.update_one(
-            {"_id": diagnosis_id},
-            {
-                "$set": {
-                    "findings_count": len(findings),
-                    "status": DiagnosisStatus.ANALYZED.value,
-                }
-            },
-        )
-
-        logger.info(
-            f"Extracted {len(findings)} findings from {len(results)} diagnostic results for diagnosis {diagnosis.id}"
-        )
-        return findings
-
-    async def _rules_based_analyze_diagnostic_results(
-        self,
-        results: List[DiagnosticResult],
-        diagnosis: DiagnosisEntry,
-        anomaly_record: AnomalyRecord,
-    ) -> List[DiagnosticFinding]:
-        """Extracts findings from diagnostic results using predefined rules."""
-        findings = []
-
         # Track data sources
         pod_logs_available = False
         pod_describe_data_available = False
@@ -949,169 +896,256 @@ class DiagnosisEngine:
                 # Record diagnostic failure as a finding
                 findings.append(
                     DiagnosticFinding(
-                        diagnostic_id=result.id,
-                        entity_id=anomaly_record.entity_id,
-                        entity_type=anomaly_record.entity_type,
+                        diagnosis_id=str(diagnosis.id), # Ensure ID is string
+                        anomaly_id=str(anomaly_record.id), # Ensure ID is string
                         finding_type="diagnostic_failure",
                         severity="medium",
-                        summary=f"Diagnostic tool {result.tool_type} failed",
-                        details=result.error_message or "No error details available",
-                        source=result.tool_type,
+                        summary=f"Diagnostic tool {result.tool} failed", # Use result.tool
+                        description=result.error_message or "No error details available",
+                        source=str(result.tool.value), # Use result.tool.value
+                        entity_id=anomaly_record.entity_id,
+                        entity_type=anomaly_record.entity_type,
                     )
                 )
                 
                 # Check for specific error patterns that might be significant
-                if result.tool_type == DiagnosticTool.POD_LOGS and "400 Bad Request" in (result.error_message or ""):
+                if result.tool == DiagnosticTool.POD_LOGS and "400 Bad Request" in (result.error_message or ""):
                     # Unable to get logs - common with ImagePullBackOff pods
                     findings.append(
                         DiagnosticFinding(
-                            diagnostic_id=result.id,
-                            entity_id=anomaly_record.entity_id,
-                            entity_type=anomaly_record.entity_type,
+                            diagnosis_id=str(diagnosis.id), 
+                            anomaly_id=str(anomaly_record.id),
                             finding_type="pod_logs_unavailable",
                             severity="high",
                             summary="Pod logs cannot be retrieved, potentially due to pod not being in Running state",
-                            details=f"Failure to fetch logs might indicate pod hasn't started: {result.error_message}",
-                            source=result.tool_type,
+                            description=f"Failure to fetch logs might indicate pod hasn't started: {result.error_message}",
+                            source=str(DiagnosticTool.POD_LOGS.value),
+                            entity_id=anomaly_record.entity_id,
+                            entity_type=anomaly_record.entity_type,
                         )
                     )
-                    
-                continue
+                continue # Move to the next result if this one failed
 
-            if result.tool_type == DiagnosticTool.POD_DESCRIBE:
+            # If result.success is True:
+            if result.tool == DiagnosticTool.POD_DESCRIBE:
                 pod_describe_data_available = True
                 entity_id = anomaly_record.entity_id
                 entity_type = anomaly_record.entity_type
 
-                # Extract container statuses to check for issues
-                pod_data = result.data.get("pod", {})
+                pod_data = result.result_data.get("pod", {})
                 status = pod_data.get("status", {})
                 phase = status.get("phase", "")
                 
-                # Check pod phase as a first indicator
                 if phase != "Running":
-                    findings.append(
-                        DiagnosticFinding(
-                            diagnostic_id=result.id,
-                            entity_id=entity_id,
-                            entity_type=entity_type,
-                            finding_type="pod_not_running",
-                            severity="high", 
-                            summary=f"Pod is in {phase} phase rather than Running",
-                            details=f"Pod phase {phase} indicates the pod is not fully operational",
-                            source="pod_describe",
-                            evidence={"pod_phase": phase},
-                        )
-                    )
+                    findings.append(DiagnosticFinding(
+                        diagnosis_id=str(diagnosis.id),
+                        anomaly_id=str(anomaly_record.id),
+                        entity_id=entity_id,
+                        entity_type=entity_type,
+                        finding_type="pod_not_running",
+                        severity="high", 
+                        summary=f"Pod is in {phase} phase rather than Running",
+                        description=f"Pod phase {phase} indicates the pod is not fully operational",
+                        source=str(DiagnosticTool.POD_DESCRIBE.value),
+                        evidence=[{"pod_phase": phase}],
+                    ))
                 
-                # Check container statuses for more specific issues
                 container_statuses = status.get("containerStatuses", [])
-                
-                for status in container_statuses:
-                    waiting_state = status.get("state", {}).get("waiting", {})
+                for cs in container_statuses: # Renamed status to cs to avoid conflict
+                    waiting_state = cs.get("state", {}).get("waiting", {})
                     waiting_reason = waiting_state.get("reason", "")
                     waiting_message = waiting_state.get("message", "")
                     
                     if waiting_reason in ["ImagePullBackOff", "ErrImagePull"]:
                         image_related_issues += 1
-                        findings.append(
-                            DiagnosticFinding(
-                                diagnostic_id=result.id,
-                                entity_id=entity_id,
-                                entity_type=entity_type,
-                                finding_type="image_pull_failure",
-                                severity="critical",
-                                summary=f"Failed to pull image for container {status.get('name')}",
-                                details=waiting_message or f"Container {status.get('name')} has {waiting_reason}",
-                                source="pod_describe",
-                                evidence={"container_status": status},
-                            )
-                        )
+                        findings.append(DiagnosticFinding(
+                            diagnosis_id=str(diagnosis.id),
+                            anomaly_id=str(anomaly_record.id),
+                            entity_id=entity_id,
+                            entity_type=entity_type,
+                            finding_type="image_pull_failure",
+                            severity="critical",
+                            summary=f"Failed to pull image for container {cs.get('name')}",
+                            description=waiting_message or f"Container {cs.get('name')} has {waiting_reason}",
+                            source=str(DiagnosticTool.POD_DESCRIBE.value),
+                            evidence=[{"container_status": cs}],
+                        ))
                     elif waiting_reason == "CrashLoopBackOff":
-                        findings.append(
-                            DiagnosticFinding(
-                                diagnostic_id=result.id,
-                                entity_id=entity_id,
-                                entity_type=entity_type,
-                                finding_type="crash_loop_backoff",
-                                severity="critical",
-                                summary=f"Container {status.get('name')} in CrashLoopBackOff",
-                                details=waiting_message or "Container is repeatedly crashing",
-                                source="pod_describe",
-                                evidence={"container_status": status},
-                            )
-                        )
+                        findings.append(DiagnosticFinding(
+                            diagnosis_id=str(diagnosis.id),
+                            anomaly_id=str(anomaly_record.id),
+                            entity_id=entity_id,
+                            entity_type=entity_type,
+                            finding_type="crash_loop_backoff",
+                            severity="critical",
+                            summary=f"Container {cs.get('name')} in CrashLoopBackOff",
+                            description=waiting_message or "Container is repeatedly crashing",
+                            source=str(DiagnosticTool.POD_DESCRIBE.value),
+                            evidence=[{"container_status": cs}],
+                        ))
                     elif waiting_reason:
-                        # Any other waiting reason is worth recording
-                        findings.append(
-                            DiagnosticFinding(
-                                diagnostic_id=result.id,
-                                entity_id=entity_id,
-                                entity_type=entity_type,
-                                finding_type=f"container_waiting_{waiting_reason.lower()}",
-                                severity="high",
-                                summary=f"Container {status.get('name')} is waiting: {waiting_reason}",
-                                details=waiting_message or f"Container is in waiting state with reason: {waiting_reason}",
-                                source="pod_describe",
-                                evidence={"container_status": status},
-                            )
-                        )
+                        findings.append(DiagnosticFinding(
+                            diagnosis_id=str(diagnosis.id),
+                            anomaly_id=str(anomaly_record.id),
+                            entity_id=entity_id,
+                            entity_type=entity_type,
+                            finding_type=f"container_waiting_{waiting_reason.lower()}",
+                            severity="high",
+                            summary=f"Container {cs.get('name')} is waiting: {waiting_reason}",
+                            description=waiting_message or f"Container is in waiting state with reason: {waiting_reason}",
+                            source=str(DiagnosticTool.POD_DESCRIBE.value),
+                            evidence=[{"container_status": cs}],
+                        ))
                 
-                # Check for specific annotations that might indicate issues
                 annotations = pod_data.get("metadata", {}).get("annotations", {})
                 if "cluster_autoscaler_unhelpable_since" in str(annotations):
-                    findings.append(
-                        DiagnosticFinding(
-                            diagnostic_id=result.id,
-                            entity_id=entity_id,
-                            entity_type=entity_type, 
-                            finding_type="cluster_autoscaling_issue",
-                            severity="high",
-                            summary="Pod marked as unhelpable by cluster autoscaler",
-                            details="The cluster autoscaler cannot schedule this pod, which may indicate resource constraints",
-                            source="pod_describe",
-                            evidence={"annotations": annotations},
-                        )
-                    )
+                    findings.append(DiagnosticFinding(
+                        diagnosis_id=str(diagnosis.id),
+                        anomaly_id=str(anomaly_record.id),
+                        entity_id=entity_id,
+                        entity_type=entity_type, 
+                        finding_type="cluster_autoscaling_issue",
+                        severity="high",
+                        summary="Pod marked as unhelpable by cluster autoscaler",
+                        description="The cluster autoscaler cannot schedule this pod, which may indicate resource constraints",
+                        source=str(DiagnosticTool.POD_DESCRIBE.value),
+                        evidence=[{"annotations": annotations}],
+                    ))
                 
-            elif result.tool_type == DiagnosticTool.POD_LOGS:
+            elif result.tool == DiagnosticTool.POD_LOGS:
                 pod_logs_available = True
-                # Existing log analysis code...
-                
-            elif result.tool_type == DiagnosticTool.RESOURCE_USAGE:
+                # Simplified: check if logs exist. Real analysis would be more complex.
+                if result.success and "logs" in result.result_data and result.result_data["logs"]:
+                    # Basic check for common error patterns
+                    log_content = str(result.result_data["logs"]).lower()
+                    if "error" in log_content or "exception" in log_content:
+                        findings.append(DiagnosticFinding(
+                            diagnosis_id=str(diagnosis.id),
+                            anomaly_id=str(anomaly_record.id),
+                            entity_id=anomaly_record.entity_id,
+                            entity_type=anomaly_record.entity_type,
+                            finding_type="error_in_logs",
+                            severity="medium",
+                            summary="Potential errors found in pod logs",
+                            description="Pod logs contain 'error' or 'exception', indicating possible issues.",
+                            source=str(DiagnosticTool.POD_LOGS.value),
+                            evidence=[{"log_excerpt": log_content[:500]}] 
+                        ))
+                elif result.success and not result.result_data.get("logs"):
+                     findings.append(DiagnosticFinding(
+                        diagnosis_id=str(diagnosis.id),
+                        anomaly_id=str(anomaly_record.id),
+                        entity_id=anomaly_record.entity_id,
+                        entity_type=anomaly_record.entity_type,
+                        finding_type="empty_pod_logs",
+                        severity="low",
+                        summary="Pod logs were retrieved but are empty.",
+                        description="Empty logs might be normal for some applications or could indicate an issue.",
+                        source=str(DiagnosticTool.POD_LOGS.value),
+                    ))
+
+            elif result.tool == DiagnosticTool.RESOURCE_USAGE:
                 resource_usage_available = True
-                # If we received an empty result for pod metrics, note it as a finding
-                pod_metrics = result.data.get("pod_metrics", {}).get("items", [])
-                if len(pod_metrics) == 0 and anomaly_record.entity_type.lower() == "pod":
-                    findings.append(
-                        DiagnosticFinding(
-                            diagnostic_id=result.id,
+                if result.success:
+                    pod_metrics = result.result_data.get("pod_metrics", {}).get("items", [])
+                    if not pod_metrics and anomaly_record.entity_type.lower() == "pod":
+                        findings.append(DiagnosticFinding(
+                            diagnosis_id=str(diagnosis.id),
+                            anomaly_id=str(anomaly_record.id),
                             entity_id=anomaly_record.entity_id,
                             entity_type=anomaly_record.entity_type,
                             finding_type="no_metrics_available",
                             severity="medium",
                             summary="No resource metrics available for pod",
-                            details="Pod may not be running or metrics collection is failing",
-                            source="resource_usage",
-                        )
-                    )
+                            description="Pod may not be running or metrics collection is failing",
+                            source=str(DiagnosticTool.RESOURCE_USAGE.value),
+                        ))
+                    # Add more detailed metric analysis here if needed
                 
-            # Continue with other tool types...
+            elif result.tool == DiagnosticTool.EVENT_HISTORY:
+                if result.success and "events" in result.result_data:
+                    events = result.result_data.get("events", [])
+                    for event in events:
+                        if event.get("type") == "Warning":
+                            findings.append(DiagnosticFinding(
+                                diagnosis_id=str(diagnosis.id),
+                                anomaly_id=str(anomaly_record.id),
+                                entity_id=anomaly_record.entity_id, # Or event.involvedObject if more specific
+                                entity_type=event.get("involvedObject", {}).get("kind", anomaly_record.entity_type),
+                                finding_type="warning_event_found",
+                                severity="medium", # Could be adjusted based on event reason
+                                summary=f"Warning event: {event.get('reason', 'Unknown reason')}",
+                                description=event.get('message', 'No message'),
+                                source=str(DiagnosticTool.EVENT_HISTORY.value),
+                                evidence=[event]
+                            ))
+                            
+            elif result.tool == DiagnosticTool.NODE_DESCRIBE: # Ensure this and PVC_STATUS are handled
+                if result.success and "node" in result.result_data:
+                    node_info = result.result_data.get("node", {})
+                    conditions = node_info.get("status", {}).get("conditions", [])
+                    for cond in conditions:
+                        if cond.get("type") == "Ready" and cond.get("status") != "True":
+                            findings.append(DiagnosticFinding(
+                                diagnosis_id=str(diagnosis.id),
+                                anomaly_id=str(anomaly_record.id),
+                                entity_id=node_info.get("metadata", {}).get("name", anomaly_record.entity_id),
+                                entity_type="Node",
+                                finding_type="node_not_ready",
+                                severity="high",
+                                summary=f"Node {node_info.get('metadata', {}).get('name')} is not Ready",
+                                description=f"Condition {cond.get('type')} is {cond.get('status')}: {cond.get('message', '')}",
+                                source=str(DiagnosticTool.NODE_DESCRIBE.value),
+                                evidence=[cond]
+                            ))
+                        # Add checks for other conditions like MemoryPressure, DiskPressure etc.
+                        elif cond.get("status") == "True" and cond.get("type") in ["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"]:
+                             findings.append(DiagnosticFinding(
+                                diagnosis_id=str(diagnosis.id),
+                                anomaly_id=str(anomaly_record.id),
+                                entity_id=node_info.get("metadata", {}).get("name", anomaly_record.entity_id),
+                                entity_type="Node",
+                                finding_type=f"node_{cond.get('type').lower()}",
+                                severity="medium",
+                                summary=f"Node {node_info.get('metadata', {}).get('name')} has condition {cond.get('type')}",
+                                description=cond.get('message', ''),
+                                source=str(DiagnosticTool.NODE_DESCRIBE.value),
+                                evidence=[cond]
+                            ))
+
+            elif result.tool == DiagnosticTool.PVC_STATUS:
+                if result.success and "pvc" in result.result_data: # Assuming "pvc" is the key for PVC info
+                    pvc_info = result.result_data.get("pvc", {})
+                    pvc_phase = pvc_info.get("status", {}).get("phase")
+                    if pvc_phase and pvc_phase != "Bound":
+                        findings.append(DiagnosticFinding(
+                            diagnosis_id=str(diagnosis.id),
+                            anomaly_id=str(anomaly_record.id),
+                            entity_id=pvc_info.get("metadata", {}).get("name", anomaly_record.entity_id),
+                            entity_type="PersistentVolumeClaim",
+                            finding_type="pvc_not_bound",
+                            severity="high",
+                            summary=f"PVC {pvc_info.get('metadata', {}).get('name')} is not Bound (Phase: {pvc_phase})",
+                            description=f"PVC phase {pvc_phase} indicates an issue.",
+                            source=str(DiagnosticTool.PVC_STATUS.value),
+                            evidence=[pvc_info.get("status", {})]
+                        ))
+            # Note: The 'finding' variable is not used after assignment in the original problematic edit.
+            # All appends should be direct `findings.append(DiagnosticFinding(...))`
         
         # Add a meta-finding if we detect multiple indicators of image issues
         if image_related_issues > 0 and not pod_logs_available:
-            findings.append(
-                DiagnosticFinding(
-                    diagnostic_id=str(ObjectId()),  # Generate a new ID for this meta-finding
-                    entity_id=anomaly_record.entity_id,
-                    entity_type=anomaly_record.entity_type,
-                    finding_type="imagecrashloop_detected",
-                    severity="critical",
-                    summary="Pod is experiencing image-related crash issues",
-                    details=f"Detected {image_related_issues} image-related issues and unable to retrieve logs, which is consistent with ImagePullBackOff or similar pod startup problems",
-                    source="meta_analysis",
-                )
-            )
+            findings.append(DiagnosticFinding( # Directly append
+                diagnosis_id=str(diagnosis.id), 
+                anomaly_id=str(anomaly_record.id),
+                entity_id=anomaly_record.entity_id,
+                entity_type=anomaly_record.entity_type,
+                finding_type="imagecrashloop_detected",
+                severity="critical",
+                summary="Pod is experiencing image-related crash issues",
+                description=f"Detected {image_related_issues} image-related issues and unable to retrieve logs, which is consistent with ImagePullBackOff or similar pod startup problems",
+                source="meta_analysis",
+            ))
         
         return findings
 
@@ -1121,28 +1155,32 @@ class DiagnosisEngine:
         diagnosis: DiagnosisEntry,
         anomaly_record: AnomalyRecord,
     ) -> List[DiagnosticFinding]:
-        """Analyzes diagnostic results using the configured AI agent."""
-        if not self.ai_agent:
-            raise RuntimeError("AI agent not configured for AI diagnostic analysis.")
-
-        # Prepare context, summarizing large data fields
-        context = {
-            "entity_type": anomaly_record.entity_type,
-            "entity_id": anomaly_record.entity_id,
-            "preliminary_diagnosis": diagnosis.preliminary_diagnosis,
-            "anomaly_data": anomaly_record.model_dump(mode="json", exclude_none=True),
-            "diagnostic_results": [
-                {
-                    "tool": result.tool,
-                    "success": result.success,
-                    "error_message": result.error_message,
-                    **self._summarize_result_data(result),
-                }
-                for result in results
-            ],
-        }
-
+        """
+        Analyze diagnostic results using an AI agent to extract findings.
+        """
+        response = None  # Initialize response here
         try:
+            if not self.ai_agent:
+                logger.warning("AI agent not configured. Cannot perform AI analysis.")
+                return []
+
+            # Prepare context, summarizing large data fields
+            context = {
+                "entity_type": anomaly_record.entity_type,
+                "entity_id": anomaly_record.entity_id,
+                "preliminary_diagnosis": diagnosis.preliminary_diagnosis,
+                "anomaly_data": anomaly_record.model_dump(mode="json", exclude_none=True),
+                "diagnostic_results": [
+                    {
+                        "tool": result.tool,
+                        "success": result.success,
+                        "error_message": result.error_message,
+                        **self._summarize_result_data(result),
+                    }
+                    for result in results
+                ],
+            }
+
             # Create the prompt for the AI agent
             prompt = f"""
             Analyze the diagnostic results from Kubernetes tools and identify significant findings that could explain the anomaly.
@@ -1198,7 +1236,7 @@ class DiagnosisEngine:
                 run_params["max_tokens"] = settings.ai_max_tokens
 
             # Use the run method with dynamic parameters
-            result = await self.ai_agent.run(prompt, **run_params)
+            result = await self._run_ai_agent_with_retry(prompt, **run_params)
 
             response = result.output
             logger.debug(f"AI analysis response: {response}")
@@ -1251,9 +1289,17 @@ class DiagnosisEngine:
                     continue
 
             return findings
+        except RuntimeError as e: # Catch RuntimeError from _run_ai_agent_with_retry
+            logger.error(f"AI diagnostic analysis failed after retries: {e}. Response: {response if isinstance(response, str) else 'N/A'}")
+            return []
         except Exception as e:
+            # Log the raw response if it's available and was a string
+            raw_response_excerpt = ""
+            if response and isinstance(response, str): # Check if response is not None
+                raw_response_excerpt = response[:500] + ("..." if len(response) > 500 else "")
+
             logger.error(
-                f"Error during AI diagnostic analysis: {e}"
+                f"Error during AI diagnostic analysis: {e}. Raw response excerpt: {raw_response_excerpt}"
             )  # Catch and log other exceptions
             return []
 
@@ -1765,14 +1811,11 @@ class DiagnosisEngine:
                 run_params["max_tokens"] = settings.ai_max_tokens
 
             # Use the run method with dynamic parameters
-            result = await self.ai_agent.run(prompt, **run_params)
+            result = await self._run_ai_agent_with_retry(prompt, **run_params)
 
             response_text = result.output
 
             # Extract JSON from response_text
-            import re
-
-            # Extract JSON from markdown code blocks if present
             json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)

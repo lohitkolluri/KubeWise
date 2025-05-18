@@ -24,14 +24,14 @@ DEFAULT_PROM_QUERIES = {
     
     # Direct Failure Indicators
     "pod_oom_events": dedent("""
-        sum by (namespace, pod) (
+        (sum by (namespace, pod) (
             container_oom_events_total{container!=""}
-        ) > 0
+        ) > 0) or vector(0)
     """),
     "pod_oomkilled_state": dedent("""
-        sum by (namespace, pod) (
+        (sum by (namespace, pod) (
             kube_pod_container_status_terminated_reason{reason="OOMKilled"}
-        ) > 0
+        ) > 0) or vector(0)
     """),
     "pod_not_ready": dedent("""
         sum by (namespace, pod) (
@@ -39,9 +39,9 @@ DEFAULT_PROM_QUERIES = {
         ) > 0
     """),
     "pod_container_waiting": dedent("""
-        sum by (namespace, pod, reason) (
+        (sum by (namespace, pod, reason) (
             kube_pod_container_status_waiting_reason
-        ) > 0
+        ) > 0) or vector(0)
     """),
     
     # Deployment/StatefulSet Availability
@@ -55,14 +55,14 @@ DEFAULT_PROM_QUERIES = {
     
     # Failure States
     "pod_crashloopbackoff": dedent("""
-        sum by (namespace, pod) (
+        (sum by (namespace, pod) (
             kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}
-        ) > 0
+        ) > 0) or vector(0)
     """),
     "pod_imagepullbackoff": dedent("""
-        sum by (namespace, pod) (
+        (sum by (namespace, pod) (
             kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull"}
-        ) > 0
+        ) > 0) or vector(0)
     """),
     "pod_failed": dedent("""
         sum by (namespace) (
@@ -77,10 +77,10 @@ DEFAULT_PROM_QUERIES = {
     
     # Network / Connectivity Issues
     "pod_tcp_retransmits_per_second": dedent("""
-        rate(node_network_receive_errors_total[5m]) + rate(node_network_transmit_errors_total[5m])
+        (rate(node_network_receive_errors_total[5m]) + rate(node_network_transmit_errors_total[5m])) or vector(0)
     """),
     "pod_dns_request_failures": dedent("""
-        rate(coredns_dns_request_count_total{rcode=~"SERVFAIL|NXDOMAIN"}[5m])
+        (rate(coredns_dns_request_count_total{rcode=~"SERVFAIL|NXDOMAIN"}[5m])) or vector(0)
     """),
     
     # Node Conditions
@@ -99,7 +99,7 @@ DEFAULT_PROM_QUERIES = {
     
     # Node Resource Utilization
     "node_load_high": dedent("""
-        node_load5 / on(instance) group_left() count by(instance)(node_cpu_seconds_total{mode="idle"}) > 2
+        (node_load5 / on(instance) group_left() count by(instance)(node_cpu_seconds_total{mode="idle"}) > 2) or vector(0)
     """),
     "node_disk_usage_pct": dedent("""
         (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100
@@ -198,7 +198,7 @@ class Settings(BaseSettings):
         description="Maximum concurrent remediation actions.",
     )
     blacklisted_namespaces: List[str] = Field(
-        default_factory=lambda: ["monitoring", "kube-system", "kube-public"],
+        default_factory=lambda: ["monitoring", "kube-public"],
         validation_alias="BLACKLISTED_NAMESPACES",
         description="Namespaces excluded from remediation actions.",
     )
@@ -255,6 +255,18 @@ class Settings(BaseSettings):
         validation_alias="AI_MAX_TOKENS",
         description="Maximum tokens to generate in AI responses",
         gt=0,
+    )
+    ai_max_retries: int = Field(
+        3, # Default to 3 retries
+        validation_alias="AI_MAX_RETRIES",
+        description="Maximum number of retries for AI API calls.",
+        ge=0,
+    )
+    ai_retry_delay: float = Field(
+        7.0, # Default to 7.0 seconds base delay
+        validation_alias="AI_RETRY_DELAY",
+        description="Base delay in seconds for retrying AI API calls (will be subject to exponential backoff).",
+        gt=0.0,
     )
 
     # Email Settings

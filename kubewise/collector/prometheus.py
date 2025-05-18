@@ -141,23 +141,37 @@ class PrometheusFetcher:
     async def _metrics_polling_loop(self) -> None:
         """Periodically fetches metrics and puts them on the queue."""
         logger.info(f"Starting metrics polling loop (interval: {self.poll_interval}s).")
+        poll_count = 0  # Count polls to reduce logging frequency
+        
         while self._is_running:
             start_time = time.monotonic()
             try:
+                # Fetch the metrics
                 metrics = await self._fetch_all_metrics()
+                
+                # Put them on the queue
                 for metric in metrics:
                     await self.metrics_queue.put(metric)
 
+                # Update stats
                 self.polls_completed += 1
                 self.metrics_fetched += len(metrics)
                 self.successful_polls += 1
                 self._last_successful_poll = time.monotonic()
 
+                # Calculate sleep time
                 elapsed = time.monotonic() - start_time
                 sleep_time = max(0.1, self.poll_interval - elapsed)
-                logger.debug(
-                    f"Poll cycle completed: Fetched {len(metrics)} metrics in {elapsed:.2f}s. Next poll in {sleep_time:.2f}s."
-                )
+                
+                # Log less frequently for normal operations to reduce log noise
+                poll_count += 1
+                if poll_count >= 10:  # Only log every 10 polls for normal operation
+                    logger.info(
+                        f"Metrics stats: Completed {self.polls_completed} polls, fetched {self.metrics_fetched} metrics total."
+                    )
+                    poll_count = 0
+                
+                # Sleep until next poll
                 await asyncio.sleep(sleep_time)
 
             except asyncio.CancelledError:
@@ -169,6 +183,29 @@ class PrometheusFetcher:
                 await asyncio.sleep(
                     min(self.poll_interval, 5.0)
                 )  # Short backoff on error
+                
+    @with_exponential_backoff(max_retries_override=3)
+    async def _fetch_single_metric(
+        self, name: str, query: str
+    ) -> Tuple[str, List[MetricPoint], Any]:
+        """Fetches and parses results for a single PromQL query."""
+        logger.debug(f"Querying metric '{name}'...")
+        data = await self._query_prometheus(query)
+        metrics = self._parse_prometheus_response(name, data) if data else []
+        # Handle fallback queries (e.g., `... or vector(0)`) returning empty results
+        if not metrics and "vector(0)" in query:
+            logger.debug(
+                f"Query '{name}' used fallback 'vector(0)', creating default 0 value."
+            )
+            metrics.append(
+                MetricPoint(
+                    metric_name=name,
+                    labels={"source": "fallback"},
+                    value=0.0,
+                    timestamp=datetime.datetime.now(datetime.timezone.utc),
+                )
+            )
+        return name, metrics, data
 
     async def _health_check_loop(self) -> None:
         """Periodically checks Prometheus API health."""
@@ -221,7 +258,7 @@ class PrometheusFetcher:
                 await asyncio.sleep(5.0)  # Wait briefly after an error
 
     @with_exponential_backoff(
-        max_retries=2, initial_delay=0.5
+        max_retries_override=2, initial_delay_override=0.5
     )  # Fewer retries for health check
     async def _check_prometheus_health(self) -> bool:
         """Performs a basic connectivity and query check against Prometheus."""
@@ -251,17 +288,21 @@ class PrometheusFetcher:
             logger.warning("No active Prometheus queries to fetch.")
             return []
 
-        logger.debug(f"Fetching {len(active_queries)} active Prometheus queries...")
-        tasks = [
-            self._fetch_single_metric(name, query)
-            for name, query in active_queries.items()
-        ]
+        # Log a summary of the queries we're about to run instead of individual logs
+        logger.debug(f"Fetching {len(active_queries)} Prometheus metrics...")
+        
+        # Create tasks without individual logging
+        tasks = []
+        for name, query in active_queries.items():
+            tasks.append(self._fetch_single_metric_quiet(name, query))
+            
         start_time = time.monotonic()
         results = await asyncio.gather(*tasks, return_exceptions=True)
         elapsed = time.monotonic() - start_time
 
         all_metrics: List[MetricPoint] = []
         success_count, error_count, queries_with_data = 0, 0, 0
+        metrics_by_name = {}
 
         # Process results and manage query failures
         for i, result in enumerate(results):
@@ -294,31 +335,29 @@ class PrometheusFetcher:
                     if valid_metrics:
                         all_metrics.extend(valid_metrics)
                         queries_with_data += 1
+                        metrics_by_name[query_name] = len(valid_metrics)
                     elif metrics_list:  # Log if filtering removed all metrics
                         logger.warning(
                             f"Query '{query_name}' returned only non-finite values."
                         )
 
+        # Log a summary of results instead of individual logs per query
         logger.debug(
-            f"Query cycle completed in {elapsed:.2f}s: {success_count}/{len(active_queries)} queries succeeded, "
-            f"{queries_with_data} returned data ({len(all_metrics)} total metrics). "
-            f"{len(self._disabled_queries)} queries disabled."
+            f"Metrics poll: {success_count}/{len(active_queries)} queries in {elapsed:.2f}s, {len(all_metrics)} datapoints. Next poll in {self.poll_interval-elapsed:.2f}s."
         )
+        
         return all_metrics
-
-    @with_exponential_backoff(max_retries=3)
-    async def _fetch_single_metric(
+        
+    # Non-logging version of _fetch_single_metric to reduce log spam
+    @with_exponential_backoff(max_retries_override=3)
+    async def _fetch_single_metric_quiet(
         self, name: str, query: str
     ) -> Tuple[str, List[MetricPoint], Any]:
-        """Fetches and parses results for a single PromQL query."""
-        logger.debug(f"Querying metric '{name}'...")
+        """Fetches and parses results for a single PromQL query without logging each query."""
         data = await self._query_prometheus(query)
-        metrics = self._parse_prometheus_response(name, data) if data else []
+        metrics = self._parse_prometheus_response_quiet(name, data) if data else []
         # Handle fallback queries (e.g., `... or vector(0)`) returning empty results
         if not metrics and "vector(0)" in query:
-            logger.debug(
-                f"Query '{name}' used fallback 'vector(0)', creating default 0 value."
-            )
             metrics.append(
                 MetricPoint(
                     metric_name=name,
@@ -328,6 +367,77 @@ class PrometheusFetcher:
                 )
             )
         return name, metrics, data
+        
+    def _parse_prometheus_response_quiet(
+        self, query_name: str, data: Dict
+    ) -> List[MetricPoint]:
+        """Parses a Prometheus API JSON response without logging each result."""
+        metrics: List[MetricPoint] = []
+        if not data or data.get("status") != "success" or "data" not in data:
+            return metrics
+        result_data = data["data"]
+        result_type = result_data.get("resultType")
+        results = result_data.get("result", [])
+
+        if not results:
+            # Skip logging empty result sets
+            return metrics
+
+        try:
+            for item in results:
+                labels = item.get("metric", {})
+                if result_type == "vector":
+                    value_pair = item.get("value")
+                    if value_pair and len(value_pair) == 2:
+                        ts_val, val_str = value_pair
+                        try:
+                            value = float(val_str)
+                            # Skip non-finite values which can break models
+                            if not math.isfinite(value):
+                                continue
+                            ts = datetime.datetime.fromtimestamp(
+                                float(ts_val), tz=datetime.timezone.utc
+                            )
+                            metrics.append(
+                                MetricPoint(
+                                    metric_name=query_name,
+                                    labels=labels,
+                                    value=value,
+                                    timestamp=ts,
+                                )
+                            )
+                        except (ValueError, TypeError) as e:
+                            logger.warning(
+                                f"Error parsing vector value for {query_name}: {e}, value pair: {value_pair}"
+                            )
+                elif result_type == "matrix":
+                    value_pairs = item.get("values", [])
+                    for ts_val, val_str in value_pairs:
+                        try:
+                            value = float(val_str)
+                            if not math.isfinite(value):
+                                continue
+                            ts = datetime.datetime.fromtimestamp(
+                                float(ts_val), tz=datetime.timezone.utc
+                            )
+                            metrics.append(
+                                MetricPoint(
+                                    metric_name=query_name,
+                                    labels=labels,
+                                    value=value,
+                                    timestamp=ts,
+                                )
+                            )
+                        except (ValueError, TypeError) as e:
+                            logger.warning(
+                                f"Error parsing matrix value for {query_name}: {e}, value pair: {(ts_val, val_str)}"
+                            )
+        except Exception as e:
+            logger.exception(
+                f"Unexpected error parsing Prometheus response for '{query_name}': {e}"
+            )
+
+        return metrics
 
     @with_circuit_breaker(
         service_name="prometheus"
@@ -376,7 +486,8 @@ class PrometheusFetcher:
         if not results:
             # Log only if not expecting empty result (i.e., no 'vector(0)' fallback)
             if "vector(0)" not in self.metrics_queries.get(query_name, ""):
-                logger.debug(f"Query '{query_name}' returned empty result set.")
+                # We're using a standardized message to improve log grouping
+                logger.debug("Empty result set for query")
             return metrics
 
         try:
@@ -390,9 +501,9 @@ class PrometheusFetcher:
                             value = float(val_str)
                             # Skip non-finite values which can break models
                             if not math.isfinite(value):
-                                logger.debug(
-                                    f"Skipping non-finite value for {query_name}{labels}: {val_str}"
-                                )
+                                # Using a standardized message without individual values
+                                # to improve log grouping
+                                logger.debug("Skipping non-finite metric value")
                                 continue
                             ts = datetime.datetime.fromtimestamp(
                                 float(ts_val), tz=datetime.timezone.utc
@@ -407,7 +518,7 @@ class PrometheusFetcher:
                             )
                         except (ValueError, TypeError) as e:
                             logger.warning(
-                                f"Error parsing vector value for {query_name}: {e}, value pair: {value_pair}"
+                                f"Error parsing vector value for {query_name}: {e}"
                             )
                 elif result_type == "matrix":
                     value_pairs = item.get("values", [])
@@ -429,7 +540,7 @@ class PrometheusFetcher:
                             )
                         except (ValueError, TypeError) as e:
                             logger.warning(
-                                f"Error parsing matrix value for {query_name}: {e}, value pair: {(ts_val, val_str)}"
+                                f"Error parsing matrix value for {query_name}: {e}"
                             )
                 # Note: 'scalar' and 'string' result types are generally not processed into MetricPoints
         except Exception as e:
@@ -437,8 +548,118 @@ class PrometheusFetcher:
                 f"Unexpected error parsing Prometheus response for '{query_name}': {e}"
             )
 
-        logger.debug(f"Parsed {len(metrics)} data points for '{query_name}'.")
+        # Use a standardized message format to improve log grouping
+        # Report only the count of data points, not the full query name
+        logger.debug(f"Parsed metrics: {len(metrics)} data points")
         return metrics
+
+    def _create_metrics_progress_loader(self, task_description: str, total_metrics: int) -> Optional[Any]:
+        """
+        Creates a visual progress loader for metrics collection if rich is available.
+        Non-essential feature, so gracefully handles when the rich package is not available.
+        
+        Args:
+            task_description: The description for the progress task
+            total_metrics: The total number of metrics expected
+            
+        Returns:
+            A progress object if rich is available, None otherwise
+        """
+        try:
+            # Try to import rich components
+            from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+            
+            # Create progress display
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn(f"[cyan]{task_description}"),
+                BarColumn(),
+                TextColumn("[bold green]{task.completed}/{task.total}"),
+                TimeElapsedColumn(),
+            )
+            
+            # Start the progress display
+            return progress.start()
+        except ImportError:
+            # Rich package may not be available in all environments - gracefully handle this
+            logger.debug("Rich package not available, visual loader disabled")
+            return None
+            
+    async def _fetch_all_metrics_with_loader(self) -> List[MetricPoint]:
+        """A version of _fetch_all_metrics with visual feedback suitable for CLI tools."""
+        if not self._client:
+            return []
+
+        # Start a visual loader
+        loader = self._create_metrics_progress_loader("Fetching metrics...", len(self.metrics_queries))
+        
+        # If loader couldn't be created, fall back to regular method
+        if loader is None:
+            return await self._fetch_all_metrics()
+        
+        try:
+            active_queries = {
+                name: query
+                for name, query in self.metrics_queries.items()
+                if name not in self._disabled_queries
+            }
+            
+            if not active_queries:
+                loader.update(task_id=0, description="No active metrics to fetch")
+                return []
+                
+            # Create loader task
+            task_id = loader.add_task("Fetching metrics...", total=len(active_queries))
+            
+            # Process queries
+            all_metrics: List[MetricPoint] = []
+            success_count, error_count, queries_with_data = 0, 0, 0
+            
+            # Process each query with visual feedback
+            for i, (name, query) in enumerate(active_queries.items()):
+                loader.update(task_id, description=f"Fetching metric: {name}")
+                
+                try:
+                    # Fetch the metric
+                    _, metrics_list, _ = await self._fetch_single_metric_quiet(name, query)
+                    
+                    # Handle results
+                    success_count += 1
+                    self._query_failure_counts[name] = 0  # Reset failure count on success
+                    
+                    if metrics_list:
+                        valid_metrics = [m for m in metrics_list if math.isfinite(m.value)]
+                        if valid_metrics:
+                            all_metrics.extend(valid_metrics)
+                            queries_with_data += 1
+                            loader.update(task_id, description=f"Fetched {name}: {len(valid_metrics)} datapoints")
+                        else:
+                            loader.update(task_id, description=f"Fetched {name}: non-finite values only")
+                    else:
+                        loader.update(task_id, description=f"Fetched {name}: no data")
+                        
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"Query '{name}' failed: {e}")
+                    loader.update(task_id, description=f"Failed: {name}")
+                    
+                    # Track consecutive failures
+                    self._query_failure_counts[name] = self._query_failure_counts.get(name, 0) + 1
+                    if self._query_failure_counts[name] >= self._max_failures_before_disable:
+                        logger.warning(f"Disabling query '{name}' due to {self._max_failures_before_disable} consecutive failures.")
+                        self._disabled_queries.add(name)
+                
+                # Update progress
+                loader.update(task_id, completed=i+1)
+                
+            # Complete the task
+            loader.update(task_id, description=f"Completed: {success_count}/{len(active_queries)} queries, {len(all_metrics)} datapoints")
+            
+            return all_metrics
+            
+        finally:
+            # Make sure to clean up the loader
+            loader.stop()
 
 
 # --- Legacy API Wrapper (for potential backward compatibility) ---
@@ -477,7 +698,7 @@ class PrometheusClient:
 
 
 # Keep legacy functions but clearly mark them and delegate to new methods if possible
-@with_exponential_backoff(max_retries=3)
+@with_exponential_backoff(max_retries_override=3)
 async def query_prometheus(
     client: httpx.AsyncClient, query: str, prometheus_url: Optional[str] = None
 ) -> Optional[Dict]:

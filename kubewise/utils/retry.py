@@ -7,6 +7,8 @@ from typing import Any, Callable, Coroutine, Dict, Optional, TypeVar, cast
 
 from loguru import logger
 
+from kubewise.config import settings # Import settings
+
 # Type Definitions for generic decorators
 T = TypeVar("T")
 F = TypeVar("F", bound=Callable[..., Coroutine[Any, Any, Any]])
@@ -31,8 +33,8 @@ CB_STATUS_OPEN = 2
 
 
 def with_exponential_backoff(
-    max_retries: Optional[int] = 3,
-    initial_delay: float = DEFAULT_INITIAL_RETRY_DELAY,
+    max_retries_override: Optional[int] = None, # Renamed to avoid conflict
+    initial_delay_override: Optional[float] = None, # Renamed to avoid conflict
     max_delay: float = DEFAULT_MAX_RETRY_DELAY,
     backoff_factor: float = DEFAULT_RETRY_BACKOFF_FACTOR,
     jitter_factor: float = DEFAULT_JITTER_FACTOR,
@@ -44,8 +46,8 @@ def with_exponential_backoff(
     between attempts exponentially.
 
     Args:
-        max_retries: Maximum retry attempts (None for infinite).
-        initial_delay: Initial delay in seconds.
+        max_retries_override: Maximum retry attempts (None for infinite).
+        initial_delay_override: Initial delay in seconds.
         max_delay: Maximum delay in seconds.
         backoff_factor: Multiplier for delay increase.
         jitter_factor: Percentage of delay to use for random jitter.
@@ -57,7 +59,11 @@ def with_exponential_backoff(
     def decorator(func: F) -> F:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            delay = initial_delay
+            # Use override if provided, else use settings, else use decorator default
+            current_max_retries = max_retries_override if max_retries_override is not None else getattr(settings, 'ai_max_retries', DEFAULT_MAX_RETRY_ATTEMPTS)
+            current_initial_delay = initial_delay_override if initial_delay_override is not None else getattr(settings, 'ai_retry_delay', DEFAULT_INITIAL_RETRY_DELAY)
+            
+            delay = current_initial_delay
             attempt = 0
             func_name = func.__qualname__
 
@@ -66,7 +72,7 @@ def with_exponential_backoff(
                 try:
                     return await func(*args, **kwargs)
                 except Exception as e:
-                    if max_retries is not None and attempt >= max_retries:
+                    if current_max_retries is not None and attempt >= current_max_retries:
                         logger.error(
                             f"Function {func_name} failed after {attempt} attempts. Last error: {repr(e)}"
                         )
@@ -74,7 +80,7 @@ def with_exponential_backoff(
 
                     logger.warning(
                         f"Function {func_name} failed on attempt {attempt}"
-                        f"{f'/{max_retries}' if max_retries else ''}: {repr(e)}"
+                        f"{f'/{current_max_retries}' if current_max_retries else ''}: {repr(e)}"
                     )
 
                     jitter = delay * jitter_factor
@@ -84,7 +90,7 @@ def with_exponential_backoff(
 
                     logger.info(
                         f"Retrying {func_name} in {actual_delay:.2f}s (attempt {attempt + 1}"
-                        f"{f'/{max_retries}' if max_retries else ''})"
+                        f"{f'/{current_max_retries}' if current_max_retries else ''})"
                     )
 
                     await asyncio.sleep(actual_delay)

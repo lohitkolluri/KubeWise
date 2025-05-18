@@ -59,12 +59,14 @@ async def create_mongo_client(uri: str) -> motor.motor_asyncio.AsyncIOMotorClien
         maxPoolSize=MONGO_MAX_POOL_SIZE,
         minPoolSize=MONGO_MIN_POOL_SIZE,
         maxIdleTimeMS=MONGO_MAX_IDLE_TIME_MS,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=5000,
-        socketTimeoutMS=10000,
-        waitQueueTimeoutMS=5000,
+        serverSelectionTimeoutMS=30000,  # Increased to 30 seconds
+        connectTimeoutMS=20000,          # Increased to 20 seconds
+        socketTimeoutMS=45000,           # Increased to 45 seconds
+        waitQueueTimeoutMS=20000,        # Increased to 20 seconds
         retryWrites=True,
         w="majority",
+        tls=True,                        # Use TLS for connection
+        tlsAllowInvalidCertificates=True # Temporarily allow invalid certificates
     )
     return client
 
@@ -273,7 +275,7 @@ async def initialize_app_context() -> AppContext:
     app_context.start_timestamp = asyncio.get_running_loop().time()
 
     # Initialize MongoDB client and database with retry
-    @with_exponential_backoff(max_retries=5, initial_delay=1.0, max_delay=30.0)
+    @with_exponential_backoff(max_retries_override=5, initial_delay_override=1.0, max_delay=30.0)
     async def init_mongodb():
         mongo_connection_uri = str(settings.mongo_uri)
         mongo_client = await create_mongo_client(mongo_connection_uri)

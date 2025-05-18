@@ -29,6 +29,19 @@ class ActionType(str, Enum):
     SCALE_STATEFULSET = "scale_statefulset"
     VERTICAL_SCALE_DEPLOYMENT = "vertical_scale_deployment"
     VERTICAL_SCALE_STATEFULSET = "vertical_scale_statefulset"
+    RESTART_DAEMONSET = "restart_daemonset"
+    RESTART_STATEFULSET = "restart_statefulset"
+    UPDATE_RESOURCE_LIMITS = "update_resource_limits"
+    UPDATE_CONFIGMAP = "update_configmap"
+    UPDATE_SECRET = "update_secret"
+    ROLLBACK_DEPLOYMENT = "rollback_deployment"
+    FIX_SERVICE_SELECTORS = "fix_service_selectors"
+    FORCE_DELETE_POD = "force_delete_pod"
+    UPDATE_CONTAINER_IMAGE = "update_container_image"
+    FIX_DNS_CONFIG = "fix_dns_config"
+    RESTART_CRONJOB = "restart_cronjob"
+    RESTART_JOB = "restart_job"
+    TAINT_NODE = "taint_node"
 
 
 class MetricPoint(BaseKubeWiseModel):
@@ -124,7 +137,7 @@ class RemediationAction(BaseKubeWiseModel):
         ...,
         description="Type of action to perform (e.g. restart_pod, scale_deployment)",
     )
-    parameters: Dict[str, Union[str, int, float, bool, List[str]]] = Field(
+    parameters: Dict[str, Union[str, int, float, bool, List[str], Dict[str, Any]]] = Field(
         default_factory=dict,
         description="Parameters required for the action (e.g. name, namespace)",
     )
@@ -192,7 +205,7 @@ class ExecutedActionRecord(BaseKubeWiseModel):
         ..., description="ID of the original action in the remediation plan"
     )
     action_type: ActionType = Field(..., description="Type of action performed")
-    parameters: Dict[str, Union[str, int, float, bool, List[str]]] = Field(
+    parameters: Dict[str, Union[str, int, float, bool, List[str], Dict[str, Any]]] = Field(
         default_factory=dict, description="Parameters used for the action"
     )
     entity_type: str = Field(..., description="Type of entity this action applied to")
@@ -393,7 +406,7 @@ class AnomalyRecord(BaseKubeWiseModel):
     remediated: bool = Field(
         default=False, description="Whether remediation has been attempted"
     )
-    remediation_plan_id: Optional[PyObjectId] = Field(
+    remediation_plan_id: Optional[str] = Field(
         None, description="ID of the remediation plan"
     )
     remediation_status: str = Field(
@@ -415,7 +428,7 @@ class AnomalyRecord(BaseKubeWiseModel):
     is_recurring: bool = Field(
         default=False, description="Whether this is a recurring issue"
     )
-    similar_anomaly_ids: List[PyObjectId] = Field(
+    similar_anomaly_ids: List[str] = Field(
         default_factory=list, description="IDs of similar anomalies detected previously"
     )
     remediation_attempt_count: int = Field(
@@ -450,6 +463,20 @@ class AnomalyRecord(BaseKubeWiseModel):
     creator: str = Field(
         "system", description="Who or what created this anomaly record"
     )
+
+    @field_validator("remediation_plan_id", mode="before")
+    def validate_remediation_plan_id(cls, v):
+        """Convert ObjectId to string if needed."""
+        if isinstance(v, ObjectId):
+            return str(v)
+        return v
+        
+    @field_validator("similar_anomaly_ids", mode="before")
+    def validate_similar_anomaly_ids(cls, v):
+        """Convert any ObjectId elements to strings."""
+        if isinstance(v, list):
+            return [str(item) if isinstance(item, ObjectId) else item for item in v]
+        return v
 
     model_config = ConfigDict(
         populate_by_name=True,

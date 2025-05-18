@@ -15,9 +15,12 @@ from typing import (
 import motor.motor_asyncio
 from bson import ObjectId
 from kubernetes_asyncio import client
-from loguru import logger
+from kubewise.logging import get_logger
 from pydantic import ValidationError
 from pydantic_ai import Agent
+
+# Initialize logger with component name
+logger = get_logger("remediation.engine")
 
 from kubewise.collector.k8s_events import load_k8s_config
 from kubewise.config import settings
@@ -34,6 +37,8 @@ from kubewise.remediation.planner import (
     PlannerDependencies,
     generate_remediation_plan,
     load_static_plan,
+    get_pod_controller,
+    find_matching_daemonset,
 )
 
 # Type definitions
@@ -67,7 +72,8 @@ def register_action(
             logger.warning(
                 f"Action type '{action_type}' is already registered. Overwriting."
             )
-        logger.debug(f"Registering action handler for '{action_type}'")
+        # Use a standardized message for consistent logging
+        logger.debug(f"Registered handler: {action_type}")
         ACTION_REGISTRY[action_type] = func
         return func
 
@@ -284,6 +290,299 @@ async def restart_deployment_action(
         return False, msg
 
 
+@register_action("restart_daemonset")
+async def restart_daemonset_action(
+    api_client: client.ApiClient, params: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Restart a Kubernetes DaemonSet by adding a restart annotation.
+    Args:
+        api_client: An initialized Kubernetes ApiClient.
+        params: Dictionary containing 'name' and optionally 'namespace'.
+    Returns:
+        Tuple (success: bool, message: str).
+    """
+    apps_v1_api = client.AppsV1Api(api_client)
+    core_v1_api = client.CoreV1Api(api_client)
+    name = params.get("name")
+    namespace = params.get("namespace", "default")
+    pod_name = params.get("pod_name")  # Optional pod name if this is called for a pod
+
+    if not name:
+        return False, "Missing 'name' parameter for restart_daemonset"
+    
+    # Initialize original_name to keep track of what was passed in
+    original_name = name
+    
+    # Handle case when a DaemonSet pod name with node suffix is passed instead of the DaemonSet name
+    # Example: ama-metrics-node-fvh6v should look for ama-metrics
+    if "-node-" in name:
+        # Extract the base name (assuming format: daemonset-name-node-suffix)
+        parts = name.split("-node-")
+        if len(parts) >= 1:
+            name = parts[0]
+            logger.info(f"Extracted potential DaemonSet name '{name}' from pod name '{original_name}'")
+
+    # Try to restart the DaemonSet with the name we have
+    try:
+        # First attempt to restart the DaemonSet using the extracted name
+        patch_body = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kubewise.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                        }
+                    }
+                }
+            }
+        }
+        logger.info(f"Restarting DaemonSet: {namespace}/{name}")
+        await apps_v1_api.patch_namespaced_daemon_set(
+            name=name, namespace=namespace, body=patch_body
+        )
+        msg = f"Successfully restarted daemonset '{namespace}/{name}'."
+        logger.info(msg)
+        return True, msg
+    except client.ApiException as e:
+        # If we get a 404 error, let's try to find the actual DaemonSet
+        if e.status == 404:
+            logger.warning(f"DaemonSet '{namespace}/{name}' not found. Attempting to discover the actual DaemonSet name.")
+            
+            # Use our advanced controller discovery function first
+            pod_name_to_check = pod_name if pod_name else original_name
+            
+            # Option 1: Try to get the controller directly using owner references
+            controller_kind, controller_name = await get_pod_controller(api_client, pod_name_to_check, namespace)
+            
+            if controller_kind == "DaemonSet" and controller_name:
+                # Found the DaemonSet through owner references, restart it
+                try:
+                    patch_body = {
+                        "spec": {
+                            "template": {
+                                "metadata": {
+                                    "annotations": {
+                                        "kubewise.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    logger.info(f"Restarting DaemonSet: {namespace}/{controller_name}")
+                    await apps_v1_api.patch_namespaced_daemon_set(
+                        name=controller_name, namespace=namespace, body=patch_body
+                    )
+                    msg = f"Successfully restarted daemonset '{namespace}/{controller_name}' (discovered through owner references)."
+                    logger.info(msg)
+                    return True, msg
+                except client.ApiException as e2:
+                    msg = (
+                        f"Failed to restart discovered daemonset '{namespace}/{controller_name}': "
+                        f"{e2.status} - {e2.reason} - {e2.body}"
+                    )
+                    logger.error(msg)
+                    return False, msg
+            
+            # Option 2: If owner reference approach didn't find a DaemonSet, try pattern matching
+            matching_daemonset = await find_matching_daemonset(api_client, namespace, pod_name_to_check)
+            
+            if matching_daemonset:
+                try:
+                    patch_body = {
+                        "spec": {
+                            "template": {
+                                "metadata": {
+                                    "annotations": {
+                                        "kubewise.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    logger.info(f"Restarting DaemonSet: {namespace}/{matching_daemonset}")
+                    await apps_v1_api.patch_namespaced_daemon_set(
+                        name=matching_daemonset, namespace=namespace, body=patch_body
+                    )
+                    msg = f"Successfully restarted daemonset '{namespace}/{matching_daemonset}' (found through pattern matching)."
+                    logger.info(msg)
+                    return True, msg
+                except client.ApiException as e3:
+                    msg = (
+                        f"Failed to restart matched daemonset '{namespace}/{matching_daemonset}': "
+                        f"{e3.status} - {e3.reason} - {e3.body}"
+                    )
+                    logger.error(msg)
+                    return False, msg
+            
+            # Option 3: Fall back to the original discovery method if both new methods fail
+            try:
+                # Check if the original name is a pod
+                try:
+                    pod = await core_v1_api.read_namespaced_pod(name=pod_name_to_check, namespace=namespace)
+                    
+                    # Check if the pod has owner references
+                    if pod.metadata.owner_references:
+                        for owner_ref in pod.metadata.owner_references:
+                            # If the owner is a DaemonSet, use that name
+                            if owner_ref.kind == "DaemonSet":
+                                actual_ds_name = owner_ref.name
+                                logger.info(f"Discovered actual DaemonSet name '{actual_ds_name}' from pod '{pod_name_to_check}'")
+                                
+                                # Now restart the actual DaemonSet
+                                try:
+                                    patch_body = {
+                                        "spec": {
+                                            "template": {
+                                                "metadata": {
+                                                    "annotations": {
+                                                        "kubewise.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    logger.info(f"Restarting actual daemonset '{namespace}/{actual_ds_name}'...")
+                                    await apps_v1_api.patch_namespaced_daemon_set(
+                                        name=actual_ds_name, namespace=namespace, body=patch_body
+                                    )
+                                    msg = f"Successfully restarted daemonset '{namespace}/{actual_ds_name}' (discovered from pod '{pod_name_to_check}')."
+                                    logger.info(msg)
+                                    return True, msg
+                                except client.ApiException as e2:
+                                    msg = (
+                                        f"Failed to restart discovered daemonset '{namespace}/{actual_ds_name}': "
+                                        f"{e2.status} - {e2.reason} - {e2.body}"
+                                    )
+                                    logger.error(msg)
+                                    return False, msg
+                
+                    # If we get here, the pod exists but doesn't have a DaemonSet owner
+                    logger.warning(f"Pod '{namespace}/{pod_name_to_check}' exists but is not owned by a DaemonSet")
+                    
+                    # Try to list all DaemonSets in the namespace as a last resort
+                    try:
+                        daemonsets = await apps_v1_api.list_namespaced_daemon_set(namespace=namespace)
+                        if daemonsets.items:
+                            # Look for a DaemonSet that might match our pod name pattern
+                            for ds in daemonsets.items:
+                                ds_name = ds.metadata.name
+                                # Check if DS name is in pod name
+                                if ds_name in pod_name_to_check:
+                                    logger.info(f"Found potential matching DaemonSet '{ds_name}' for pod '{pod_name_to_check}'")
+                                    # Try to restart this DaemonSet
+                                    try:
+                                        patch_body = {
+                                            "spec": {
+                                                "template": {
+                                                    "metadata": {
+                                                        "annotations": {
+                                                            "kubewise.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        logger.info(f"Restarting potential matching daemonset '{namespace}/{ds_name}'...")
+                                        await apps_v1_api.patch_namespaced_daemon_set(
+                                            name=ds_name, namespace=namespace, body=patch_body
+                                        )
+                                        msg = f"Successfully restarted daemonset '{namespace}/{ds_name}' (name matched from pod pattern)."
+                                        logger.info(msg)
+                                        return True, msg
+                                    except client.ApiException as e3:
+                                        logger.warning(f"Failed to restart potential matching daemonset '{namespace}/{ds_name}': {e3.status} - {e3.reason}")
+                            
+                            # If we haven't returned yet, we couldn't find a match
+                            logger.warning(f"Found {len(daemonsets.items)} daemonsets in namespace '{namespace}' but none matched the pod pattern")
+                            daemonset_names = [ds.metadata.name for ds in daemonsets.items]
+                            return False, f"Failed to find matching DaemonSet for '{original_name}'. Available DaemonSets: {', '.join(daemonset_names)}"
+                        else:
+                            return False, f"No DaemonSets found in namespace '{namespace}'"
+                    except client.ApiException as e4:
+                        return False, f"Failed to list DaemonSets in namespace '{namespace}': {e4.status} - {e4.reason}"
+                
+                except client.ApiException as pod_error:
+                    # The original name is not a pod either, return the original error
+                    logger.warning(f"Neither DaemonSet '{name}' nor Pod '{pod_name_to_check}' exist in namespace '{namespace}'")
+                    pass
+            
+            except Exception as discovery_error:
+                logger.error(f"Error while trying to discover DaemonSet: {discovery_error}")
+                pass
+            
+            # If all discovery attempts fail, return the original error
+            msg = (
+                f"Failed to restart daemonset '{namespace}/{name}': "
+                f"{e.status} - {e.reason} - {e.body}"
+            )
+            logger.error(msg)
+            return False, msg
+        else:
+            # For other errors, just return them
+            msg = (
+                f"Failed to restart daemonset '{namespace}/{name}': "
+                f"{e.status} - {e.reason} - {e.body}"
+            )
+            logger.error(msg)
+            return False, msg
+    except Exception as e:
+        msg = f"Unexpected error restarting daemonset '{namespace}/{name}': {e}"
+        logger.exception(msg)
+        return False, msg
+
+
+@register_action("restart_statefulset")
+async def restart_statefulset_action(
+    api_client: client.ApiClient, params: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Restart a Kubernetes StatefulSet by adding a restart annotation.
+    Args:
+        api_client: An initialized Kubernetes ApiClient.
+        params: Dictionary containing 'name' and optionally 'namespace'.
+    Returns:
+        Tuple (success: bool, message: str).
+    """
+    apps_v1_api = client.AppsV1Api(api_client)
+    name = params.get("name")
+    namespace = params.get("namespace", "default")
+
+    if not name:
+        return False, "Missing 'name' parameter for restart_statefulset"
+
+    patch_body = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubewise.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                    }
+                }
+            }
+        }
+    }
+    try:
+        logger.info(f"Restarting statefulset '{namespace}/{name}'...")
+        await apps_v1_api.patch_namespaced_stateful_set(
+            name=name, namespace=namespace, body=patch_body
+        )
+        msg = f"Successfully restarted statefulset '{namespace}/{name}'."
+        logger.info(msg)
+        return True, msg
+    except client.ApiException as e:
+        msg = (
+            f"Failed to restart statefulset '{namespace}/{name}': "
+            f"{e.status} - {e.reason} - {e.body}"
+        )
+        logger.error(msg)
+        return False, msg
+    except Exception as e:
+        msg = f"Unexpected error restarting statefulset '{namespace}/{name}': {e}"
+        logger.exception(msg)
+        return False, msg
+
+
 @register_action("drain_node")
 async def drain_node_action(
     api_client: client.ApiClient, params: Dict[str, Any]
@@ -487,72 +786,73 @@ async def taint_node_action(
     api_client: client.ApiClient, params: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """
-    Apply a taint to a node.
+    Add a taint to a Kubernetes node.
 
     Args:
-        api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing:
-            - 'name': Node name
-            - 'key': Taint key
-            - 'value': Taint value
-            - 'effect': One of: NoSchedule, PreferNoSchedule, NoExecute
+        api_client: Kubernetes API client
+        params: Dictionary with the following keys:
+            - name: Name of the node
+            - key: Taint key
+            - value: Taint value
+            - effect: Taint effect (NoSchedule, PreferNoSchedule, NoExecute)
 
     Returns:
-        Tuple (success: bool, message: str).
+        Tuple of (success, message)
     """
-    core_v1_api = client.CoreV1Api(api_client)
     name = params.get("name")
     key = params.get("key")
-    value = params.get("value")
-    effect = params.get("effect")
+    value = params.get("value", "")
+    effect = params.get("effect", "NoSchedule")
 
-    if not name or not key or not effect:
-        return False, "Missing 'name', 'key', or 'effect' parameter for taint_node"
+    if not name:
+        return False, "Node name is required"
+
+    if not key:
+        return False, "Taint key is required"
 
     if effect not in ["NoSchedule", "PreferNoSchedule", "NoExecute"]:
-        return (
-            False,
-            f"Invalid taint effect: {effect}. Must be one of: NoSchedule, PreferNoSchedule, NoExecute",
-        )
+        return False, f"Invalid taint effect: {effect}. Must be one of: NoSchedule, PreferNoSchedule, NoExecute"
 
     try:
-        # Get current node
-        node = await core_v1_api.read_node(name=name)
-
-        # Prepare the taint object
-        taint = {"key": key, "effect": effect}
-        if value is not None:
-            taint["value"] = value
-
-        # Add the new taint to the existing taints, if any
-        new_taints = node.spec.taints or []
-        # Avoid adding duplicate taints
-        if not any(
-            t.key == taint["key"] and t.effect == taint["effect"] for t in new_taints
-        ):
-            new_taints.append(client.V1Taint(**taint))
-            patch_body = {"spec": {"taints": new_taints}}
-
-            # Apply the patch
-            logger.info(f"Applying taint {taint} to node '{name}'")
-            await core_v1_api.patch_node(name=name, body=patch_body)
-
-            msg = f"Successfully applied taint {taint} to node '{name}'"
-            logger.info(msg)
-            return True, msg
+        core_v1_api = client.CoreV1Api(api_client)
+        
+        # Get the current node
+        try:
+            node = await core_v1_api.read_node(name=name)
+        except client.ApiException as e:
+            return False, f"Failed to get node {name}: {e.reason}"
+        
+        # Create the taint
+        new_taint = client.V1Taint(
+            key=key,
+            value=value,
+            effect=effect
+        )
+        
+        # Check if the taint already exists
+        if node.spec.taints:
+            for taint in node.spec.taints:
+                if taint.key == key and taint.effect == effect:
+                    return True, f"Taint {key}={value}:{effect} already exists on node {name}"
+            
+            # Add the new taint to the existing taints
+            node.spec.taints.append(new_taint)
         else:
-            msg = f"Taint {taint} already exists on node '{name}'"
-            logger.warning(msg)
-            return True, msg # Consider it a success if the taint is already there
-
-    except client.ApiException as e:
-        msg = f"Failed to taint node '{name}': {e.status} - {e.reason} - {e.body}"
-        logger.error(msg)
-        return False, msg
+            # Initialize taints list with the new taint
+            node.spec.taints = [new_taint]
+        
+        # Update the node
+        try:
+            await core_v1_api.patch_node(
+                name=name,
+                body={"spec": {"taints": node.spec.taints}}
+            )
+            return True, f"Added taint {key}={value}:{effect} to node {name}"
+        except client.ApiException as e:
+            return False, f"Failed to add taint to node {name}: {e.reason}"
+        
     except Exception as e:
-        msg = f"Unexpected error tainting node '{name}': {e}"
-        logger.exception(msg)
-        return False, msg
+        return False, f"Error adding taint to node: {str(e)}"
 
 
 @register_action("evict_pod")
@@ -579,21 +879,24 @@ async def evict_pod_action(
 
     try:
         # Create eviction object
-        eviction_body = {
-            "apiVersion": "policy/v1",
-            "kind": "Eviction",
-            "metadata": {
-                "name": name,
-                "namespace": namespace,
-            },
-            "deleteOptions": {"gracePeriodSeconds": grace_period},
-        }
+        eviction_body = client.V1Eviction(
+            api_version="policy/v1",
+            kind="Eviction",
+            metadata=client.V1ObjectMeta(
+                name=name,
+                namespace=namespace
+            ),
+            delete_options=client.V1DeleteOptions(
+                grace_period_seconds=grace_period
+            )
+        )
 
         logger.info(f"Evicting pod '{namespace}/{name}' with grace period {grace_period}s...")
-        # We use the generic API since evictions are special
-        await api_client.post(
-            f"/api/v1/namespaces/{namespace}/pods/{name}/eviction",
-            body=eviction_body,
+        # Use the CoreV1Api create_namespaced_pod_eviction method
+        await core_v1_api.create_namespaced_pod_eviction(
+            name=name,
+            namespace=namespace,
+            body=eviction_body
         )
         msg = f"Successfully initiated eviction for pod '{namespace}/{name}'."
         logger.info(msg)
@@ -605,10 +908,10 @@ async def evict_pod_action(
             msg = f"Pod '{namespace}/{name}' not found. Assuming already evicted."
             logger.warning(msg)
             return True, msg  # Treat as success if already gone
-        elif e.status == 429: # Too Many Requests (throttled)
-             msg = f"Eviction for pod '{namespace}/{name}' throttled (Too Many Requests)."
-             logger.warning(msg)
-             return False, msg # Indicate failure, caller might retry
+        elif e.status == 429:  # Too Many Requests (throttled)
+            msg = f"Eviction for pod '{namespace}/{name}' throttled (Too Many Requests)."
+            logger.warning(msg)
+            return False, msg  # Indicate failure, caller might retry
         else:
             msg = (
                 f"Failed to evict pod '{namespace}/{name}': "
@@ -631,7 +934,8 @@ async def vertical_scale_deployment_action(
 
     Args:
         api_client: An initialized Kubernetes ApiClient.
-        params: Dictionary containing 'name', optionally 'namespace', and 'resources'.
+        params: Dictionary containing 'name', optionally 'namespace', and 'resources'
+                OR 'resource' (e.g., 'cpu', 'memory') and 'value' (e.g., '500m', '1Gi').
                 'resources' should be a dictionary like {'cpu': '500m', 'memory': '1Gi'}.
 
     Returns:
@@ -640,10 +944,30 @@ async def vertical_scale_deployment_action(
     apps_v1_api = client.AppsV1Api(api_client)
     name = params.get("name")
     namespace = params.get("namespace", "default")
-    resources = params.get("resources") # Expected format: {'cpu': '...', 'memory': '...'}
+    resources = params.get("resources")
 
-    if not name or not resources or not isinstance(resources, dict):
-        return False, "Missing 'name' or invalid 'resources' parameter for vertical_scale_deployment. 'resources' must be a dictionary."
+    if not name:
+        return False, "Missing 'name' parameter for vertical_scale_deployment."
+
+    # If 'resources' is not a dict, try to construct it from 'resource' and 'value'
+    if not isinstance(resources, dict):
+        resource_type = params.get("resource")
+        resource_value = params.get("value")
+        if resource_type and resource_value:
+            resources = {str(resource_type): str(resource_value)}
+        else:
+            # 'resources' is not a dict and cannot be constructed
+            return False, "Invalid 'resources' parameter for vertical_scale_deployment. 'resources' must be a dictionary, or 'resource' and 'value' must be provided."
+
+    if not resources: # Check if resources dict is empty after potential construction
+        return False, "Missing 'resources' parameter or 'resource'/'value' for vertical_scale_deployment. 'resources' dictionary cannot be empty."
+    
+    # Validate that all keys and values in resources are strings, as expected by K8s API
+    # This also implicitly checks that resources is a dict after the above logic.
+    if not isinstance(resources, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in resources.items()
+    ):
+        return False, "Invalid 'resources' structure. Must be a dictionary with string keys and string values (e.g., {'cpu': '500m'})."
 
     try:
         # Get the current deployment
@@ -892,6 +1216,419 @@ async def manual_intervention_action(
     return True, msg
 
 
+@register_action("update_resource_limits")
+async def update_resource_limits_action(
+    api_client: client.ApiClient, params: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Update resource limits and requests for a container in a Kubernetes resource.
+
+    Args:
+        api_client: Kubernetes API client
+        params: Dictionary with the following keys:
+            - name: Name of the resource
+            - namespace: Namespace of the resource
+            - kind: Kind of resource (Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet)
+            - container: Name of the container to update
+            - limits: Dictionary with resource limits (cpu, memory)
+            - requests: Dictionary with resource requests (cpu, memory)
+            - update_parent: Optional boolean, if True and resource is a ReplicaSet, 
+                           will update parent Deployment if it exists (default: False)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    name = params.get("name")
+    namespace = params.get("namespace", "default")
+    resource_kind = params.get("kind", "Pod").lower()
+    container_name = params.get("container")
+    limits = params.get("limits", {})
+    requests = params.get("requests", {})
+    update_parent = params.get("update_parent", False)
+
+    if not name:
+        return False, "Resource name is required"
+
+    if not container_name:
+        return False, "Container name is required"
+
+    if not limits and not requests:
+        return False, "At least one of limits or requests must be specified"
+
+    try:
+        # Handle different resource kinds
+        if resource_kind == "pod":
+            # For Pods, we need to check owner references first
+            core_v1_api = client.CoreV1Api(api_client)
+            apps_v1_api = client.AppsV1Api(api_client)
+            
+            # Get the current Pod
+            try:
+                pod = await core_v1_api.read_namespaced_pod(name=name, namespace=namespace)
+            except client.ApiException as e:
+                return False, f"Failed to get Pod {namespace}/{name}: {e.reason}"
+            
+            # Log available containers for debugging
+            available_containers = []
+            for container in pod.spec.containers:
+                available_containers.append(container.name)
+            
+            if not available_containers:
+                return False, f"No containers found in Pod {namespace}/{name}"
+            
+            logger.info(f"Available containers in Pod {namespace}/{name}: {', '.join(available_containers)}")
+            
+            # Auto-select container for Azure Monitor pods if needed
+            selected_container = container_name
+            if container_name not in available_containers:
+                if name and ("ama-metrics" in name.lower() or "prometheus" in name.lower()):
+                    prometheus_collector = next((c for c in available_containers if "prometheus-collector" in c.lower()), None)
+                    selected_container = prometheus_collector if prometheus_collector else available_containers[0]
+                    logger.warning(f"Container {container_name} not found in Pod {namespace}/{name}. Automatically using '{selected_container}' instead.")
+                else:
+                    closest_match = min(available_containers, key=lambda x: abs(len(x) - len(container_name)))
+                    return False, f"Container {container_name} not found in Pod {namespace}/{name}. Available containers: {', '.join(available_containers)}. Did you mean '{closest_match}'?"
+
+            # Check for owner references and follow the chain to top-level controller
+            current_resource = pod
+            top_level_controller = None
+            owner_chain = []
+
+            while current_resource.metadata.owner_references and len(current_resource.metadata.owner_references) > 0:
+                owner = current_resource.metadata.owner_references[0]
+                owner_chain.append(f"{owner.kind}/{owner.name}")
+                
+                try:
+                    if owner.kind.lower() == "replicaset":
+                        current_resource = await apps_v1_api.read_namespaced_replica_set(name=owner.name, namespace=namespace)
+                    elif owner.kind.lower() == "deployment":
+                        top_level_controller = await apps_v1_api.read_namespaced_deployment(name=owner.name, namespace=namespace)
+                        break
+                    elif owner.kind.lower() == "daemonset":
+                        top_level_controller = await apps_v1_api.read_namespaced_daemon_set(name=owner.name, namespace=namespace)
+                        break
+                    elif owner.kind.lower() == "statefulset":
+                        top_level_controller = await apps_v1_api.read_namespaced_stateful_set(name=owner.name, namespace=namespace)
+                        break
+                    else:
+                        # Unknown controller type
+                        return False, f"Pod {namespace}/{name} is managed by unsupported controller type {owner.kind}"
+                except client.ApiException as e:
+                    return False, f"Failed to get owner {owner.kind}/{owner.name}: {e.reason}"
+
+            if top_level_controller:
+                logger.info(f"Pod {namespace}/{name} is managed by {' -> '.join(owner_chain)}. Updating top-level controller.")
+                
+                # Update the container in the controller template
+                container_updated = False
+                for container in top_level_controller.spec.template.spec.containers:
+                    if container.name == selected_container:
+                        if not container.resources:
+                            container.resources = client.V1ResourceRequirements()
+                        if limits:
+                            container.resources.limits = limits
+                        if requests:
+                            container.resources.requests = requests
+                        container_updated = True
+                        break
+
+                if not container_updated:
+                    return False, f"Container {selected_container} not found in controller template"
+
+                # Update the controller
+                try:
+                    if isinstance(top_level_controller, client.V1Deployment):
+                        await apps_v1_api.patch_namespaced_deployment(
+                            name=top_level_controller.metadata.name,
+                            namespace=namespace,
+                            body=top_level_controller
+                        )
+                    elif isinstance(top_level_controller, client.V1DaemonSet):
+                        await apps_v1_api.patch_namespaced_daemon_set(
+                            name=top_level_controller.metadata.name,
+                            namespace=namespace,
+                            body=top_level_controller
+                        )
+                    elif isinstance(top_level_controller, client.V1StatefulSet):
+                        await apps_v1_api.patch_namespaced_stateful_set(
+                            name=top_level_controller.metadata.name,
+                            namespace=namespace,
+                            body=top_level_controller
+                        )
+                    
+                    return True, f"Updated resource limits for container {selected_container} in {top_level_controller.kind}/{top_level_controller.metadata.name}"
+                except client.ApiException as e:
+                    return False, f"Failed to update {top_level_controller.kind}/{top_level_controller.metadata.name}: {e.reason}"
+            
+            # For standalone pods, proceed with delete and recreate
+            logger.info(f"Pod {namespace}/{name} is a standalone pod. Proceeding with delete and recreate.")
+            
+            # Update the container resources
+            container_updated = False
+            for container in pod.spec.containers:
+                if container.name == selected_container:
+                    if not container.resources:
+                        container.resources = client.V1ResourceRequirements()
+                    if limits:
+                        container.resources.limits = limits
+                    if requests:
+                        container.resources.requests = requests
+                    container_updated = True
+                    break
+
+            if not container_updated:
+                return False, f"Container {selected_container} not found in pod spec"
+
+            # Delete and recreate the pod
+            try:
+                await core_v1_api.delete_namespaced_pod(name=name, namespace=namespace)
+            except client.ApiException as e:
+                return False, f"Failed to delete Pod {namespace}/{name}: {e.reason}"
+
+            try:
+                # Remove resourceVersion to avoid conflicts
+                pod.metadata.resource_version = None
+                await core_v1_api.create_namespaced_pod(namespace=namespace, body=pod)
+                return True, f"Updated resource limits for container {selected_container} in standalone Pod {namespace}/{name}"
+            except client.ApiException as e:
+                return False, f"Failed to recreate Pod {namespace}/{name}: {e.reason}"
+
+        elif resource_kind in ["deployment", "daemonset", "statefulset", "replicaset"]:
+            apps_v1_api = client.AppsV1Api(api_client)
+            
+            try:
+                # Get the current resource
+                if resource_kind == "deployment":
+                    resource = await apps_v1_api.read_namespaced_deployment(name=name, namespace=namespace)
+                elif resource_kind == "daemonset":
+                    resource = await apps_v1_api.read_namespaced_daemon_set(name=name, namespace=namespace)
+                elif resource_kind == "replicaset":
+                    resource = await apps_v1_api.read_namespaced_replica_set(name=name, namespace=namespace)
+                    
+                    # Check if we should update parent Deployment instead
+                    if update_parent and resource.metadata.owner_references:
+                        for owner_ref in resource.metadata.owner_references:
+                            if owner_ref.kind.lower() == "deployment":
+                                try:
+                                    deployment = await apps_v1_api.read_namespaced_deployment(
+                                        name=owner_ref.name, 
+                                        namespace=namespace
+                                    )
+                                    logger.info(f"Found parent Deployment {namespace}/{owner_ref.name} for ReplicaSet {namespace}/{name}")
+                                    resource = deployment
+                                    resource_kind = "deployment"
+                                    break
+                                except client.ApiException as e:
+                                    logger.warning(f"Failed to get parent Deployment {namespace}/{owner_ref.name}: {e.reason}")
+                                    # Continue with ReplicaSet update if can't get Deployment
+                else:  # statefulset
+                    resource = await apps_v1_api.read_namespaced_stateful_set(name=name, namespace=namespace)
+            except client.ApiException as e:
+                return False, f"Failed to get {resource_kind} {namespace}/{name}: {e.reason}"
+
+            # Log available containers
+            available_containers = [c.name for c in resource.spec.template.spec.containers]
+            if not available_containers:
+                return False, f"No containers found in {resource_kind} {namespace}/{name}"
+            
+            logger.info(f"Available containers in {resource_kind} {namespace}/{name}: {', '.join(available_containers)}")
+
+            # Auto-select container for Azure Monitor resources if needed
+            selected_container = container_name
+            if container_name not in available_containers:
+                if name and ("ama-metrics" in name.lower() or "prometheus" in name.lower()):
+                    prometheus_collector = next((c for c in available_containers if "prometheus-collector" in c.lower()), None)
+                    selected_container = prometheus_collector if prometheus_collector else available_containers[0]
+                    logger.warning(f"Container {container_name} not found in {resource_kind} {namespace}/{name}. Automatically using '{selected_container}' instead.")
+                else:
+                    closest_match = min(available_containers, key=lambda x: abs(len(x) - len(container_name)))
+                    return False, f"Container {container_name} not found in {resource_kind} {namespace}/{name}. Available containers: {', '.join(available_containers)}. Did you mean '{closest_match}'?"
+
+            # Update the container resources
+            container_updated = False
+            for container in resource.spec.template.spec.containers:
+                if container.name == selected_container:
+                    if not container.resources:
+                        container.resources = client.V1ResourceRequirements()
+                    if limits:
+                        container.resources.limits = limits
+                    if requests:
+                        container.resources.requests = requests
+                    container_updated = True
+                    break
+
+            if not container_updated:
+                return False, f"Container {selected_container} not found in {resource_kind} template"
+
+            # Update the resource
+            try:
+                if resource_kind == "deployment":
+                    await apps_v1_api.patch_namespaced_deployment(name=name, namespace=namespace, body=resource)
+                elif resource_kind == "daemonset":
+                    await apps_v1_api.patch_namespaced_daemon_set(name=name, namespace=namespace, body=resource)
+                elif resource_kind == "replicaset":
+                    await apps_v1_api.patch_namespaced_replica_set(name=name, namespace=namespace, body=resource)
+                else:  # statefulset
+                    await apps_v1_api.patch_namespaced_stateful_set(name=name, namespace=namespace, body=resource)
+                
+                return True, f"Updated resource limits for container {selected_container} in {resource_kind} {namespace}/{name}"
+            except client.ApiException as e:
+                return False, f"Failed to update {resource_kind} {namespace}/{name}: {e.reason}"
+
+        else:
+            return False, f"Unsupported resource kind: {resource_kind}"
+
+    except Exception as e:
+        return False, f"Unexpected error updating resource limits: {str(e)}"
+
+
+@register_action("restart_cronjob")
+async def restart_cronjob_action(
+    api_client: client.ApiClient, params: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Restart a CronJob by suspending and then resuming it.
+
+    Args:
+        api_client: Kubernetes API client
+        params: Dictionary with the following keys:
+            - name: Name of the CronJob
+            - namespace: Namespace of the CronJob
+
+    Returns:
+        Tuple of (success, message)
+    """
+    name = params.get("name")
+    namespace = params.get("namespace", "default")
+
+    if not name:
+        return False, "CronJob name is required"
+
+    try:
+        batch_v1_api = client.BatchV1Api(api_client)
+        
+        # Get the current CronJob
+        try:
+            cronjob = await batch_v1_api.read_namespaced_cron_job(name=name, namespace=namespace)
+        except client.ApiException as e:
+            return False, f"Failed to get CronJob {namespace}/{name}: {e.reason}"
+        
+        # First, suspend the CronJob
+        cronjob.spec.suspend = True
+        try:
+            await batch_v1_api.patch_namespaced_cron_job(
+                name=name, 
+                namespace=namespace, 
+                body=cronjob
+            )
+        except client.ApiException as e:
+            return False, f"Failed to suspend CronJob {namespace}/{name}: {e.reason}"
+        
+        # Wait briefly to ensure the suspension takes effect
+        await asyncio.sleep(2)
+        
+        # Then, resume the CronJob
+        cronjob.spec.suspend = False
+        try:
+            await batch_v1_api.patch_namespaced_cron_job(
+                name=name, 
+                namespace=namespace, 
+                body=cronjob
+            )
+            return True, f"Successfully restarted CronJob {namespace}/{name}"
+        except client.ApiException as e:
+            return False, f"Failed to resume CronJob {namespace}/{name}: {e.reason}"
+        
+    except Exception as e:
+        return False, f"Error restarting CronJob: {str(e)}"
+
+
+@register_action("restart_job")
+async def restart_job_action(
+    api_client: client.ApiClient, params: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Restart a Job by deleting it and recreating it.
+
+    Args:
+        api_client: Kubernetes API client
+        params: Dictionary with the following keys:
+            - name: Name of the Job
+            - namespace: Namespace of the Job
+
+    Returns:
+        Tuple of (success, message)
+    """
+    name = params.get("name")
+    namespace = params.get("namespace", "default")
+
+    if not name:
+        return False, "Job name is required"
+
+    try:
+        batch_v1_api = client.BatchV1Api(api_client)
+        
+        # Get the current Job
+        try:
+            job = await batch_v1_api.read_namespaced_job(name=name, namespace=namespace)
+        except client.ApiException as e:
+            return False, f"Failed to get Job {namespace}/{name}: {e.reason}"
+        
+        # Save the Job spec for recreation
+        job_spec = job.spec
+        
+        # Delete the existing Job
+        try:
+            await batch_v1_api.delete_namespaced_job(
+                name=name, 
+                namespace=namespace,
+                body=client.V1DeleteOptions(
+                    propagation_policy="Background"
+                )
+            )
+        except client.ApiException as e:
+            return False, f"Failed to delete Job {namespace}/{name}: {e.reason}"
+        
+        # Wait for the Job to be deleted
+        max_wait_time = 30  # Maximum wait time in seconds
+        wait_interval = 2   # Check interval in seconds
+        
+        for _ in range(max_wait_time // wait_interval):
+            try:
+                await batch_v1_api.read_namespaced_job(name=name, namespace=namespace)
+                # If we get here, the Job still exists, wait and try again
+                await asyncio.sleep(wait_interval)
+            except client.ApiException as e:
+                if e.status == 404:
+                    # Job is deleted, proceed to recreation
+                    break
+                else:
+                    return False, f"Error checking Job deletion status: {e.reason}"
+        else:
+            # If we exited the loop normally, the Job wasn't deleted in time
+            return False, f"Timed out waiting for Job {namespace}/{name} to be deleted"
+        
+        # Create a new Job with the same spec
+        new_job = client.V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=client.V1ObjectMeta(
+                name=name,
+                namespace=namespace
+            ),
+            spec=job_spec
+        )
+        
+        try:
+            await batch_v1_api.create_namespaced_job(namespace=namespace, body=new_job)
+            return True, f"Successfully restarted Job {namespace}/{name}"
+        except client.ApiException as e:
+            return False, f"Failed to recreate Job {namespace}/{name}: {e.reason}"
+        
+    except Exception as e:
+        return False, f"Error restarting Job: {str(e)}"
+
+
 async def execute_action_with_timeout(
     action: RemediationAction,
     api_client: client.ApiClient,
@@ -968,6 +1705,32 @@ async def execute_action_with_timeout(
         and action_type not in ["cordon_node", "uncordon_node", "drain_node"]
     ):
         params["name"] = name
+        
+        # Special handling for DaemonSet pods with node suffixes
+        if action_type == "restart_daemonset":
+            # First check if there's controller info already in the context
+            controller_kind = None
+            controller_name = None
+            if hasattr(action, 'context') and action.context:
+                discovered_controller = action.context.get('discovered_controller', {})
+                if discovered_controller.get('kind', '').lower() == 'daemonset':
+                    controller_kind = 'DaemonSet'
+                    controller_name = discovered_controller.get('name')
+                    if controller_name:
+                        logger.info(f"Using DaemonSet controller '{controller_name}' from action context")
+                        params["name"] = controller_name
+                        # Also preserve the original pod name for better discovery
+                        params["pod_name"] = name
+            
+            # If no controller info in context, store the original name as pod_name
+            # and let restart_daemonset_action handle the dynamic controller discovery
+            if not controller_name:
+                logger.info(f"No controller found in context for '{name}', will dynamically discover at runtime")
+                # Store the original entity name as pod_name for discovery
+                params["pod_name"] = name
+                
+                # We'll still keep the original name as a fallback
+                # The actual controller discovery will happen in restart_daemonset_action using get_pod_controller
 
     # Set start time for duration tracking
     start_time = time.monotonic()
@@ -1832,7 +2595,20 @@ async def main():
 
     # Connect to MongoDB
     try:
-        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(settings.mongo_uri)
+        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
+            settings.mongo_uri,
+            maxPoolSize=100,
+            minPoolSize=10,
+            maxIdleTimeMS=30000,
+            serverSelectionTimeoutMS=30000,  # Increased to 30 seconds
+            connectTimeoutMS=20000,          # Increased to 20 seconds
+            socketTimeoutMS=45000,           # Increased to 45 seconds
+            waitQueueTimeoutMS=20000,        # Increased to 20 seconds
+            retryWrites=True,
+            w="majority",
+            tls=True,                        # Use TLS for connection
+            tlsAllowInvalidCertificates=True # Temporarily allow invalid certificates
+        )
         db = mongo_client[settings.mongo_db_name]
         logger.info(f"Connected to MongoDB database: {settings.mongo_db_name}")
     except Exception as e:
