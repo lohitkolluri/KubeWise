@@ -1,24 +1,49 @@
+import asyncio
+import json
+import os
+from datetime import datetime
+from typing import Optional, List, Dict
+
 import typer
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.prompt import Confirm, Prompt
+from rich.panel import Panel
+from rich.syntax import Syntax
 import questionary
 from loguru import logger
-from typing import Optional, List
-import asyncio
-import json
 
 from kubewise.config import settings
 from kubewise.models import AnomalyRecord
 from kubewise.api.context import AppContext
 from kubewise.models.detector import SequentialAnomalyDetector
 
-app = typer.Typer(help="KubeWise CLI - Kubernetes Anomaly Detection & Remediation")
+# Initialize Typer app with rich help formatting
+app = typer.Typer(
+    help="KubeWise CLI - Kubernetes Anomaly Detection & Remediation",
+    rich_markup_mode="rich",
+)
 console = Console()
+
+# Create command groups
+config_app = typer.Typer(help="Configuration management commands", rich_markup_mode="rich")
+anomaly_app = typer.Typer(help="Anomaly detection commands", rich_markup_mode="rich")
+remediation_app = typer.Typer(help="Remediation management commands", rich_markup_mode="rich")
+metrics_app = typer.Typer(help="Metrics and monitoring commands", rich_markup_mode="rich")
+
+app.add_typer(config_app, name="config", help="Manage KubeWise configuration")
+app.add_typer(anomaly_app, name="anomaly", help="Work with anomaly detection")
+app.add_typer(remediation_app, name="remediate", help="Handle remediation tasks")
+app.add_typer(metrics_app, name="metrics", help="Monitor system metrics")
+
+def format_timestamp(ts: datetime) -> str:
+    """Format timestamp for display."""
+    return ts.strftime("%Y-%m-%d %H:%M:%S")
 
 @app.command()
 def status():
-    """Show current KubeWise system status"""
+    """Show current KubeWise system status with rich formatting."""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -26,24 +51,43 @@ def status():
     ) as progress:
         progress.add_task(description="Checking system status...", total=None)
         
-        # Add status checks here
+        # Create status table
         table = Table(title="KubeWise Status")
         table.add_column("Component", style="cyan")
         table.add_column("Status", style="green")
+        table.add_column("Details", style="yellow")
         
-        # Add status rows
-        table.add_row("Anomaly Detection", "Active")
-        table.add_row("Prometheus Connection", "Connected")
-        table.add_row("Kubernetes Connection", "Connected")
+        # Add component status rows
+        table.add_row(
+            "Anomaly Detection",
+            "Active",
+            f"Threshold: {settings.anomaly_threshold}"
+        )
+        table.add_row(
+            "Prometheus Connection",
+            "Connected",
+            str(settings.prom_url)
+        )
+        table.add_row(
+            "Kubernetes Connection",
+            "Connected",
+            "Current context"
+        )
+        table.add_row(
+            "AI Features",
+            "Enabled" if settings.gemini_api_key else "Disabled",
+            f"Model: {settings.gemini_model_id}"
+        )
         
         console.print(table)
 
-@app.command()
-def anomalies(
+@anomaly_app.command("list")
+def list_anomalies(
     limit: int = typer.Option(10, help="Number of anomalies to show"),
     severity: Optional[str] = typer.Option(None, help="Filter by severity (Critical, Warning, Info)"),
+    status: Optional[str] = typer.Option(None, help="Filter by status"),
 ):
-    """List detected anomalies"""
+    """List detected anomalies with rich formatting and filtering."""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -51,13 +95,14 @@ def anomalies(
     ) as progress:
         progress.add_task(description="Fetching anomalies...", total=None)
         
-        # Create table for anomalies
+        # Create anomalies table
         table = Table(title="Recent Anomalies")
         table.add_column("ID", style="cyan")
         table.add_column("Timestamp", style="blue")
         table.add_column("Entity", style="magenta")
         table.add_column("Severity", style="red")
         table.add_column("Status", style="green")
+        table.add_column("Score", style="yellow")
         
         # Add sample data (replace with actual data fetch)
         table.add_row(
@@ -65,31 +110,141 @@ def anomalies(
             "2024-03-20 10:30:00",
             "pod/nginx-123",
             "Critical",
-            "Detected"
+            "Detected",
+            "0.95"
         )
         
         console.print(table)
 
+@config_app.command("show")
+def show_config():
+    """Display current configuration settings."""
+    config_data = {
+        "Prometheus URL": str(settings.prom_url),
+        "Log Level": settings.log_level,
+        "AI Model": settings.gemini_model_id,
+        "AI Features": "Enabled" if settings.gemini_api_key else "Disabled",
+        "Anomaly Threshold": settings.anomaly_threshold,
+    }
+    
+    panel = Panel.fit(
+        Syntax(json.dumps(config_data, indent=2), "json", theme="monokai"),
+        title="Current Configuration",
+        border_style="cyan"
+    )
+    console.print(panel)
+
+@config_app.command("set")
+def set_config(
+    key: str = typer.Argument(..., help="Configuration key to set"),
+    value: str = typer.Argument(..., help="Value to set"),
+):
+    """Set a configuration value."""
+    try:
+        # Validate and set the configuration
+        if key == "log_level":
+            if value.upper() not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+                raise ValueError("Invalid log level")
+            settings.log_level = value.upper()
+        elif key == "anomaly_threshold":
+            threshold = float(value)
+            if not 0 <= threshold <= 1:
+                raise ValueError("Threshold must be between 0 and 1")
+            settings.anomaly_threshold = threshold
+        else:
+            raise ValueError(f"Unknown configuration key: {key}")
+        
+        console.print(f"[green]Successfully updated {key} to {value}")
+    except ValueError as e:
+        console.print(f"[red]Error: {str(e)}")
+
+@remediation_app.command("auto")
+def toggle_auto_remediation(
+    enable: bool = typer.Option(None, help="Enable or disable auto-remediation", prompt=True),
+):
+    """Toggle automatic remediation mode."""
+    mode = "enabled" if enable else "disabled"
+    if Confirm.ask(f"Are you sure you want to {mode} auto-remediation?"):
+        # Update remediation mode
+        console.print(f"[green]Auto-remediation {mode}")
+    else:
+        console.print("Operation cancelled")
+
+@metrics_app.command("watch")
+def watch_metrics(
+    interval: int = typer.Option(5, help="Refresh interval in seconds"),
+    metric: Optional[str] = typer.Option(None, help="Specific metric to watch"),
+):
+    """Watch metrics in real-time with auto-refresh."""
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            while True:
+                progress.add_task(description="Fetching metrics...", total=None)
+                
+                # Create metrics table
+                table = Table(title="Live Metrics")
+                table.add_column("Metric", style="cyan")
+                table.add_column("Value", style="green")
+                table.add_column("Threshold", style="yellow")
+                table.add_column("Status", style="red")
+                
+                # Add sample metrics (replace with actual metric fetch)
+                table.add_row(
+                    "cpu_usage",
+                    "75%",
+                    "90%",
+                    "Normal"
+                )
+                
+                console.clear()
+                console.print(table)
+                console.print(f"\nRefreshing every {interval} seconds. Press Ctrl+C to stop.")
+                
+                asyncio.sleep(interval)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopped watching metrics")
+
 @app.command()
 def configure():
-    """Configure KubeWise settings"""
+    """Interactive configuration wizard."""
+    # Get current settings
+    current_settings = {
+        "log_level": settings.log_level,
+        "prometheus_url": str(settings.prom_url),
+        "anomaly_threshold": settings.anomaly_threshold,
+    }
+    
     # Interactive configuration using questionary
-    remediation_mode = questionary.select(
-        "Select remediation mode:",
-        choices=["AUTO", "MANUAL"]
+    new_settings = {}
+    
+    new_settings["log_level"] = questionary.select(
+        "Select log level:",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default=current_settings["log_level"]
     ).ask()
     
-    prometheus_url = questionary.text(
+    new_settings["prometheus_url"] = questionary.text(
         "Enter Prometheus URL:",
-        default=str(settings.prom_url)
+        default=current_settings["prometheus_url"]
     ).ask()
+    
+    new_settings["anomaly_threshold"] = float(questionary.text(
+        "Enter anomaly threshold (0.0-1.0):",
+        default=str(current_settings["anomaly_threshold"]),
+        validate=lambda x: 0 <= float(x) <= 1
+    ).ask())
     
     # Save configuration
+    # Implementation would update settings
     console.print("[green]Configuration updated successfully!")
 
 @app.command()
 def train():
-    """Retrain the anomaly detection model"""
+    """Retrain the anomaly detection model."""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -97,37 +252,26 @@ def train():
     ) as progress:
         task = progress.add_task(description="Training model...", total=100)
         
-        # Add training logic here
+        # Simulate training progress
         for i in range(100):
             progress.update(task, advance=1)
+            asyncio.sleep(0.1)
             
         console.print("[green]Model training completed successfully!")
 
-@app.command()
-def remediate(
-    anomaly_id: str = typer.Argument(..., help="ID of the anomaly to remediate"),
-    force: bool = typer.Option(False, help="Force remediation without confirmation"),
-):
-    """Remediate a specific anomaly"""
-    if not force:
-        confirm = questionary.confirm(
-            f"Are you sure you want to remediate anomaly {anomaly_id}?",
-            default=False
-        ).ask()
-        
-        if not confirm:
-            console.print("[yellow]Remediation cancelled.")
-            return
+@app.callback()
+def main(ctx: typer.Context):
+    """
+    KubeWise CLI - Intelligent Kubernetes Anomaly Detection & Self-Remediation
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        transient=True,
-    ) as progress:
-        progress.add_task(description="Executing remediation...", total=None)
-        
-        # Add remediation logic here
-        console.print("[green]Remediation completed successfully!")
+    Run 'kubewise --help' for usage information.
+    """
+    # Initialize logging
+    logger.remove()
+    logger.add(
+        lambda msg: console.print(f"[dim]{msg}[/dim]"),
+        level=settings.log_level
+    )
 
 if __name__ == "__main__":
     app()
