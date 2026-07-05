@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubewise-agent
+  namespace: kubewise
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubewise
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubewise
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: kubewise-agent
+      volumes:
+        - name: config
+          configMap:
+            name: kubewise-agent-config
+        - name: data
+          emptyDir: {}
+      containers:
+        - name: agent
+          image: ghcr.io/lohitkolluri/kubewise/agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kubewise
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/kubewise
+          env:
+            - name: KUBEWISE_CONFIG_PATH
+              value: /etc/kubewise/config.yaml
+            - name: KUBEWISE_DATA_DIR
+              value: /var/lib/kubewise
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kubewise-agent-secret
+                  key: openrouter_api_key
+                  optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
