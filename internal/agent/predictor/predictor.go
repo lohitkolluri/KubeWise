@@ -124,10 +124,11 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- changepoint detection (adds to buffer AND returns detection flag) -
 			if cp.Add(pt.Value) {
 				est.Reset()
+				est.Add(pt.Value) // re-seed with the regime-start value
 				p.mu.Lock()
 				p.history[key] = nil
 				p.mu.Unlock()
-				continue
+				continue // don't score the changepoint-boundary point
 			}
 
 			// --- adaptive-median + Hoeffding scoring -------------------------------
