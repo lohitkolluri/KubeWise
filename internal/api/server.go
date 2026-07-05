@@ -12,6 +12,7 @@ import (
 type Store interface {
 	ListAnomalies(limit int) ([]models.AnomalyRecord, error)
 	LoadConfig() (*models.AgentConfig, error)
+	ListAuditRecords(limit int) ([]models.AuditRecord, error)
 }
 
 type Server struct {
@@ -28,14 +29,11 @@ func NewServer(store Store, addr string) *Server {
 		startAt: time.Now(),
 	}
 	s.registerRoutes(mux)
-	return &Server{
-		store:   store,
-		startAt: time.Now(),
-		server: &http.Server{
-			Addr:    addr,
-			Handler: withMiddleware(mux),
-		},
+	s.server = &http.Server{
+		Addr:    addr,
+		Handler: withMiddleware(mux),
 	}
+	return s
 }
 
 func (s *Server) Serve() error {

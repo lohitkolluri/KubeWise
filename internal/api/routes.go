@@ -15,6 +15,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/predictions", s.handlePredictions)
 	mux.HandleFunc("GET /api/v1/anomalies", s.handleAnomalies)
 	mux.HandleFunc("GET /api/v1/config", s.handleConfig)
+	mux.HandleFunc("GET /api/v1/remediations", s.handleRemediations)
+	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /", s.handleNotFound)
 }
 
@@ -73,4 +75,27 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) handleRemediations(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"message": "remediation endpoint (use /api/v1/audit for history)"})
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+
+	records, err := s.store.ListAuditRecords(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list audit records: %v", err))
+		return
+	}
+	if records == nil {
+		records = []models.AuditRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
 }

@@ -28,6 +28,10 @@ func (m *mockStore) LoadConfig() (*models.AgentConfig, error) {
 	return m.config, nil
 }
 
+func (m *mockStore) ListAuditRecords(limit int) ([]models.AuditRecord, error) {
+	return []models.AuditRecord{}, nil
+}
+
 func setupTestServer() *httptest.Server {
 	store := &mockStore{
 		anomalies: []models.AnomalyRecord{
