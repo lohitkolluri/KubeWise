@@ -104,22 +104,24 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				p.changepoints[key] = cp
 			}
 
-			// Keep a bounded history for ROC computations.
+			// Keep a bounded history for ROC computations. Copy under lock
+			// for safe concurrent access.
 			p.history[key] = append(p.history[key], pt)
 			if len(p.history[key]) > 20 {
 				p.history[key] = p.history[key][1:]
 			}
+			localHistory := make([]MetricPoint, len(p.history[key]))
+			copy(localHistory, p.history[key])
 
 			p.mu.Unlock()
 			// --- warmup phase ------------------------------------------------------
 			est.Add(pt.Value)
-			cp.Add(pt.Value)
 
 			if dp < MinimumWarmupPoints {
 				continue
 			}
 
-			// --- changepoint detection --------------------------------------------
+			// --- changepoint detection (adds to buffer AND returns detection flag) -
 			if cp.Add(pt.Value) {
 				est.Reset()
 				p.mu.Lock()
@@ -142,7 +144,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			// --- rate-of-change boost -----------------------------------------------
 			rocBoost := 0.0
-			history := p.history[key]
+			history := localHistory
 			if len(history) >= 4 {
 				vel := p.roc.Velocity(history)
 				if math.Abs(vel.Slope) > 0 {

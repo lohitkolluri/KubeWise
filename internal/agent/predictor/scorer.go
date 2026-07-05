@@ -24,10 +24,14 @@ type ScorerConfig struct {
 
 // DefaultScorerConfig returns a production-ready ScorerConfig with robust
 // defaults for Kubernetes workload metrics.
+//
+// K=5 means score reaches 1.0 at |dev| >= 5ε, providing enough headroom
+// that routine Gaussian noise produces moderate scores (0.1–0.6) while
+// genuine anomalies (spikes, shifts) still saturate at 1.0.
 func DefaultScorerConfig() ScorerConfig {
 	return ScorerConfig{
 		HoeffdingDelta: 0.05,
-		HoeffdingK:     3.0,
+		HoeffdingK:     5.0,
 		MinWarmup:      MinimumWarmupPoints,
 		ROCBoostWeight: 0.3,
 	}
