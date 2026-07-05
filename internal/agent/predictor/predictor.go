@@ -10,9 +10,8 @@ import (
 )
 
 // Predictor is the Tier-1 anomaly detection engine.  It uses a robust
-// adaptive-median estimator combined with Hoeffding-bound anomaly scoring
-// (Netflix Raju approach) and Bayesian Online Changepoint Detection for
-// regime-change adaptation.
+// adaptive-median estimator combined with Hoeffding-bound anomaly scoring and
+// Bayesian Online Changepoint Detection for regime-change adaptation.
 type Predictor struct {
 	estimators   map[string]*AdaptiveMedian
 	changepoints map[string]*ChangepointDetector

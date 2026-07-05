@@ -43,6 +43,8 @@ spec:
               value: /etc/kubewise/config.yaml
             - name: KUBEWISE_DATA_DIR
               value: /var/lib/kubewise
+            - name: FORECASTER_ADDR
+              value: localhost:50051
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -68,3 +70,19 @@ spec:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
+        - name: forecaster
+          image: kubewise/forecaster:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50051
+              protocol: TCP
+          env:
+            - name: FORECASTER_PORT
+              value: "50051"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 512Mi
