@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubewise-agent-config
+  namespace: kubewise
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: agent
+data:
+  config.yaml: |
+    scrape_interval: 30s
+    prometheus_address: http://prometheus-server.monitoring.svc.cluster.local:9090
+    llm_provider: openrouter
+    llm_model: anthropic/claude-3.5-sonnet
+    remediation:
+      mode: dry-run
+      dry_run: true
+      rate_limit: 3
+      namespace_denylist:
+        - kube-system
+        - kubewise
+      allowlist: []
