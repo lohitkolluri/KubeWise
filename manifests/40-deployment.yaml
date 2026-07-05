@@ -27,7 +27,7 @@ spec:
           emptyDir: {}
       containers:
         - name: agent
-          image: ghcr.io/lohitkolluri/kubewise/agent:latest
+          image: kubewise/agent:dev
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
