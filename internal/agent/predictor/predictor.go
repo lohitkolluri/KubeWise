@@ -9,34 +9,45 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
+// Predictor is the Tier-1 anomaly detection engine.  It uses a robust
+// adaptive-median estimator combined with Hoeffding-bound anomaly scoring
+// (Netflix Raju approach) and Bayesian Online Changepoint Detection for
+// regime-change adaptation.
 type Predictor struct {
-	ewma       *EWMAModel
-	zscore     *ZScoreModel
-	roc        *RateOfChange
-	scorer     *Scorer
-	config     ScorerConfig
-	mu         sync.RWMutex
-	datapoints map[string]int
-	patterns   []PatternMatcher
+	estimators   map[string]*AdaptiveMedian
+	changepoints map[string]*ChangepointDetector
+	roc          *RateOfChange
+	scorer       *Scorer
+	config       ScorerConfig
+	mu           sync.RWMutex
+	history      map[string][]MetricPoint
+	datapoints   map[string]int
+	patterns     []PatternMatcher
 }
 
+// NewPredictor creates a Predictor wired with the given scorer configuration.
 func NewPredictor(config ScorerConfig) *Predictor {
 	return &Predictor{
-		ewma:       NewEWMAModel(DefaultEWMAAlpha),
-		zscore:     NewZScoreModel(DefaultZScoreWindow),
-		roc:        &RateOfChange{},
-		scorer:     NewScorer(config),
-		config:     config,
-		datapoints: make(map[string]int),
+		estimators:   make(map[string]*AdaptiveMedian),
+		changepoints: make(map[string]*ChangepointDetector),
+		roc:          &RateOfChange{},
+		scorer:       NewScorer(config),
+		config:       config,
+		history:      make(map[string][]MetricPoint),
+		datapoints:   make(map[string]int),
 	}
 }
 
+// AddPattern registers a pattern matcher for domain-specific anomaly
+// detection (e.g. OOM, CrashLoop, degradation).
 func (p *Predictor) AddPattern(m PatternMatcher) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.patterns = append(p.patterns, m)
 }
 
+// RunPatterns executes all registered pattern matchers against the given
+// metrics, events, and resource state.
 func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []models.PredictionResult {
 	p.mu.RLock()
 	patterns := make([]PatternMatcher, len(p.patterns))
@@ -53,6 +64,14 @@ func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyR
 	return results
 }
 
+// Run performs statistical anomaly detection on the given metrics.
+//
+// The pipeline per metric point is:
+//  1. Accumulate into the adaptive-median estimator.
+//  2. Periodically run the changepoint detector; reset window on regime shift.
+//  3. After warmup, compute the Hoeffding-bound anomaly score.
+//  4. Compute a rate-of-change boost from recent history (velocity/acceleration).
+//  5. Combine and emit results with score >= 0.3.
 func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, error) {
 	if len(metrics) == 0 {
 		return nil, fmt.Errorf("no metrics to analyze")
@@ -68,40 +87,74 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 		for _, pt := range mr.Values {
 			key := metricKey(mr.Name, pt.Labels)
 
+			// --- state access -------------------------------------------------------
 			p.mu.Lock()
+
 			p.datapoints[key]++
 			dp := p.datapoints[key]
-			p.mu.Unlock()
 
-			if dp < minimumWarmupPoints {
-				p.ewma.Update(key, pt.Value)
-				p.zscore.AddValue(key, pt.Value)
+			est, ok := p.estimators[key]
+			if !ok {
+				est = NewAdaptiveMedian(DefaultAdaptiveMedianWindow)
+				p.estimators[key] = est
+			}
+
+			cp, ok := p.changepoints[key]
+			if !ok {
+				cp = NewChangepointDetector(DefaultChangepointMinSeg, DefaultChangepointInterval)
+				p.changepoints[key] = cp
+			}
+
+			// Keep a bounded history for ROC computations.
+			p.history[key] = append(p.history[key], pt)
+			if len(p.history[key]) > 20 {
+				p.history[key] = p.history[key][1:]
+			}
+
+			p.mu.Unlock()
+			// --- warmup phase ------------------------------------------------------
+			est.Add(pt.Value)
+			cp.Add(pt.Value)
+
+			if dp < MinimumWarmupPoints {
 				continue
 			}
 
-			_, deviation := p.ewma.Update(key, pt.Value)
-
-			p.zscore.AddValue(key, pt.Value)
-			zScore := p.zscore.Score(key, pt.Value)
-
-			ewmaScore := 0.0
-			if pt.Value != 0 {
-				relDev := math.Abs(deviation) / math.Abs(pt.Value)
-				ewmaScore = math.Min(relDev, 1.0)
+			// --- changepoint detection --------------------------------------------
+			if cp.Add(pt.Value) {
+				est.Reset()
+				p.mu.Lock()
+				p.history[key] = nil
+				p.mu.Unlock()
+				continue
 			}
 
-			zNorm := math.Min(math.Abs(zScore)/3.0, 1.0)
+			// --- adaptive-median + Hoeffding scoring -------------------------------
+			median, _, rng, n, ok := est.Stats()
+			if !ok || n < MinimumWarmupPoints {
+				continue
+			}
 
-			rocScore := 0.0
-			if dp >= 4 {
-				relDev := 0.0
-				if pt.Value != 0 {
-					relDev = math.Abs(deviation) / math.Abs(pt.Value)
+			primaryScore := HoeffdingAnomalyScore(
+				pt.Value, median, rng, n,
+				p.config.HoeffdingDelta,
+				p.config.HoeffdingK,
+			)
+
+			// --- rate-of-change boost -----------------------------------------------
+			rocBoost := 0.0
+			history := p.history[key]
+			if len(history) >= 4 {
+				vel := p.roc.Velocity(history)
+				if math.Abs(vel.Slope) > 0 {
+					// Scale-invariant relative slope.
+					relSlope := math.Abs(vel.Slope) / math.Max(math.Abs(median), 1.0)
+					rocBoost = math.Min(relSlope*5.0, 0.3)
 				}
-				rocScore = math.Min(relDev, 1.0)
 			}
 
-			score := p.scorer.Combine(ewmaScore, zNorm, rocScore)
+			// --- final score --------------------------------------------------------
+			score := p.scorer.Score(primaryScore, rocBoost)
 
 			if score >= 0.3 {
 				results = append(results, models.PredictionResult{
@@ -118,6 +171,8 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 	return results, nil
 }
 
+// metricKey builds a unique key for a (metric name, labels) pair so that
+// each metric stream is tracked independently.
 func metricKey(name string, labels map[string]string) string {
 	if len(labels) == 0 {
 		return name
@@ -131,6 +186,8 @@ func metricKey(name string, labels map[string]string) string {
 	return key
 }
 
+// entityName extracts the entity name from labels, falling back to the metric
+// name when none of the standard label keys are present.
 func entityName(metricName string, labels map[string]string) string {
 	for _, k := range []string{"pod", "node", "container", "instance"} {
 		if v, ok := labels[k]; ok {

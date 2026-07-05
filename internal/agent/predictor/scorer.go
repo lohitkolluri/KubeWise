@@ -1,34 +1,68 @@
 package predictor
 
+// ScorerConfig controls the anomaly scoring pipeline.  The primary signal is
+// the Hoeffding-based anomaly score from the adaptive median estimator.
+// A secondary ROC-acceleration boost is added when a metric is trending
+// sharply upward or downward.
 type ScorerConfig struct {
-	EWMAWeight  float64
-	ZScoreWeight float64
-	ROCWeight   float64
+	// HoeffdingDelta is the false-positive target for the Hoeffding bound
+	// (default 0.05 = 5%).
+	HoeffdingDelta float64
+
+	// HoeffdingK is the sensitivity multiplier: score reaches 1.0 when
+	// |x-median| >= K * epsilon (default 3.0).
+	HoeffdingK float64
+
+	// MinWarmup is the minimum data points per metric key before scoring
+	// starts (default 10).
+	MinWarmup int
+
+	// ROCBoostWeight controls how much the rate-of-change acceleration
+	// can boost the final score (default 0.3 = max 0.3 boost).
+	ROCBoostWeight float64
 }
 
+// DefaultScorerConfig returns a production-ready ScorerConfig with robust
+// defaults for Kubernetes workload metrics.
 func DefaultScorerConfig() ScorerConfig {
 	return ScorerConfig{
-		EWMAWeight:   0.25,
-		ZScoreWeight: 0.50,
-		ROCWeight:    0.25,
+		HoeffdingDelta: 0.05,
+		HoeffdingK:     3.0,
+		MinWarmup:      MinimumWarmupPoints,
+		ROCBoostWeight: 0.3,
 	}
 }
 
+// Scorer combines the primary Hoeffding anomaly score with a secondary
+// ROC-acceleration boost.
 type Scorer struct {
 	config ScorerConfig
 }
 
+// NewScorer creates a Scorer from the given config.
 func NewScorer(config ScorerConfig) *Scorer {
-	return &Scorer{config: config}
+	cfg := config
+	if cfg.HoeffdingDelta <= 0 || cfg.HoeffdingDelta >= 1 {
+		cfg.HoeffdingDelta = DefaultHoeffdingDelta
+	}
+	if cfg.HoeffdingK <= 0 {
+		cfg.HoeffdingK = DefaultHoeffdingK
+	}
+	if cfg.MinWarmup <= 0 {
+		cfg.MinWarmup = MinimumWarmupPoints
+	}
+	return &Scorer{config: cfg}
 }
 
-func (s *Scorer) Combine(ewmaScore, zScore, rocScore float64) float64 {
-	total := s.config.EWMAWeight*clamp(ewmaScore, 0, 1) +
-		s.config.ZScoreWeight*clamp(zScore, 0, 1) +
-		s.config.ROCWeight*clamp(rocScore, 0, 1)
+// Score combines the primary anomaly score with the ROC boost.  Both inputs
+// should be in [0, 1] (the caller is responsible for clamping).  The result
+// is clamped to [0, 1].
+func (s *Scorer) Score(primary, rocBoost float64) float64 {
+	total := primary + clamp(rocBoost, 0, s.config.ROCBoostWeight)
 	return clamp(total, 0, 1)
 }
 
+// clamp bounds v to [lo, hi].
 func clamp(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo

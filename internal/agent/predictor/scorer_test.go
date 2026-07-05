@@ -5,62 +5,90 @@ import (
 	"testing"
 )
 
-func TestScorerDefaultWeights(t *testing.T) {
+func TestScorerDefaultConfig(t *testing.T) {
 	s := NewScorer(DefaultScorerConfig())
 
-	// All zero → score zero
-	score := s.Combine(0, 0, 0)
+	// Zero inputs → score 0
+	score := s.Score(0, 0)
 	if score != 0 {
 		t.Fatalf("expected 0, got %f", score)
 	}
 
-	// All max → score 1
-	score = s.Combine(1, 1, 1)
+	// Max primary + no boost → 1
+	score = s.Score(1.0, 0)
 	if score != 1.0 {
-		t.Fatalf("expected 1, got %f", score)
-	}
-
-	// EWMA only (0.25 weight)
-	score = s.Combine(1.0, 0, 0)
-	if math.Abs(score-0.25) > 1e-6 {
-		t.Fatalf("expected 0.25, got %f", score)
-	}
-
-	// Z-score only (0.50 weight)
-	score = s.Combine(0, 1.0, 0)
-	if math.Abs(score-0.50) > 1e-6 {
-		t.Fatalf("expected 0.50, got %f", score)
-	}
-
-	// ROC only (0.25 weight)
-	score = s.Combine(0, 0, 1.0)
-	if math.Abs(score-0.25) > 1e-6 {
-		t.Fatalf("expected 0.25, got %f", score)
-	}
-}
-
-func TestScorerCustomWeights(t *testing.T) {
-	cfg := ScorerConfig{EWMAWeight: 0.5, ZScoreWeight: 0.3, ROCWeight: 0.2}
-	s := NewScorer(cfg)
-
-	score := s.Combine(1.0, 1.0, 1.0)
-	if math.Abs(score-1.0) > 1e-6 {
 		t.Fatalf("expected 1.0, got %f", score)
 	}
 
-	score = s.Combine(0.5, 0.5, 0.5)
-	expected := 0.5*0.5 + 0.3*0.5 + 0.2*0.5
-	if math.Abs(score-expected) > 1e-6 {
-		t.Fatalf("expected %f, got %f", expected, score)
+	// Primary 0.5, no boost → 0.5
+	score = s.Score(0.5, 0)
+	if math.Abs(score-0.5) > 1e-6 {
+		t.Fatalf("expected 0.5, got %f", score)
+	}
+}
+
+func TestScorerROCBoost(t *testing.T) {
+	s := NewScorer(DefaultScorerConfig())
+
+	// Boost is capped at ROCBoostWeight (0.3 by default)
+	score := s.Score(0.0, 1.0)
+	if math.Abs(score-0.3) > 1e-6 {
+		t.Fatalf("expected 0.3 (boost capped), got %f", score)
+	}
+
+	// Boost is additive: 0.2 + 0.25 = 0.45
+	score = s.Score(0.2, 0.25)
+	if math.Abs(score-0.45) > 1e-6 {
+		t.Fatalf("expected 0.45, got %f", score)
 	}
 }
 
 func TestScorerClamp(t *testing.T) {
 	s := NewScorer(DefaultScorerConfig())
 
-	// Values above 1.0 should be clamped
-	score := s.Combine(2.0, 3.0, -1.0)
-	if score < 0 || score > 1 {
-		t.Fatalf("expected clamped score [0,1], got %f", score)
+	// Negative inputs clamped to 0
+	score := s.Score(-0.5, -0.5)
+	if score != 0 {
+		t.Fatalf("expected 0 for negative, got %f", score)
+	}
+
+	// Overflow clamped to 1
+	score = s.Score(0.9, 0.5)
+	if score != 1.0 {
+		t.Fatalf("expected 1.0 for overflow, got %f", score)
+	}
+}
+
+func TestScorerCustomConfig(t *testing.T) {
+	cfg := ScorerConfig{
+		HoeffdingDelta: 0.01,
+		HoeffdingK:     2.0,
+		MinWarmup:      5,
+		ROCBoostWeight: 0.5,
+	}
+	s := NewScorer(cfg)
+
+	// Boost capped at 0.5
+	score := s.Score(0.0, 1.0)
+	if math.Abs(score-0.5) > 1e-6 {
+		t.Fatalf("expected 0.5, got %f", score)
+	}
+
+	// 0.6 + 0.4 = 1.0
+	score = s.Score(0.6, 0.4)
+	if math.Abs(score-1.0) > 1e-6 {
+		t.Fatalf("expected 1.0, got %f", score)
+	}
+}
+
+func TestClamp(t *testing.T) {
+	if v := clamp(5, 0, 10); v != 5 {
+		t.Fatalf("expected 5, got %f", v)
+	}
+	if v := clamp(-1, 0, 10); v != 0 {
+		t.Fatalf("expected 0, got %f", v)
+	}
+	if v := clamp(15, 0, 10); v != 10 {
+		t.Fatalf("expected 10, got %f", v)
 	}
 }
