@@ -1,11 +1,7 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "github.com/lohitkolluri/KubeWise/internal/cli"
 
 func main() {
-	fmt.Println("kwctl v2 — AI SRE")
-	os.Exit(0)
+	cli.Execute()
 }
