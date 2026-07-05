@@ -17,6 +17,7 @@ type Predictor struct {
 	config     ScorerConfig
 	mu         sync.RWMutex
 	datapoints map[string]int
+	patterns   []PatternMatcher
 }
 
 func NewPredictor(config ScorerConfig) *Predictor {
@@ -28,6 +29,28 @@ func NewPredictor(config ScorerConfig) *Predictor {
 		config:     config,
 		datapoints: make(map[string]int),
 	}
+}
+
+func (p *Predictor) AddPattern(m PatternMatcher) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.patterns = append(p.patterns, m)
+}
+
+func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []models.PredictionResult {
+	p.mu.RLock()
+	patterns := make([]PatternMatcher, len(p.patterns))
+	copy(patterns, p.patterns)
+	p.mu.RUnlock()
+
+	var results []models.PredictionResult
+	for _, pat := range patterns {
+		matches := pat.Match(metrics, events, resources)
+		for _, m := range matches {
+			results = append(results, patternToResult(m))
+		}
+	}
+	return results
 }
 
 func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, error) {
