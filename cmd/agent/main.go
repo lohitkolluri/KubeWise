@@ -115,8 +115,11 @@ func main() {
 	// Get API key from env
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 
+	// Optional Tier-2 forecasting sidecar address
+	forecasterAddr := os.Getenv("FORECASTER_ADDR")
+
 	// Create the agent (wraps collector, predictor, LLM, remediation, API server)
-	agt, err := agent.NewAgent(s, cfg.PrometheusAddress, interval, apiKey, cfg.LLMModel, remCfg)
+	agt, err := agent.NewAgent(s, cfg.PrometheusAddress, interval, apiKey, cfg.LLMModel, remCfg, forecasterAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create agent: %v\n", err)
 		os.Exit(1)

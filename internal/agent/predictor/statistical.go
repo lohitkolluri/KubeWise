@@ -24,7 +24,7 @@ type MetricResult struct {
 
 const (
 	// DefaultAdaptiveMedianWindow is the default sliding window size for the
-	// adaptive median estimator (Netflix Raju approach).
+	// adaptive median estimator.
 	DefaultAdaptiveMedianWindow = 100
 
 	// DefaultHoeffdingDelta is the default false-positive target for the
@@ -52,7 +52,7 @@ const (
 
 // AdaptiveMedian maintains a sliding window of values and computes the median
 // and median absolute deviation (MAD), which are robust statistics insensitive
-// to outliers. Used as the first "R" in Netflix Raju's approach.
+// to outliers.
 type AdaptiveMedian struct {
 	mu     sync.RWMutex
 	window int
@@ -142,8 +142,7 @@ func (a *AdaptiveMedian) Stats() (median, mad, rng float64, n int, ok bool) {
 // ---------------------------------------------------------------------------
 
 // HoeffdingAnomalyScore computes an anomaly score in [0,1] for a new value
-// using the adaptive-median estimator and the Hoeffding inequality bound from
-// the Netflix Raju approach.
+// using the adaptive-median estimator and the Hoeffding inequality bound.
 //
 // The Hoeffding bound ε = R × sqrt(ln(2/δ) / 2n) gives a distribution-free
 // confidence interval at false-positive rate δ.  The score is:
