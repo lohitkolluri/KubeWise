@@ -46,7 +46,7 @@ func (p *Predictor) LoadPatternHistory(s *store.Store, limit int) {
 		return
 	}
 	names := []string{
-		"pod_memory_usage", "restart_rate", "crashloop", "oomkilled",
+		"pod_memory_usage", "restart_rate",
 		"pod_not_ready", "node_disk_pressure", "node_memory_pressure",
 	}
 	for _, name := range names {
@@ -178,8 +178,8 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// Keep a bounded history for ROC computations. Copy under lock
 			// for safe concurrent access.
 			p.history[key] = append(p.history[key], pt)
-			if len(p.history[key]) > 20 {
-				p.history[key] = p.history[key][1:]
+			if len(p.history[key]) > maxPatternHistory {
+				p.history[key] = p.history[key][len(p.history[key])-maxPatternHistory:]
 			}
 			localHistory := make([]MetricPoint, len(p.history[key]))
 			copy(localHistory, p.history[key])
@@ -195,21 +195,29 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- changepoint detection (adds to buffer AND returns detection flag) -
 			if cp.Add(pt.Value) {
 				est.Reset()
-				est.Add(pt.Value) // re-seed with the regime-start value
+				est.Add(pt.Value)
 				p.mu.Lock()
 				p.history[key] = nil
+				p.datapoints[key] = 1
 				p.mu.Unlock()
-				continue // don't score the changepoint-boundary point
+				continue
 			}
 
 			// --- adaptive-median + Hoeffding scoring -------------------------------
-			median, _, rng, n, ok := est.Stats()
+			median, mad, rng, n, ok := est.Stats()
 			if !ok || n < p.config.MinWarmup {
 				continue
 			}
 
+			dispersion := rng
+			if mad > 0 {
+				madSpread := mad * 6
+				if madSpread > dispersion {
+					dispersion = madSpread
+				}
+			}
 			primaryScore := HoeffdingAnomalyScore(
-				pt.Value, median, rng, n,
+				pt.Value, median, dispersion, n,
 				p.config.HoeffdingDelta,
 				p.config.HoeffdingK,
 			)
@@ -229,7 +237,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- final score --------------------------------------------------------
 			score := p.scorer.Score(primaryScore, rocBoost)
 
-			if score >= 0.3 {
+			if score >= p.config.MinScore {
 				results = append(results, models.PredictionResult{
 					Type:       "statistical",
 					Entity:     entityName(mr.Name, pt.Labels),
@@ -253,8 +261,8 @@ func metricKey(name string, labels map[string]string) string {
 	}
 	key := name
 	for _, k := range []string{"pod", "container", "namespace", "node", "instance"} {
-		if v, ok := labels[k]; ok {
-			key += "/" + v
+		if v, ok := labels[k]; ok && v != "" {
+			key += "/" + k + "=" + v
 		}
 	}
 	return key

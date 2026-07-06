@@ -137,10 +137,14 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 				record.InvolvedObject = k8sEvent.InvolvedObject.Kind + "/" + k8sEvent.InvolvedObject.Name
 			}
 
+			timer := time.NewTimer(5 * time.Second)
 			select {
 			case ch <- record:
-			default:
-				log.Printf("events: channel full, dropping %s event for %s", record.Reason, record.InvolvedObject)
+				if !timer.Stop() {
+					<-timer.C
+				}
+			case <-timer.C:
+				log.Printf("events: channel full, timed out sending %s event for %s", record.Reason, record.InvolvedObject)
 			}
 
 			if event.Type == watch.Deleted || event.Type == watch.Modified {

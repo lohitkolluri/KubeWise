@@ -92,7 +92,7 @@ func (c *Client) GetEvents(ctx context.Context, namespace string, since time.Dur
 	cutoff := time.Now().UTC().Add(-since)
 	filtered := &corev1.EventList{}
 	for _, e := range events.Items {
-		if e.LastTimestamp.Time.Before(cutoff) {
+		if since > 0 && e.LastTimestamp.Time.Before(cutoff) {
 			continue
 		}
 		filtered.Items = append(filtered.Items, e)

@@ -75,10 +75,14 @@ func TestValidatePlan_ProtectedNamespace(t *testing.T) {
 
 func TestAnomalyMatchesTarget(t *testing.T) {
 	a := models.AnomalyRecord{Entity: "default/web-1", Namespace: "default"}
-	if !anomalyMatchesTarget(a, "default", "web-1") {
+	if !matchTarget(a, "default", "web-1", "restart_pod") {
 		t.Fatal("expected match")
 	}
-	if anomalyMatchesTarget(a, "kube-system", "web-1") {
+	if matchTarget(a, "kube-system", "web-1", "restart_pod") {
 		t.Fatal("expected namespace mismatch")
+	}
+	a2 := models.AnomalyRecord{Entity: "default/nginx-7d4f8b-xk2lm", Namespace: "default"}
+	if !matchTarget(a2, "default", "nginx", "rollback_deployment") {
+		t.Fatal("expected pod to match deployment action")
 	}
 }

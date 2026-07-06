@@ -48,7 +48,7 @@ func main() {
 	if dataDir == "" {
 		dataDir = "/tmp/kubewise"
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "create data dir: %v\n", err)
 		os.Exit(1)
 	}
@@ -91,10 +91,13 @@ func main() {
 			cfg = existing
 		}
 	} else {
-		// No config path — try loading from store
 		existing, err := s.LoadConfig()
 		if err == nil && existing != nil {
 			cfg = existing
+		} else if err == nil && existing == nil {
+			if err := s.SaveConfig(cfg); err != nil {
+				log.Fatalf("save default config: %v", err)
+			}
 		}
 	}
 
@@ -109,18 +112,32 @@ func main() {
 		minConf = 0.7
 	}
 	switch cfg.Remediation.Mode {
-	case "dry-run", "auto", "off", "":
+	case models.RemediationModeDryRun, models.RemediationModeAuto, models.RemediationModeOff, models.RemediationModeSemi, "":
+		if cfg.Remediation.Mode == models.RemediationModeSemi || cfg.Remediation.Mode == models.RemediationModeDryRun || cfg.Remediation.Mode == "" {
+			cfg.Remediation.DryRun = true
+		}
 	default:
-		log.Printf("agent: unknown remediation mode %q, defaulting to dry-run", cfg.Remediation.Mode)
-		cfg.Remediation.Mode = "dry-run"
+		if !models.ValidRemediationMode(cfg.Remediation.Mode) {
+			log.Printf("agent: unknown remediation mode %q, defaulting to dry-run", cfg.Remediation.Mode)
+			cfg.Remediation.Mode = models.RemediationModeDryRun
+			cfg.Remediation.DryRun = true
+		}
 	}
 	remCfg := remediator.RemediationConfig{
 		Mode:          cfg.Remediation.Mode,
-		DryRun:        cfg.Remediation.DryRun || cfg.Remediation.Mode == "dry-run",
+		DryRun:        cfg.Remediation.DryRun || cfg.Remediation.Mode == models.RemediationModeDryRun,
 		Allowlist:     cfg.Remediation.Allowlist,
 		Denylist:      cfg.Remediation.NamespaceDenylist,
 		MinConfidence: minConf,
 		RateLimit:     cfg.Remediation.RateLimit,
+	}
+	if remCfg.RateLimit <= 0 {
+		remCfg.RateLimit = 10
+	}
+
+	apiAddr := os.Getenv("KUBEWISE_ADDR")
+	if apiAddr == "" {
+		apiAddr = ":8080"
 	}
 
 	// Get API key from env
@@ -130,7 +147,7 @@ func main() {
 	forecasterAddr := os.Getenv("FORECASTER_ADDR")
 
 	// Create the agent (wraps collector, predictor, LLM, remediation, API server)
-	agt, err := agent.NewAgent(s, cfg, interval, apiKey, cfg.LLMModel, remCfg, forecasterAddr, ":8080")
+	agt, err := agent.NewAgent(s, cfg, interval, apiKey, cfg.LLMModel, remCfg, forecasterAddr, apiAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create agent: %v\n", err)
 		os.Exit(1)

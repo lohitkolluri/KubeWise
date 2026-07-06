@@ -9,8 +9,8 @@ type CrashLoopPattern struct{}
 func (c *CrashLoopPattern) Name() string { return "CrashLoopRisk" }
 
 func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
-	restartResult := findMetric(metrics, "restart_rate")
-	if restartResult == nil || len(restartResult.Values) == 0 {
+	restartResult, ok := findMetric(metrics, "restart_rate")
+	if !ok || len(restartResult.Values) == 0 {
 		return nil
 	}
 
@@ -56,7 +56,7 @@ func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.Anomaly
 				confidence += 0.2
 			}
 		}
-		if hasEvent(events, entity, "CrashLoopBackOff") {
+		if hasEvent(events, namespace, entity, "CrashLoopBackOff") {
 			confidence += 0.1
 		}
 		if contains(resources.FailingPods, entity) || contains(resources.FailingPods, entityKey) {

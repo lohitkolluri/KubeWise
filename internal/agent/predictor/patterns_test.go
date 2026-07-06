@@ -290,8 +290,8 @@ func TestPatternHelpers(t *testing.T) {
 		{Name: "cpu", Values: []MetricPoint{{Value: 1}}},
 		{Name: "mem", Values: []MetricPoint{{Value: 2}}},
 	}
-	m := findMetric(metrics, "mem")
-	if m == nil || m.Name != "mem" {
+	m, ok := findMetric(metrics, "mem")
+	if !ok || m.Name != "mem" {
 		t.Fatal("findMetric failed")
 	}
 
@@ -337,8 +337,8 @@ func TestPreparePatternMetrics(t *testing.T) {
 		}},
 	}})
 
-	mem := findMetric(enriched, "pod_memory_usage")
-	if mem == nil || len(mem.Values) < 4 {
+	mem, ok := findMetric(enriched, "pod_memory_usage")
+	if !ok || len(mem.Values) < 4 {
 		t.Fatalf("expected >=4 history points, got %d", len(mem.Values))
 	}
 }

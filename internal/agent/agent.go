@@ -37,7 +37,8 @@ type Agent struct {
 	cfg                *models.AgentConfig
 	interval           time.Duration
 	apiAddr            string
-	scrapes            int64
+	minScore           float64
+	scrapes            atomic.Int64
 	anomalySeq         uint64
 	mu                 sync.Mutex
 	stopOnce           sync.Once
@@ -116,6 +117,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		stopCh:      make(chan struct{}),
 		interval:    interval,
 		apiAddr:     apiAddr,
+		minScore:    predCfg.MinScore,
 	}
 	a.runCtx, a.runCancel = context.WithCancel(context.Background())
 
@@ -155,6 +157,13 @@ func (a *Agent) persistEventAnomaly(record collector.EventRecord) {
 	entity := models.FormatEntity(record.Namespace, name)
 	score := 1.0
 
+	result := a.anomalyGate.Filter(entity, "k8s_event", score, "event", now)
+	if !result.Pass {
+		log.Printf("agent: gate dropped k8s event entity=%s event=%s reason=%s",
+			entity, record.Reason, result.Reason)
+		return
+	}
+
 	anomaly := &models.AnomalyRecord{
 		ID:         a.nextAnomalyID("event"),
 		Entity:     entity,
@@ -180,11 +189,11 @@ func (a *Agent) Run() error {
 	}()
 
 	if a.resourcesCollector != nil {
-		go func() {
-			if a.resourcesCollector.WaitForSync() {
-				log.Printf("agent: resource informers synced")
-			}
-		}()
+		if a.resourcesCollector.WaitForSync() {
+			log.Printf("agent: resource informers synced")
+		} else {
+			log.Printf("agent: warning: resource informers not synced before first scrape")
+		}
 	}
 
 	ticker := time.NewTicker(a.interval)
@@ -234,13 +243,12 @@ func (a *Agent) buildResourceSnapshot() predictor.ResourceSnapshot {
 	if a.resourcesCollector == nil || !a.resourcesCollector.HasSynced() {
 		return snap
 	}
-	for _, p := range a.resourcesCollector.GetFailingPods() {
+	failing, unhealthy, pods := a.resourcesCollector.Snapshot()
+	for _, p := range failing {
 		snap.FailingPods = append(snap.FailingPods, models.FormatEntity(p.Namespace, p.Name))
 	}
-	for _, n := range a.resourcesCollector.GetUnhealthyNodes() {
-		snap.UnhealthyNodes = append(snap.UnhealthyNodes, n.Name)
-	}
-	for _, p := range a.resourcesCollector.GetPodResources() {
+	snap.UnhealthyNodes = append(snap.UnhealthyNodes, unhealthy...)
+	for _, p := range pods {
 		snap.PodResources = append(snap.PodResources, predictor.PodResource{
 			Name:      p.Name,
 			Namespace: p.Namespace,
@@ -256,7 +264,7 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 		entity = p.Entity
 	}
 
-	if p.Score < 0.3 {
+	if p.Score < a.minScore {
 		a.anomalyGate.ObserveScore(entity, p.MetricName, p.Score, now)
 		return
 	}
@@ -298,10 +306,8 @@ func (a *Agent) runOnce() {
 	scrapeCtx, scrapeCancel := context.WithTimeout(a.runCtx, a.interval)
 	defer scrapeCancel()
 
-	a.mu.Lock()
-	a.scrapes++
-	scrapeNum := a.scrapes
-	a.mu.Unlock()
+	a.scrapes.Add(1)
+	scrapeNum := a.scrapes.Load()
 
 	metrics, err := a.collector.CollectMetrics(scrapeCtx)
 	if len(metrics) == 0 {
@@ -333,6 +339,9 @@ func (a *Agent) runOnce() {
 	}
 
 	patternCount := 0
+	var allPredictions []models.PredictionResult
+	allPredictions = append(allPredictions, predictions...)
+
 	events, err := a.store.ListAnomalies(20)
 	if err != nil {
 		log.Printf("agent[%d]: list anomalies error: %v — skipping pattern pass", scrapeNum, err)
@@ -341,15 +350,23 @@ func (a *Agent) runOnce() {
 		resources := a.buildResourceSnapshot()
 		patternResults := a.predictor.RunPatterns(enrichedMetrics, events, resources)
 		patternCount = len(patternResults)
+		allPredictions = append(allPredictions, patternResults...)
 		for _, pr := range patternResults {
 			a.persistPrediction(pr, "pattern", now, scrapeNum)
 		}
 	}
-	log.Printf("agent[%d]: predictions=%d patterns=%d", scrapeNum, len(predictions), patternCount)
+	if err := a.store.SaveLatestPredictions(allPredictions); err != nil {
+		log.Printf("agent[%d]: save predictions: %v", scrapeNum, err)
+	}
 
-	if a.forecaster != nil && len(metrics) > 0 {
-		fcastCtx, fcastCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		a.runForecast(fcastCtx, metrics, scrapeNum)
+	gateStats := a.anomalyGate.StatsSnapshot()
+	a.apiServer.SetGateStats(gateStats)
+	log.Printf("agent[%d]: predictions=%d patterns=%d gate_passed=%d gate_dropped=%d",
+		scrapeNum, len(predictions), patternCount, gateStats.Passed, gateStats.Dropped)
+
+	if a.forecaster != nil {
+		fcastCtx, fcastCancel := context.WithTimeout(a.runCtx, 30*time.Second)
+		a.runForecast(fcastCtx, scrapeNum)
 		fcastCancel()
 	}
 
@@ -366,36 +383,51 @@ func (a *Agent) runOnce() {
 	}
 }
 
-func (a *Agent) runForecast(ctx context.Context, metrics []collector.MetricResult, scrapeNum int64) {
-	for _, m := range metrics {
-		if len(m.Values) >= 10 {
-			values := make([]float64, 0, len(m.Values))
-			timestamps := make([]float64, 0, len(m.Values))
-			for _, p := range m.Values {
-				values = append(values, p.Value)
-				timestamps = append(timestamps, float64(p.Timestamp.Unix()))
+func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
+	// Instant PromQL returns cross-sectional snapshots — forecast per stored time series instead.
+	names, err := a.store.ListMetricNames()
+	if err != nil {
+		log.Printf("agent[%d]: forecast list metrics: %v", scrapeNum, err)
+		return
+	}
+	for _, name := range names {
+		keys, err := a.store.ListMetricSeries(name)
+		if err != nil {
+			continue
+		}
+		for _, key := range keys {
+			metricName, labels, err := store.ParseSeriesKey(key)
+			if err != nil {
+				continue
 			}
-
+			pts, err := a.store.GetMetricSeries(metricName, labels, 20)
+			if err != nil || len(pts) < 10 {
+				continue
+			}
+			values := make([]float64, len(pts))
+			timestamps := make([]float64, len(pts))
+			for i, p := range pts {
+				values[i] = p.Value
+				timestamps[i] = float64(p.TS.Unix())
+			}
 			resp, err := a.forecaster.Forecast(ctx, &forecaster.ForecastRequest{
-				MetricName:      m.Name,
+				MetricName:      metricName,
 				Values:          values,
 				Timestamps:      timestamps,
+				Labels:          labels,
 				Horizon:         12,
 				IntervalSeconds: a.interval.Seconds(),
 			})
 			if err != nil {
-				log.Printf("agent[%d]: forecast error for %s: %v", scrapeNum, m.Name, err)
+				log.Printf("agent[%d]: forecast error for %s: %v", scrapeNum, metricName, err)
 				continue
 			}
-			if resp.Status == "ok" {
+			if resp.Status == "ok" && len(resp.Points) > 0 {
+				last := resp.Points[len(resp.Points)-1]
 				log.Printf("agent[%d]: forecast %s -> %d points (last: %.2f [%.2f, %.2f])",
-					scrapeNum, m.Name, len(resp.Points),
-					resp.Points[len(resp.Points)-1].Value,
-					resp.Points[len(resp.Points)-1].LowerBound,
-					resp.Points[len(resp.Points)-1].UpperBound,
-				)
-			} else {
-				log.Printf("agent[%d]: forecast error for %s: %s", scrapeNum, m.Name, resp.ErrorMessage)
+					scrapeNum, metricName, len(resp.Points), last.Value, last.LowerBound, last.UpperBound)
+			} else if resp.Status != "ok" {
+				log.Printf("agent[%d]: forecast error for %s: %s", scrapeNum, metricName, resp.ErrorMessage)
 			}
 		}
 	}

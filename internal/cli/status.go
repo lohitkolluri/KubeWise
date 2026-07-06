@@ -3,18 +3,18 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"time"
 
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 )
 
 type agentStatus struct {
-	Uptime    string `json:"uptime" yaml:"uptime"`
-	StartedAt string `json:"started_at" yaml:"started_at"`
-	Scrapes   int64  `json:"scrapes" yaml:"scrapes"`
+	Uptime       string  `json:"uptime" yaml:"uptime"`
+	StartedAt    string  `json:"started_at" yaml:"started_at"`
+	Scrapes      int64   `json:"scrapes" yaml:"scrapes"`
+	GatePassed   uint64  `json:"gate_passed" yaml:"gate_passed"`
+	GateDropped  uint64  `json:"gate_dropped" yaml:"gate_dropped"`
+	GateObserved uint64  `json:"gate_observed" yaml:"gate_observed"`
 }
 
 func init() {
@@ -26,16 +26,12 @@ var statusCmd = &cobra.Command{
 	Short: "Show agent status",
 	Long:  `Connect to the KubeWise agent and display its current status.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		base := resolveAgentURL()
-		resp, err := http.Get(base + "/status")
-		if err != nil {
-			return fmt.Errorf("connecting to agent: %w", err)
+		if err := validateOutputFormat(); err != nil {
+			return err
 		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
+		body, _, err := agentGet("/status")
 		if err != nil {
-			return fmt.Errorf("reading response: %w", err)
+			return err
 		}
 
 		var st agentStatus
@@ -51,27 +47,16 @@ var statusCmd = &cobra.Command{
 		case "yaml":
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
+			defer enc.Close()
 			return enc.Encode(st)
 		default:
 			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Uptime:", st.Uptime)
 			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Started At:", st.StartedAt)
 			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Scrapes:", st.Scrapes)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Passed:", st.GatePassed)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Dropped:", st.GateDropped)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Observed:", st.GateObserved)
 			return nil
 		}
 	},
-}
-
-var resolveAgentURL = func() string {
-	port := 8080
-	return fmt.Sprintf("http://localhost:%d", port)
-}
-
-func getJSON(url string, target interface{}) error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(target)
 }

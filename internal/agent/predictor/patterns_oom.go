@@ -12,8 +12,8 @@ type OOMPattern struct{}
 func (o *OOMPattern) Name() string { return "OOMRisk" }
 
 func (o *OOMPattern) Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
-	memResult := findMetric(metrics, memoryMetric)
-	if memResult == nil || len(memResult.Values) == 0 {
+	memResult, ok := findMetric(metrics, memoryMetric)
+	if !ok || len(memResult.Values) == 0 {
 		return nil
 	}
 
@@ -48,7 +48,7 @@ func (o *OOMPattern) Match(metrics []MetricResult, events []models.AnomalyRecord
 				confidence += 0.15
 			}
 		}
-		if hasEvent(events, entity, "OOMKilled") || hasEvent(events, entity, "OOMKilling") {
+		if hasEvent(events, namespace, entity, "OOMKilled") || hasEvent(events, namespace, entity, "OOMKilling") {
 			confidence += 0.1
 		}
 		if confidence > 0.95 {

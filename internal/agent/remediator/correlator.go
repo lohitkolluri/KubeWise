@@ -2,9 +2,10 @@ package remediator
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/big"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
@@ -58,9 +59,6 @@ func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store,
 	if cfg.MinConfidence <= 0 {
 		cfg.MinConfidence = 0.7
 	}
-	if cfg.RateLimit <= 0 {
-		cfg.RateLimit = 10
-	}
 	return &Correlator{
 		llmClient:    llmClient,
 		tierAssigner: NewTierAssigner(5 * time.Minute),
@@ -76,7 +74,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	anomalies, err := c.store.ListAnomalies(50)
+	anomalies, err := c.store.ListAnomalies(c.anomalyFetchLimit())
 	if err != nil {
 		return fmt.Errorf("list anomalies: %w", err)
 	}
@@ -89,13 +87,18 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if len(correlatable) == 0 {
 		return nil
 	}
+	if c.llmClient == nil || !c.llmClient.HasAPIKey() {
+		log.Printf("remediator: skipping — LLM client unavailable or no API key")
+		return nil
+	}
 	if c.cfg.RateLimit > 0 && len(correlatable) > c.cfg.RateLimit {
 		correlatable = correlatable[:c.cfg.RateLimit]
 	}
 
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
 
-	userPrompt := llm.BuildUserPrompt(correlatable, "")
+	metricsSummary := c.buildMetricsSummary(correlatable)
+	userPrompt := llm.BuildUserPrompt(correlatable, metricsSummary)
 	systemPrompt := llm.SystemPrompt()
 	schema := llm.RemediationSchema()
 
@@ -122,9 +125,8 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
-
 	if plan.Action.Type == "escalate" {
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		c.logAudit(&plan, matched, tier, models.AuditEscalated, "escalated to human operator", userPrompt, "")
 		log.Printf("remediator: escalated %s/%s to human operator", plan.Action.Namespace, plan.Action.Target)
 		return nil
@@ -244,12 +246,33 @@ func (c *Correlator) validatePlan(plan models.RemediationPlan, anomalies []model
 	if plan.Action.Rationale == "" {
 		return fmt.Errorf("rationale is empty")
 	}
+	switch plan.Action.Type {
+	case "scale_replicas":
+		if _, ok := plan.Action.Parameters["replicas"]; !ok {
+			return fmt.Errorf("scale_replicas requires replicas parameter")
+		}
+	case "patch_resources":
+		hasResource := false
+		for k := range plan.Action.Parameters {
+			switch k {
+			case "cpu_request", "cpu_limit", "memory_request", "memory_limit":
+				hasResource = true
+			}
+		}
+		if !hasResource {
+			return fmt.Errorf("patch_resources requires at least one resource parameter")
+		}
+	}
 	return nil
 }
 
 func (c *Correlator) planMatchesAnomalies(plan models.RemediationPlan, anomalies []models.AnomalyRecord) bool {
+	target := plan.Action.Target
+	if deploymentActions[plan.Action.Type] {
+		target = deploymentFromPlan(plan)
+	}
 	for _, a := range anomalies {
-		if anomalyMatchesTarget(a, plan.Action.Namespace, plan.Action.Target) {
+		if matchTarget(a, plan.Action.Namespace, target, plan.Action.Type) {
 			return true
 		}
 	}
@@ -260,21 +283,34 @@ func (c *Correlator) anomaliesMatchingPlan(anomalies []models.AnomalyRecord, pla
 	if plan.Action.Type == "noop" || plan.Action.Type == "escalate" {
 		return anomalies
 	}
+	target := plan.Action.Target
+	if deploymentActions[plan.Action.Type] {
+		target = deploymentFromPlan(plan)
+	}
 	var matched []models.AnomalyRecord
 	for _, a := range anomalies {
-		if anomalyMatchesTarget(a, plan.Action.Namespace, plan.Action.Target) {
+		if matchTarget(a, plan.Action.Namespace, target, plan.Action.Type) {
 			matched = append(matched, a)
 		}
 	}
 	return matched
 }
 
-func anomalyMatchesTarget(a models.AnomalyRecord, namespace, target string) bool {
+func matchTarget(a models.AnomalyRecord, namespace, target, actionType string) bool {
 	ns, name := models.ParseEntity(a.Entity)
 	if a.Namespace != "" && ns == "" {
 		ns = a.Namespace
 	}
-	return ns == namespace && name == target
+	if ns != namespace {
+		return false
+	}
+	if name == target {
+		return true
+	}
+	if deploymentActions[actionType] {
+		return podBelongsToDeployment(name, target)
+	}
+	return false
 }
 
 func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPlan) string {
@@ -298,15 +334,51 @@ func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPla
 	}
 }
 
+func (c *Correlator) buildMetricsSummary(anomalies []models.AnomalyRecord) string {
+	var summaries []llm.MetricSummary
+	seen := make(map[string]struct{})
+	for _, a := range anomalies {
+		key := a.Entity + "|" + a.MetricName
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		ns, name := models.ParseEntity(a.Entity)
+		if a.Namespace != "" && ns == "" {
+			ns = a.Namespace
+		}
+		labels := map[string]string{"namespace": ns, "pod": name}
+		pts, err := c.store.GetMetricSeries(a.MetricName, labels, 5)
+		if err != nil || len(pts) == 0 {
+			continue
+		}
+		last := pts[len(pts)-1]
+		trend := "stable"
+		if len(pts) >= 2 && pts[len(pts)-1].Value > pts[0].Value*1.1 {
+			trend = "rising"
+		} else if len(pts) >= 2 && pts[len(pts)-1].Value < pts[0].Value*0.9 {
+			trend = "falling"
+		}
+		summaries = append(summaries, llm.MetricSummary{
+			Name:        a.MetricName + "@" + a.Entity,
+			SampleCount: len(pts),
+			LastValue:   last.Value,
+			Trend:       trend,
+		})
+	}
+	return llm.FormatMetricContext(summaries)
+}
+
 func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalies []models.AnomalyRecord, tier models.RiskTier, status models.AuditStatus, reason, prompt, k8sResult string) {
 	now := time.Now()
-	anomalyID := ""
-	if len(anomalies) > 0 {
-		anomalyID = anomalies[0].ID
+	anomalyIDs := make([]string, 0, len(anomalies))
+	for _, a := range anomalies {
+		anomalyIDs = append(anomalyIDs, a.ID)
 	}
 	record := &models.AuditRecord{
 		ID:          shortID(),
-		AnomalyID:   anomalyID,
+		AnomalyID:   "",
+		AnomalyIDs:  anomalyIDs,
 		Plan:        *plan,
 		RiskTier:    tier,
 		Status:      status,
@@ -330,8 +402,24 @@ func shortID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 12)
 	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			b[i] = chars[i%len(chars)]
+			continue
+		}
+		b[i] = chars[n.Int64()]
 	}
 	now := time.Now().UnixMilli()
 	return fmt.Sprintf("%x-%s", now, string(b))
+}
+
+func (c *Correlator) anomalyFetchLimit() int {
+	limit := c.cfg.RateLimit * 5
+	if limit < 20 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return limit
 }

@@ -45,6 +45,11 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# KubeWise binaries
+/agent
+/kwctl
+/bin/
+
 # MongoDB
 data/db/
 

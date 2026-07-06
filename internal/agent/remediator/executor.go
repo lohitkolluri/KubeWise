@@ -2,6 +2,7 @@ package remediator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -94,21 +95,22 @@ func (e *K8sExecutor) scaleReplicas(ctx context.Context, namespace, name string,
 	if !ok {
 		return "", fmt.Errorf("scale_replicas requires 'replicas' parameter")
 	}
-	var replicas int32
-	if _, err := fmt.Sscanf(replicasStr, "%d", &replicas); err != nil {
+	replicas, err := strconv.ParseInt(replicasStr, 10, 32)
+	if err != nil {
 		return "", fmt.Errorf("invalid replicas value %q: %w", replicasStr, err)
 	}
 	if replicas < 0 || replicas > 100 {
 		return "", fmt.Errorf("replicas %d out of allowed range [0, 100]", replicas)
 	}
+	replicas32 := int32(replicas)
 
-	patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas)
-	_, err := e.clientset.AppsV1().Deployments(namespace).Patch(
+	patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas32)
+	_, err = e.clientset.AppsV1().Deployments(namespace).Patch(
 		ctx, name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
-		return "", fmt.Errorf("scale deployment %s/%s to %d: %w", namespace, name, replicas, err)
+		return "", fmt.Errorf("scale deployment %s/%s to %d: %w", namespace, name, replicas32, err)
 	}
-	return fmt.Sprintf("scaled deployment %s/%s to %d replicas", namespace, name, replicas), nil
+	return fmt.Sprintf("scaled deployment %s/%s to %d replicas", namespace, name, replicas32), nil
 }
 
 func (e *K8sExecutor) rollbackDeployment(ctx context.Context, namespace, name string) (string, error) {
@@ -160,8 +162,6 @@ func (e *K8sExecutor) rollbackDeployment(ctx context.Context, namespace, name st
 }
 
 func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string, params map[string]string) (string, error) {
-	// Build container resource patch
-	// Expected params: container, cpu_request, cpu_limit, memory_request, memory_limit
 	container := params["container"]
 	if container == "" {
 		container = name
@@ -171,11 +171,40 @@ func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string
 		return "", fmt.Errorf("patch_resources requires at least one resource parameter")
 	}
 
-	patchJSON := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":%q,"resources":%s}]}}}}`,
-		container, resourcePatchValue(params))
+	deployment, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
+	}
+	found := false
+	for _, c := range deployment.Spec.Template.Spec.Containers {
+		if c.Name == container {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("container %q not found in deployment %s/%s", container, namespace, name)
+	}
 
-	_, err := e.clientset.AppsV1().Deployments(namespace).Patch(
-		ctx, name, types.StrategicMergePatchType, []byte(patchJSON), metav1.PatchOptions{})
+	resources := resourceParams(params)
+	patch := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []map[string]interface{}{
+						{"name": container, "resources": resources},
+					},
+				},
+			},
+		},
+	}
+	patchJSON, err := json.Marshal(patch)
+	if err != nil {
+		return "", fmt.Errorf("marshal patch: %w", err)
+	}
+
+	_, err = e.clientset.AppsV1().Deployments(namespace).Patch(
+		ctx, name, types.StrategicMergePatchType, patchJSON, metav1.PatchOptions{})
 	if err != nil {
 		return "", fmt.Errorf("patch resources for deployment %s/%s container %s: %w", namespace, name, container, err)
 	}

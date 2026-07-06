@@ -2,6 +2,7 @@ package gate
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,18 +55,21 @@ type entityHistory struct {
 	lastPassedScores []float64
 }
 
+// Stats tracks gate evaluation counters since process start.
+type Stats struct {
+	Observed uint64
+	Passed   uint64
+	Dropped  uint64
+}
+
 // AnomalyGate filters anomalies based on sustainment, correlation, and bypass rules.
 type AnomalyGate struct {
-	// config holds the gate configuration
-	config Config
-	// history tracks score history per entity
-	history map[string]*entityHistory
-	// cooldowns tracks when entities are in cooldown period
+	config    Config
+	history   map[string]*entityHistory
 	cooldowns map[string]time.Time
-	// metrics tracks metric timestamps per entity for correlation detection
-	metrics map[string]map[string]time.Time
-	// mu protects concurrent access to the gate's state
-	mu sync.Mutex
+	metrics   map[string]map[string]time.Time
+	stats     Stats
+	mu        sync.Mutex
 }
 
 // NewGate creates a new AnomalyGate with the given config.
@@ -92,10 +96,19 @@ func NewGate(config Config) *AnomalyGate {
 	}
 
 	return &AnomalyGate{
-		config:   config,
-		history:  make(map[string]*entityHistory),
+		config:    config,
+		history:   make(map[string]*entityHistory),
 		cooldowns: make(map[string]time.Time),
 		metrics:   make(map[string]map[string]time.Time),
+	}
+}
+
+// StatsSnapshot returns a copy of gate counters.
+func (g *AnomalyGate) StatsSnapshot() Stats {
+	return Stats{
+		Observed: atomic.LoadUint64(&g.stats.Observed),
+		Passed:   atomic.LoadUint64(&g.stats.Passed),
+		Dropped:  atomic.LoadUint64(&g.stats.Dropped),
 	}
 }
 
@@ -142,6 +155,7 @@ func (g *AnomalyGate) ObserveScore(entity string, metricName string, score float
 		}
 	}
 	g.recordSustainmentScore(hKey, score, now)
+	atomic.AddUint64(&g.stats.Observed, 1)
 	g.pruneStaleLocked(now, now.Add(-24*time.Hour))
 }
 
@@ -177,6 +191,11 @@ func (g *AnomalyGate) pruneStaleLocked(now, cutoff time.Time) {
 
 func (g *AnomalyGate) recordSustainmentScore(hKey string, score float64, now time.Time) {
 	history := g.history[hKey]
+	if score < g.config.Threshold {
+		history.scores = make([]float64, 0)
+		history.lastSeen = now
+		return
+	}
 	if now.Sub(history.lastSeen) > 2*g.config.ScrapeInterval {
 		history.scores = make([]float64, 0)
 	}
@@ -214,40 +233,50 @@ func (g *AnomalyGate) Filter(entity string, metricName string, score float64, re
 	}
 
 	g.recordSustainmentScore(hKey, score, now)
+	atomic.AddUint64(&g.stats.Observed, 1)
 
 	// Rule 1: Pattern bypass
-	if g.config.BypassPatterns && resultType == "pattern" {
+	if g.config.BypassPatterns && (resultType == "pattern" || resultType == "event") {
 		if g.checkCooldownAndRecord(entity, metricName, score, now) {
+			atomic.AddUint64(&g.stats.Passed, 1)
 			return Result{Pass: true, Reason: "pattern_bypass"}
 		}
+		atomic.AddUint64(&g.stats.Dropped, 1)
 		return Result{Pass: false, Reason: "cooldown_active"}
 	}
 
 	// Rule 2: High-score bypass
 	if score >= g.config.HighScoreBypass {
 		if g.checkCooldownAndRecord(entity, metricName, score, now) {
+			atomic.AddUint64(&g.stats.Passed, 1)
 			return Result{Pass: true, Reason: "high_score_bypass"}
 		}
+		atomic.AddUint64(&g.stats.Dropped, 1)
 		return Result{Pass: false, Reason: "cooldown_active"}
 	}
 
 	// Rule 3: Multi-metric correlation
-	if g.isCorrelated(entity, metricName, now) {
+	if score >= g.config.Threshold && g.isCorrelated(entity, metricName, now) {
 		if g.checkCooldownAndRecord(entity, metricName, score, now) {
+			atomic.AddUint64(&g.stats.Passed, 1)
 			return Result{Pass: true, Reason: "multi_metric_correlation"}
 		}
+		atomic.AddUint64(&g.stats.Dropped, 1)
 		return Result{Pass: false, Reason: "cooldown_active"}
 	}
 
 	// Rule 4: Sustainment — use pre-recorded scores from ObserveScore
 	if g.isSustainedFromHistory(hKey) {
 		if g.checkCooldownAndRecord(entity, metricName, score, now) {
+			atomic.AddUint64(&g.stats.Passed, 1)
 			return Result{Pass: true, Reason: "sustainment"}
 		}
+		atomic.AddUint64(&g.stats.Dropped, 1)
 		return Result{Pass: false, Reason: "cooldown_active"}
 	}
 
 	// Default: drop
+	atomic.AddUint64(&g.stats.Dropped, 1)
 	return Result{Pass: false, Reason: "no_rule_triggered"}
 }
 

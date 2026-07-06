@@ -150,6 +150,9 @@ func (s *Store) UpsertOpenAnomaly(r *models.AnomalyRecord) (bool, error) {
 	if existing != nil {
 		existing.Score = r.Score
 		existing.DetectedAt = r.DetectedAt
+		if r.MetricName != "" {
+			existing.MetricName = r.MetricName
+		}
 		if r.Pattern != "" {
 			existing.Pattern = r.Pattern
 		}

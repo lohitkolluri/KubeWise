@@ -225,7 +225,7 @@ func TestPredictorSpikeAfterWarmup(t *testing.T) {
 
 func TestMetricKey(t *testing.T) {
 	key := metricKey("cpu", map[string]string{"pod": "web-1", "namespace": "default"})
-	if key != "cpu/web-1/default" {
+	if key != "cpu/pod=web-1/namespace=default" {
 		t.Fatalf("unexpected key: %s", key)
 	}
 
