@@ -70,7 +70,7 @@ func queries() []promQuery {
 		{Name: "node_load_5m", Query: `node_load5`},
 		{Name: "deployment_replicas_unavailable", Query: `kube_deployment_status_replicas_unavailable`},
 		{Name: "tcp_retransmit_rate", Query: `rate(node_netstat_Tcp_RetransSegs[5m])`},
-		{Name: "dns_failure_rate", Query: `rate(node_netstat_Tcp_RetransSegs[5m])`},
+		{Name: "dns_failure_rate", Query: `rate(coredns_dns_responses_total{rcode="SERVFAIL"}[5m])`},
 		{Name: "node_disk_usage", Query: `(1 - node_filesystem_free_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100`},
 		{Name: "cpu_throttled", Query: `rate(container_cpu_cfs_throttled_seconds_total{container!=""}[5m])`},
 		{Name: "network_errors", Query: `rate(container_network_receive_errors_total[5m])`},
@@ -93,9 +93,9 @@ func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResul
 		}
 		results = append(results, result)
 
-		// Persist to store
+		// Persist to store with labels for per-entity history
 		for _, pt := range result.Values {
-			if err := c.store.AppendMetric(result.Name, pt.Value, pt.Timestamp); err != nil {
+			if err := c.store.AppendMetricSeries(result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
 				fmt.Printf("store: append metric %q failed: %v\n", result.Name, err)
 			}
 		}
@@ -113,7 +113,7 @@ func (c *PrometheusCollector) CollectQuery(ctx context.Context, name, query stri
 		return nil, err
 	}
 	for _, pt := range result.Values {
-		if err := c.store.AppendMetric(result.Name, pt.Value, pt.Timestamp); err != nil {
+		if err := c.store.AppendMetricSeries(result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
 			return nil, fmt.Errorf("store append: %w", err)
 		}
 	}

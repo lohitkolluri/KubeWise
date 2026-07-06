@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	bolt "go.etcd.io/bbolt"
 
@@ -23,7 +24,7 @@ func (s *Store) SaveAnomaly(r *models.AnomalyRecord) error {
 	})
 }
 
-// ListAnomalies returns the most recent anomaly records up to limit.
+// ListAnomalies returns the most recent anomaly records up to limit, ordered by DetectedAt descending.
 func (s *Store) ListAnomalies(limit int) ([]models.AnomalyRecord, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -31,17 +32,38 @@ func (s *Store) ListAnomalies(limit int) ([]models.AnomalyRecord, error) {
 	var records []models.AnomalyRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketAnomalies)
-		c := b.Cursor()
-		for k, v := c.Last(); k != nil && len(records) < limit; k, _ = c.Prev() {
+		return b.ForEach(func(_, v []byte) error {
 			var r models.AnomalyRecord
 			if err := json.Unmarshal(v, &r); err != nil {
-				return fmt.Errorf("unmarshal anomaly %s: %w", k, err)
+				return fmt.Errorf("unmarshal anomaly: %w", err)
 			}
 			records = append(records, r)
-		}
-		return nil
+			return nil
+		})
 	})
-	return records, err
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		ti := records[i].DetectedAt
+		tj := records[j].DetectedAt
+		if ti == nil && tj == nil {
+			return records[i].ID > records[j].ID
+		}
+		if ti == nil {
+			return false
+		}
+		if tj == nil {
+			return true
+		}
+		return ti.After(*tj)
+	})
+
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records, nil
 }
 
 // GetAnomaly retrieves a single anomaly record by ID.

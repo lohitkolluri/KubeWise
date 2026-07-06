@@ -17,57 +17,69 @@ func (o *OOMPattern) Match(metrics []MetricResult, events []models.AnomalyRecord
 		return nil
 	}
 
-	hasOOMEvent := false
-	oomPods := make(map[string]string)
-	for _, ev := range events {
-		if ev.Pattern == "OOMKilled" || ev.Pattern == "OOMKill" {
-			hasOOMEvent = true
-			oomPods[ev.Entity] = ev.Namespace
-		}
-	}
-
-	if !hasOOMEvent {
-		return nil
-	}
-
 	memByEntity := groupByEntity(memResult.Values)
 	var matches []PatternMatch
 
-	for entity, pts := range memByEntity {
+	for entityKey, rawPts := range memByEntity {
+		pts := aggregatePodMemorySeries(rawPts)
 		if len(pts) < 2 {
 			continue
 		}
+
+		namespace := namespaceFromKey(entityKey)
+		entity := entityNameFromKey(entityKey)
+		memLimit := lookupMemLimit(resources, namespace, entity)
+		latestMem := pts[len(pts)-1].Value
+		usageRatio := latestMem / memLimit
+
 		trend := estimateTrend(pts)
-		namespace := ""
-		for _, p := range pts {
-			if ns, ok := p.Labels["namespace"]; ok {
-				namespace = ns
-				break
+		confidence := 0.3 + usageRatio*0.3
+		if trend > 0.05 {
+			confidence += trend * 0.35
+		}
+		if usageRatio > 0.85 {
+			confidence += 0.2
+		} else if usageRatio > 0.7 {
+			confidence += 0.1
+		}
+		if len(pts) >= 3 {
+			acceleration := pts[len(pts)-1].Value/memLimit - pts[len(pts)-2].Value/memLimit
+			if acceleration > 0.02 {
+				confidence += 0.15
 			}
 		}
-
-		confidence := 0.5
-		if trend > 0.05 {
-			confidence = 0.5 + trend*2.0
-		}
-		if _, wasOOM := oomPods[entity]; wasOOM {
-			confidence += 0.2
+		if hasEvent(events, entity, "OOMKilled") || hasEvent(events, entity, "OOMKilling") {
+			confidence += 0.1
 		}
 		if confidence > 0.95 {
 			confidence = 0.95
 		}
 
-		if confidence >= oomMinConfidence {
-			action := "Increase memory limits or reduce memory usage"
+		if confidence >= oomMinConfidence && usageRatio >= 0.6 {
 			matches = append(matches, PatternMatch{
 				Pattern:         "OOMRisk",
 				Confidence:      confidence,
-				SuggestedAction: action,
+				SuggestedAction: "Increase memory limits or reduce memory usage",
 				Entity:          entity,
 				Namespace:       namespace,
-				TimeToFailure:   0,
+				TimeToFailure:   estimateOOMTimeToFailure(ratioSeries(pts, memLimit), usageRatio),
 			})
 		}
 	}
 	return matches
+}
+
+func ratioSeries(pts []MetricPoint, limit float64) []MetricPoint {
+	if limit <= 0 {
+		limit = defaultMemLimitBytes
+	}
+	out := make([]MetricPoint, len(pts))
+	for i, p := range pts {
+		out[i] = MetricPoint{
+			Value:     p.Value / limit,
+			Timestamp: p.Timestamp,
+			Labels:    p.Labels,
+		}
+	}
+	return out
 }

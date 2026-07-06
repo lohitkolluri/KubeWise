@@ -119,7 +119,7 @@ func main() {
 	forecasterAddr := os.Getenv("FORECASTER_ADDR")
 
 	// Create the agent (wraps collector, predictor, LLM, remediation, API server)
-	agt, err := agent.NewAgent(s, cfg.PrometheusAddress, interval, apiKey, cfg.LLMModel, remCfg, forecasterAddr)
+	agt, err := agent.NewAgent(s, cfg, interval, apiKey, cfg.LLMModel, remCfg, forecasterAddr, ":8080")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create agent: %v\n", err)
 		os.Exit(1)

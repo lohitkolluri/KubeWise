@@ -3,6 +3,7 @@ package predictor
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,28 +14,62 @@ import (
 // adaptive-median estimator combined with Hoeffding-bound anomaly scoring and
 // Bayesian Online Changepoint Detection for regime-change adaptation.
 type Predictor struct {
-	estimators   map[string]*AdaptiveMedian
-	changepoints map[string]*ChangepointDetector
-	roc          *RateOfChange
-	scorer       *Scorer
-	config       ScorerConfig
-	mu           sync.RWMutex
-	history      map[string][]MetricPoint
-	datapoints   map[string]int
-	patterns     []PatternMatcher
+	estimators     map[string]*AdaptiveMedian
+	changepoints   map[string]*ChangepointDetector
+	roc            *RateOfChange
+	scorer         *Scorer
+	config         ScorerConfig
+	mu             sync.RWMutex
+	history        map[string][]MetricPoint
+	patternHistory map[string][]MetricPoint
+	datapoints     map[string]int
+	patterns       []PatternMatcher
 }
 
 // NewPredictor creates a Predictor wired with the given scorer configuration.
 func NewPredictor(config ScorerConfig) *Predictor {
 	return &Predictor{
-		estimators:   make(map[string]*AdaptiveMedian),
-		changepoints: make(map[string]*ChangepointDetector),
-		roc:          &RateOfChange{},
-		scorer:       NewScorer(config),
-		config:       config,
-		history:      make(map[string][]MetricPoint),
-		datapoints:   make(map[string]int),
+		estimators:     make(map[string]*AdaptiveMedian),
+		changepoints:   make(map[string]*ChangepointDetector),
+		roc:            &RateOfChange{},
+		scorer:         NewScorer(config),
+		config:         config,
+		history:        make(map[string][]MetricPoint),
+		patternHistory: make(map[string][]MetricPoint),
+		datapoints:     make(map[string]int),
 	}
+}
+
+// PreparePatternMetrics accumulates the current scrape into cross-scrape history
+// and returns enriched metric results for pattern matchers.
+func (p *Predictor) PreparePatternMetrics(metrics []MetricResult) []MetricResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, mr := range metrics {
+		for _, pt := range mr.Values {
+			key := metricKey(mr.Name, pt.Labels)
+			p.patternHistory[key] = append(p.patternHistory[key], pt)
+			if len(p.patternHistory[key]) > maxPatternHistory {
+				p.patternHistory[key] = p.patternHistory[key][len(p.patternHistory[key])-maxPatternHistory:]
+			}
+		}
+	}
+
+	byMetric := make(map[string][]MetricPoint)
+	for key, pts := range p.patternHistory {
+		metricName := key
+		if idx := strings.Index(key, "/"); idx >= 0 {
+			metricName = key[:idx]
+		}
+		byMetric[metricName] = append(byMetric[metricName], pts...)
+	}
+
+	result := make([]MetricResult, 0, len(byMetric))
+	for name, vals := range byMetric {
+		result = append(result, MetricResult{Name: name, Values: vals})
+	}
+	return result
 }
 
 // AddPattern registers a pattern matcher for domain-specific anomaly
@@ -117,7 +152,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- warmup phase ------------------------------------------------------
 			est.Add(pt.Value)
 
-			if dp < MinimumWarmupPoints {
+			if dp < p.config.MinWarmup {
 				continue
 			}
 
@@ -133,7 +168,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			// --- adaptive-median + Hoeffding scoring -------------------------------
 			median, _, rng, n, ok := est.Stats()
-			if !ok || n < MinimumWarmupPoints {
+			if !ok || n < p.config.MinWarmup {
 				continue
 			}
 
@@ -151,7 +186,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				if math.Abs(vel.Slope) > 0 {
 					// Scale-invariant relative slope.
 					relSlope := math.Abs(vel.Slope) / math.Max(math.Abs(median), 1.0)
-					rocBoost = math.Min(relSlope*5.0, 0.3)
+					rocBoost = math.Min(relSlope*5.0, p.config.ROCBoostWeight)
 				}
 			}
 
@@ -160,11 +195,12 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			if score >= 0.3 {
 				results = append(results, models.PredictionResult{
-					Type:      "statistical",
-					Entity:    entityName(mr.Name, pt.Labels),
-					Namespace: pt.Labels["namespace"],
-					Score:     score,
-					Timestamp: time.Now(),
+					Type:       "statistical",
+					Entity:     entityName(mr.Name, pt.Labels),
+					Namespace:  pt.Labels["namespace"],
+					MetricName: mr.Name,
+					Score:      score,
+					Timestamp:  time.Now(),
 				})
 			}
 		}

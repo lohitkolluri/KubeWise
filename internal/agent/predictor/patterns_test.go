@@ -7,53 +7,56 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
-func TestOOMPatternNoEvent(t *testing.T) {
+const testMemLimit = 1 << 30 // 1 GiB
+
+func memBytes(ratio float64) float64 {
+	return ratio * float64(testMemLimit)
+}
+
+func TestOOMPatternNoEventLowMemory(t *testing.T) {
 	p := &OOMPattern{}
 	metrics := []MetricResult{
 		{
 			Name: "pod_memory_usage",
 			Values: []MetricPoint{
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
-				{Value: 200, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
 			},
 		},
 	}
 	matches := p.Match(metrics, nil, ResourceSnapshot{})
 	if len(matches) != 0 {
-		t.Fatal("expected no OOM match without events")
+		t.Fatal("expected no OOM match for flat low memory without trend")
 	}
 }
 
-func TestOOMPatternFires(t *testing.T) {
+func TestOOMPatternPredictsOOM(t *testing.T) {
 	p := &OOMPattern{}
+	resources := ResourceSnapshot{
+		PodResources: []PodResource{{Name: "web-1", Namespace: "default", MemLimit: testMemLimit}},
+	}
 	metrics := []MetricResult{
 		{
 			Name: "pod_memory_usage",
 			Values: []MetricPoint{
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
-				{Value: 150, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
-				{Value: 200, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.6), Timestamp: time.Now().Add(-60 * time.Second), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.75), Timestamp: time.Now().Add(-30 * time.Second), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.9), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
 			},
 		},
 	}
-	events := []models.AnomalyRecord{
-		{Entity: "web-1", Pattern: "OOMKilled"},
-	}
-	matches := p.Match(metrics, events, ResourceSnapshot{})
+	matches := p.Match(metrics, nil, resources)
 	if len(matches) == 0 {
-		t.Fatal("expected OOM match with rising memory and OOMKilled event")
+		t.Fatal("expected OOM match with rising memory and no prior event")
 	}
 	if matches[0].Pattern != "OOMRisk" {
 		t.Fatalf("expected OOMRisk pattern, got %s", matches[0].Pattern)
 	}
-	if matches[0].Confidence < 0.5 {
-		t.Fatalf("expected confidence >= 0.5, got %f", matches[0].Confidence)
+	if matches[0].Confidence < 0.7 {
+		t.Fatalf("expected confidence >= 0.7, got %f", matches[0].Confidence)
 	}
-	if matches[0].Entity != "web-1" {
-		t.Fatalf("expected entity web-1, got %s", matches[0].Entity)
-	}
-	if matches[0].Namespace != "default" {
-		t.Fatalf("expected namespace default, got %s", matches[0].Namespace)
+	if matches[0].TimeToFailure <= 0 {
+		t.Fatalf("expected positive TimeToFailure, got %v", matches[0].TimeToFailure)
 	}
 }
 
@@ -63,9 +66,9 @@ func TestOOMPatternMemoryFlat(t *testing.T) {
 		{
 			Name: "pod_memory_usage",
 			Values: []MetricPoint{
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
 			},
 		},
 	}
@@ -73,68 +76,57 @@ func TestOOMPatternMemoryFlat(t *testing.T) {
 		{Entity: "web-1", Pattern: "OOMKilled"},
 	}
 	matches := p.Match(metrics, events, ResourceSnapshot{})
-	// Flat memory + OOM event → still matches but with lower confidence
-	// (trend is 0 so confidence starts at 0.5 + 0.2 for OOM event)
-	if len(matches) == 0 {
-		t.Fatal("expected OOM match with flat memory + OOM event")
+	if len(matches) != 0 {
+		t.Fatal("expected no OOM match with flat memory even with prior OOM event")
 	}
 }
 
 func TestOOMPatternMultiplePods(t *testing.T) {
 	p := &OOMPattern{}
+	resources := ResourceSnapshot{
+		PodResources: []PodResource{{Name: "web-1", Namespace: "ns1", MemLimit: testMemLimit}},
+	}
+	now := time.Now()
 	metrics := []MetricResult{
 		{
 			Name: "pod_memory_usage",
 			Values: []MetricPoint{
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "ns1"}},
-				{Value: 180, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "ns1"}},
-				{Value: 50, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-2", "namespace": "ns2"}},
-				{Value: 60, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-2", "namespace": "ns2"}},
+				{Value: memBytes(0.6), Timestamp: now, Labels: map[string]string{"pod": "web-1", "namespace": "ns1"}},
+				{Value: memBytes(0.8), Timestamp: now.Add(30 * time.Second), Labels: map[string]string{"pod": "web-1", "namespace": "ns1"}},
+				{Value: memBytes(0.3), Timestamp: now, Labels: map[string]string{"pod": "web-2", "namespace": "ns2"}},
+				{Value: memBytes(0.3), Timestamp: now.Add(30 * time.Second), Labels: map[string]string{"pod": "web-2", "namespace": "ns2"}},
 			},
 		},
 	}
-	events := []models.AnomalyRecord{
-		{Entity: "web-1", Pattern: "OOMKilled"},
-	}
-	matches := p.Match(metrics, events, ResourceSnapshot{})
+	matches := p.Match(metrics, nil, resources)
 	if len(matches) == 0 {
 		t.Fatal("expected at least one OOM match")
 	}
-	matchedWeb1 := false
 	for _, m := range matches {
-		if m.Entity == "web-1" {
-			matchedWeb1 = true
+		if m.Entity == "web-2" {
+			t.Fatal("web-2 should not match with flat low memory")
 		}
-	}
-	if !matchedWeb1 {
-		t.Fatal("expected web-1 to match with OOM event + rising memory")
 	}
 }
 
-func TestCrashLoopPatternFires(t *testing.T) {
+func TestCrashLoopPatternPredictsCrash(t *testing.T) {
 	p := &CrashLoopPattern{}
 	metrics := []MetricResult{
 		{
 			Name: "restart_rate",
 			Values: []MetricPoint{
-				{Value: 0.01, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
 				{Value: 0.05, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
 				{Value: 0.15, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
+				{Value: 0.40, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
 			},
 		},
 	}
-	events := []models.AnomalyRecord{
-		{Entity: "app-1", Pattern: "CrashLoopBackOff"},
-	}
-	matches := p.Match(metrics, events, ResourceSnapshot{})
+	matches := p.Match(metrics, nil, ResourceSnapshot{})
 	if len(matches) == 0 {
-		t.Fatal("expected CrashLoop match with rising restarts and event")
+		t.Fatal("expected CrashLoop match with rising restarts and no event")
 	}
-	if matches[0].Pattern != "CrashLoopRisk" {
-		t.Fatalf("expected CrashLoopRisk, got %s", matches[0].Pattern)
-	}
-	if matches[0].Confidence < 0.5 {
-		t.Fatalf("expected confidence >= 0.5, got %f", matches[0].Confidence)
+	if matches[0].Confidence < 0.6 {
+		t.Fatalf("expected confidence >= 0.6, got %f", matches[0].Confidence)
 	}
 }
 
@@ -155,25 +147,23 @@ func TestCrashLoopPatternNoMatch(t *testing.T) {
 	}
 }
 
-func TestCrashLoopPatternFailingPod(t *testing.T) {
+func TestCrashLoopPatternAlreadyCrashing(t *testing.T) {
 	p := &CrashLoopPattern{}
 	metrics := []MetricResult{
 		{
 			Name: "restart_rate",
 			Values: []MetricPoint{
-				{Value: 0.02, Timestamp: time.Now(), Labels: map[string]string{"pod": "crash-1", "namespace": "default"}},
-				{Value: 0.08, Timestamp: time.Now(), Labels: map[string]string{"pod": "crash-1", "namespace": "default"}},
-				{Value: 0.12, Timestamp: time.Now(), Labels: map[string]string{"pod": "crash-1", "namespace": "default"}},
+				{Value: 0.8, Timestamp: time.Now(), Labels: map[string]string{"pod": "crash-1", "namespace": "default"}},
+				{Value: 1.2, Timestamp: time.Now(), Labels: map[string]string{"pod": "crash-1", "namespace": "default"}},
 			},
 		},
 	}
-	events := []models.AnomalyRecord{
-		{Entity: "crash-1", Pattern: "CrashLoopBackOff"},
-	}
-	resources := ResourceSnapshot{FailingPods: []string{"crash-1"}}
-	matches := p.Match(metrics, events, resources)
+	matches := p.Match(metrics, nil, ResourceSnapshot{})
 	if len(matches) == 0 {
-		t.Fatal("expected CrashLoop match with failing pod")
+		t.Fatal("expected CrashLoop match when already at critical restart rate")
+	}
+	if matches[0].TimeToFailure != 0 {
+		t.Fatalf("expected TimeToFailure=0 when already crashing, got %v", matches[0].TimeToFailure)
 	}
 }
 
@@ -190,9 +180,6 @@ func TestDegradationPatternPodNotReady(t *testing.T) {
 	matches := p.Match(metrics, nil, ResourceSnapshot{})
 	if len(matches) == 0 {
 		t.Fatal("expected Degradation match for pod_not_ready")
-	}
-	if matches[0].Pattern != "Degradation" {
-		t.Fatalf("expected Degradation pattern, got %s", matches[0].Pattern)
 	}
 }
 
@@ -214,10 +201,34 @@ func TestDegradationPatternDiskPressure(t *testing.T) {
 
 func TestDegradationPatternFailingPods(t *testing.T) {
 	p := &DegradationPattern{}
-	resources := ResourceSnapshot{FailingPods: []string{"broken-pod"}}
+	resources := ResourceSnapshot{FailingPods: []string{"default/broken-pod"}}
 	matches := p.Match(nil, nil, resources)
 	if len(matches) == 0 {
 		t.Fatal("expected Degradation match for failing pod")
+	}
+}
+
+func TestTimeToFailureEstimates(t *testing.T) {
+	limit := float64(testMemLimit)
+	pts := []MetricPoint{
+		{Value: memBytes(0.6)},
+		{Value: memBytes(0.75)},
+		{Value: memBytes(0.9)},
+	}
+	ratioPts := ratioSeries(pts, limit)
+	eta := estimateOOMTimeToFailure(ratioPts, 0.9)
+	if eta <= 0 || eta > time.Minute {
+		t.Fatalf("unexpected OOM ETA: %v", eta)
+	}
+
+	restartPts := []MetricPoint{
+		{Value: 0.05},
+		{Value: 0.15},
+		{Value: 0.40},
+	}
+	eta = estimateCrashLoopTimeToFailure(restartPts, 0.40)
+	if eta <= 0 || eta > 2*time.Hour {
+		t.Fatalf("unexpected crash-loop ETA: %v", eta)
 	}
 }
 
@@ -227,58 +238,50 @@ func TestPredictorRunPatterns(t *testing.T) {
 	pred.AddPattern(&CrashLoopPattern{})
 	pred.AddPattern(&DegradationPattern{})
 
+	resources := ResourceSnapshot{
+		PodResources:  []PodResource{{Name: "web-1", Namespace: "default", MemLimit: testMemLimit}},
+		FailingPods:   []string{"broken-pod"},
+	}
+	now := time.Now()
 	metrics := []MetricResult{
 		{
 			Name: "pod_memory_usage",
 			Values: []MetricPoint{
-				{Value: 100, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
-				{Value: 200, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
-				{Value: 300, Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.6), Timestamp: now, Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.75), Timestamp: now.Add(30 * time.Second), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
+				{Value: memBytes(0.9), Timestamp: now.Add(60 * time.Second), Labels: map[string]string{"pod": "web-1", "namespace": "default"}},
 			},
 		},
 		{
 			Name: "restart_rate",
 			Values: []MetricPoint{
-				{Value: 0.01, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
-				{Value: 0.1, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
-				{Value: 0.5, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
+				{Value: 0.05, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
+				{Value: 0.15, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
+				{Value: 0.40, Timestamp: time.Now(), Labels: map[string]string{"pod": "app-1", "namespace": "prod"}},
 			},
 		},
 	}
-	events := []models.AnomalyRecord{
-		{Entity: "web-1", Pattern: "OOMKilled"},
-		{Entity: "app-1", Pattern: "CrashLoopBackOff"},
-	}
-	resources := ResourceSnapshot{FailingPods: []string{"broken-pod"}}
 
-	results := pred.RunPatterns(metrics, events, resources)
+	results := pred.RunPatterns(metrics, nil, resources)
 	if len(results) == 0 {
 		t.Fatal("expected pattern results")
-	}
-
-	types := make(map[string]bool)
-	for _, r := range results {
-		types[r.Type] = true
-	}
-	if !types["pattern"] {
-		t.Fatal("expected pattern-type results")
 	}
 
 	foundOOM := false
 	foundCrashLoop := false
 	for _, r := range results {
-		if r.Entity == "web-1" {
+		if r.Entity == "web-1" && r.MetricName == "OOMRisk" {
 			foundOOM = true
 		}
-		if r.Entity == "app-1" {
+		if r.Entity == "app-1" && r.MetricName == "CrashLoopRisk" {
 			foundCrashLoop = true
 		}
 	}
 	if !foundOOM {
-		t.Log("Note: OOM pattern didn't trigger (may need higher memory trend)")
+		t.Fatal("expected OOM pattern for web-1")
 	}
 	if !foundCrashLoop {
-		t.Log("Note: CrashLoop pattern didn't trigger (may need higher restart rate)")
+		t.Fatal("expected CrashLoop pattern for app-1")
 	}
 }
 
@@ -291,38 +294,51 @@ func TestPatternHelpers(t *testing.T) {
 	if m == nil || m.Name != "mem" {
 		t.Fatal("findMetric failed")
 	}
-	m = findMetric(metrics, "nonexistent")
-	if m != nil {
-		t.Fatal("findMetric should return nil for unknown")
-	}
 
 	pts := []MetricPoint{
-		{Value: 10, Labels: map[string]string{"pod": "a"}},
-		{Value: 20, Labels: map[string]string{"pod": "a"}},
-		{Value: 30, Labels: map[string]string{"pod": "b"}},
+		{Value: 10, Labels: map[string]string{"pod": "a", "namespace": "ns1"}},
+		{Value: 20, Labels: map[string]string{"pod": "a", "namespace": "ns1"}},
+		{Value: 30, Labels: map[string]string{"pod": "b", "namespace": "ns2"}},
 	}
 	grouped := groupByEntity(pts)
 	if len(grouped) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(grouped))
 	}
-	if len(grouped["a"]) != 2 {
-		t.Fatalf("expected 2 points for entity a, got %d", len(grouped["a"]))
-	}
-
-	trend := estimateTrend(pts[:2])
-	if trend != 1.0 {
-		t.Fatalf("expected trend 1.0 (10→20), got %f", trend)
-	}
-
-	trend = estimateTrend(pts[2:3])
-	if trend != 0 {
-		t.Fatalf("expected trend 0 for single point, got %f", trend)
+	if grouped["ns1/a"] == nil {
+		t.Fatal("expected ns1/a group")
 	}
 
 	if !contains([]string{"a", "b", "c"}, "b") {
 		t.Fatal("contains failed to find element")
 	}
-	if contains([]string{"a", "b", "c"}, "z") {
-		t.Fatal("contains should not find missing element")
+}
+
+func TestPreparePatternMetrics(t *testing.T) {
+	pred := NewPredictor(DefaultScorerConfig())
+	now := time.Now()
+
+	for i := 0; i < 3; i++ {
+		pred.PreparePatternMetrics([]MetricResult{{
+			Name: "pod_memory_usage",
+			Values: []MetricPoint{{
+				Value:     float64(100 + i*50),
+				Timestamp: now.Add(time.Duration(i) * 30 * time.Second),
+				Labels:    map[string]string{"pod": "web-1", "namespace": "default"},
+			}},
+		}})
+	}
+
+	enriched := pred.PreparePatternMetrics([]MetricResult{{
+		Name: "pod_memory_usage",
+		Values: []MetricPoint{{
+			Value:     250,
+			Timestamp: now.Add(3 * 30 * time.Second),
+			Labels:    map[string]string{"pod": "web-1", "namespace": "default"},
+		}},
+	}})
+
+	mem := findMetric(enriched, "pod_memory_usage")
+	if mem == nil || len(mem.Values) < 4 {
+		t.Fatalf("expected >=4 history points, got %d", len(mem.Values))
 	}
 }

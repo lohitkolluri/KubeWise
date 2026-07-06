@@ -2,6 +2,15 @@ package models
 
 import "time"
 
+// Anomaly status constants.
+const (
+	AnomalyStatusDetected   = "detected"
+	AnomalyStatusActive     = "active"
+	AnomalyStatusCorrelated = "correlated"
+	AnomalyStatusRemediated = "remediated"
+	AnomalyStatusResolved   = "resolved"
+)
+
 // AnomalyRecord represents a detected anomaly in the cluster.
 type AnomalyRecord struct {
 	ID           string     `json:"id"`
