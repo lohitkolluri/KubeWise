@@ -50,8 +50,11 @@ Thumbs.db
 /kwctl
 /bin/
 
+# Local secrets (never commit)
+manifests/base/15-secret.yaml
+
 # MongoDB
 data/db/
 
 # Jupyter
-.ipynb_checkpoints 
+.ipynb_checkpoints

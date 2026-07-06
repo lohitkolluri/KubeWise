@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kubewise-agent
+  namespace: kubewise
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: agent
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubewise
+      app.kubernetes.io/component: agent

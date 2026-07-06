@@ -1,33 +1,42 @@
 #!/usr/bin/env bash
+# Bootstrap a local kind cluster with Prometheus and KubeWise.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/lib.sh
+source "${SCRIPT_DIR}/../scripts/lib.sh"
 
 KIND_CLUSTER="${KIND_CLUSTER:-kubewise}"
 PROMETHEUS_NAMESPACE="${PROMETHEUS_NAMESPACE:-monitoring}"
+OVERLAY="${OVERLAY:-dev}"
 
-echo "=== Creating kind cluster: ${KIND_CLUSTER} ==="
-kind create cluster --name "${KIND_CLUSTER}" --config - <<EOF
+require_cmd kind kubectl helm
+
+if kind get clusters 2>/dev/null | grep -qx "${KIND_CLUSTER}"; then
+  warn "kind cluster ${KIND_CLUSTER} already exists — skipping create"
+else
+  log "creating kind cluster ${KIND_CLUSTER}"
+  kind create cluster --name "${KIND_CLUSTER}" --config - <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
   - role: worker
 EOF
+fi
 
-echo "=== Installing Prometheus (kube-prometheus-stack) ==="
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+log "installing kube-prometheus-stack"
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
 helm repo update
-
 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   --namespace "${PROMETHEUS_NAMESPACE}" \
   --create-namespace \
   --wait \
   --timeout 10m
 
-echo "=== Deploying KubeWise agent ==="
-kubectl apply -f manifests/
+kubectl_apply_manifests "${OVERLAY}"
+kubectl -n "${KUBEWISE_NAMESPACE:-kubewise}" wait --for=condition=Available deployment/kubewise-agent --timeout=180s
 
-echo "=== Waiting for agent deployment to be ready ==="
-kubectl -n kubewise wait --for=condition=Available deployment/kubewise-agent --timeout=120s
-
-echo "=== Done ==="
-echo "Run: kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080"
+log "cluster ready"
+log "next: make deploy-dev   # build + load images + rollout"
+log "      make port-forward  # localhost:8080"

@@ -1,0 +1,17 @@
+.git
+.github
+bin/
+*.md
+designs/
+hack/
+manifests/
+.omo/
+.env
+.env.*
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/*.test
+**/*_test.go
+agent
+kwctl
