@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 860" fill="none" font-family="Inter, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#ef4444"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="860" fill="#ffffff"/>
+  <text x="600" y="44" text-anchor="middle" font-size="28" font-weight="600" fill="#0f172a">KubeWise Architecture</text>
+  <text x="600" y="72" text-anchor="middle" font-size="16" fill="#64748b">predictive monitoring and remediation</text>
+  <rect x="48" y="100" width="220" height="460" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="158" y="124" text-anchor="middle" font-size="14" fill="#64748b">Operator</text>
+  <rect x="78" y="200" width="160" height="88" rx="10" fill="#ffffff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="158" y="248" text-anchor="middle" font-size="18" font-weight="600" fill="#0f172a">kwctl</text>
+  <text x="158" y="310" text-anchor="middle" font-size="14" fill="#64748b">CLI / TUI control center</text>
+  <rect x="300" y="100" width="852" height="680" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="726" y="124" text-anchor="middle" font-size="14" fill="#64748b">Kubernetes Cluster</text>
+  <rect x="332" y="148" width="788" height="96" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="352" y="172" font-size="14" fill="#64748b">Data Sources</text>
+  <rect x="400" y="180" width="148" height="48" rx="8" fill="#fff7ed" stroke="#f97316"/>
+  <text x="474" y="210" text-anchor="middle" font-size="16" fill="#0f172a">Prometheus</text>
+  <rect x="580" y="180" width="148" height="48" rx="8" fill="#fff7ed" stroke="#f97316"/>
+  <text x="654" y="210" text-anchor="middle" font-size="16" fill="#0f172a">Kubernetes API</text>
+  <rect x="332" y="268" width="788" height="488" rx="12" fill="#ffffff" stroke="#a78bfa" stroke-width="2"/>
+  <text x="352" y="294" font-size="14" fill="#7c3aed">kubewise-agent pod</text>
+  <rect x="352" y="312" width="150" height="28" rx="6" fill="#f1f5f9"/>
+  <text x="362" y="331" font-size="14" fill="#475569">Go Agent Pipeline</text>
+  <rect x="360" y="360" width="120" height="56" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="420" y="393" text-anchor="middle" font-size="16" fill="#0f172a">Collect</text>
+  <rect x="508" y="360" width="120" height="56" rx="8" fill="#f0fdfa" stroke="#14b8a6"/>
+  <text x="568" y="393" text-anchor="middle" font-size="16" fill="#0f172a">Store</text>
+  <rect x="656" y="360" width="120" height="56" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="716" y="393" text-anchor="middle" font-size="16" fill="#0f172a">Predict</text>
+  <rect x="804" y="360" width="120" height="56" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="864" y="393" text-anchor="middle" font-size="16" fill="#0f172a">Gate</text>
+  <rect x="360" y="480" width="120" height="56" rx="8" fill="#f0fdf4" stroke="#22c55e"/>
+  <text x="420" y="513" text-anchor="middle" font-size="16" fill="#0f172a">HTTP API</text>
+  <rect x="804" y="480" width="120" height="56" rx="8" fill="#fef2f2" stroke="#ef4444"/>
+  <text x="864" y="513" text-anchor="middle" font-size="16" fill="#0f172a">Remediate</text>
+  <rect x="508" y="600" width="140" height="56" rx="8" fill="#fdf4ff" stroke="#d946ef"/>
+  <text x="578" y="633" text-anchor="middle" font-size="16" fill="#0f172a">Forecaster</text>
+  <rect x="756" y="600" width="140" height="56" rx="8" fill="#fff7ed" stroke="#f97316"/>
+  <text x="826" y="633" text-anchor="middle" font-size="16" fill="#0f172a">OpenRouter LLM</text>
+  <path d="M474 228 L474 360 L480 360" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M654 228 L654 308 L420 308 L420 360" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="480" y1="388" x2="508" y2="388" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="628" y1="388" x2="656" y2="388" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="776" y1="388" x2="804" y2="388" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M568 416 L568 480 L420 480" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="568" y1="416" x2="568" y2="600" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="578" y1="600" x2="578" y2="416" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <line x1="864" y1="416" x2="864" y2="480" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M756 628 L804 628 L804 536" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M924 508 L964 508 L964 228 L728 228" stroke="#ef4444" stroke-width="1.5" fill="none" marker-end="url(#arrow-red)"/>
+  <path d="M238 244 L360 244 L360 508" stroke="#3b82f6" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <path d="M238 260 L580 260 L580 228" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="6 4" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="332" y="780" width="788" height="40" rx="8" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <text x="726" y="805" text-anchor="middle" font-size="14" fill="#475569">every ~30s: collect ’ predict ’ gate ’ store ’ forecast ’ remediate</text>
+</svg>

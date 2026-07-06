@@ -12,11 +12,73 @@ const (
 	RiskTier4 RiskTier = "T4" // Always rejected
 )
 
+// RunbookStep is one ordered remediation action in a multi-step runbook.
+type RunbookStep struct {
+	Order       int               `json:"order"`
+	Type        string            `json:"type"`
+	Target      string            `json:"target"`
+	Namespace   string            `json:"namespace"`
+	Parameters  map[string]string `json:"parameters,omitempty"`
+	Rationale   string            `json:"rationale"`
+	WaitSeconds int               `json:"wait_seconds,omitempty"`
+}
+
+// VerificationCheck asserts post-remediation health.
+type VerificationCheck struct {
+	Type       string            `json:"type"`
+	Target     string            `json:"target"`
+	Namespace  string            `json:"namespace"`
+	Parameters map[string]string `json:"parameters,omitempty"`
+}
+
+// VerificationPlan describes how to confirm remediation worked.
+type VerificationPlan struct {
+	Checks      []VerificationCheck `json:"checks"`
+	WaitSeconds int                 `json:"wait_seconds,omitempty"`
+}
+
+// InvestigationContext is gathered from the cluster before LLM analysis (not LLM output).
+type InvestigationContext struct {
+	Summary string `json:"summary"`
+}
+
 // RemediationPlan is the structured output from the LLM correlator.
 type RemediationPlan struct {
-	Diagnosis Diagnosis `json:"diagnosis"`
-	Action    Action    `json:"action"`
-	Risk      Risk      `json:"risk"`
+	Diagnosis     Diagnosis            `json:"diagnosis"`
+	Action        Action               `json:"action"`
+	Steps         []RunbookStep        `json:"steps,omitempty"`
+	Verification  VerificationPlan     `json:"verification,omitempty"`
+	Investigation InvestigationContext `json:"investigation,omitempty"`
+	Risk          Risk                 `json:"risk"`
+}
+
+// EffectiveSteps returns runbook steps, falling back to the legacy single action.
+func (p RemediationPlan) EffectiveSteps() []RunbookStep {
+	if len(p.Steps) > 0 {
+		return p.Steps
+	}
+	if p.Action.Type == "" {
+		return nil
+	}
+	return []RunbookStep{{
+		Order:      1,
+		Type:       p.Action.Type,
+		Target:     p.Action.Target,
+		Namespace:  p.Action.Namespace,
+		Parameters: p.Action.Parameters,
+		Rationale:  p.Action.Rationale,
+	}}
+}
+
+// StepToAction converts a runbook step to a legacy Action.
+func StepToAction(s RunbookStep) Action {
+	return Action{
+		Type:       s.Type,
+		Target:     s.Target,
+		Namespace:  s.Namespace,
+		Parameters: s.Parameters,
+		Rationale:  s.Rationale,
+	}
 }
 
 // Diagnosis describes what the LLM believes is wrong.
@@ -59,31 +121,34 @@ type RemediationAction struct {
 type AuditStatus string
 
 const (
-	AuditApproved  AuditStatus = "approved"
-	AuditRejected  AuditStatus = "rejected"
-	AuditExecuted  AuditStatus = "executed"
-	AuditFailed    AuditStatus = "failed"
-	AuditDryRun    AuditStatus = "dry_run"
-	AuditEscalated AuditStatus = "escalated"
-	AuditPending   AuditStatus = "pending_approval"
+	AuditApproved     AuditStatus = "approved"
+	AuditRejected     AuditStatus = "rejected"
+	AuditExecuted     AuditStatus = "executed"
+	AuditFailed       AuditStatus = "failed"
+	AuditDryRun       AuditStatus = "dry_run"
+	AuditEscalated    AuditStatus = "escalated"
+	AuditPending      AuditStatus = "pending_approval"
+	AuditVerified     AuditStatus = "verified"
+	AuditVerifyFailed AuditStatus = "verify_failed"
 )
 
 // AuditRecord stores every remediation decision for observability.
 type AuditRecord struct {
-	ID          string          `json:"id"`
-	AnomalyID   string          `json:"anomaly_id,omitempty"`
-	AnomalyIDs  []string        `json:"anomaly_ids,omitempty"`
-	Plan        RemediationPlan `json:"plan"`
-	RiskTier    RiskTier        `json:"risk_tier"`
-	Status      AuditStatus     `json:"status"`
-	Reason      string          `json:"reason,omitempty"`
-	Prompt      string          `json:"prompt,omitempty"`
-	LLMResponse string          `json:"llm_response,omitempty"`
-	K8sResult   string          `json:"k8s_result,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	ExecutedAt  *time.Time      `json:"executed_at,omitempty"`
-	VerifiedAt  *time.Time      `json:"verified_at,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	ID               string          `json:"id"`
+	AnomalyID        string          `json:"anomaly_id,omitempty"`
+	AnomalyIDs       []string        `json:"anomaly_ids,omitempty"`
+	Plan             RemediationPlan `json:"plan"`
+	RiskTier         RiskTier        `json:"risk_tier"`
+	Status           AuditStatus     `json:"status"`
+	Reason           string          `json:"reason,omitempty"`
+	Prompt           string          `json:"prompt,omitempty"`
+	LLMResponse      string          `json:"llm_response,omitempty"`
+	K8sResult        string          `json:"k8s_result,omitempty"`
+	VerificationNote string          `json:"verification_note,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	ExecutedAt       *time.Time      `json:"executed_at,omitempty"`
+	VerifiedAt       *time.Time      `json:"verified_at,omitempty"`
+	Error            string          `json:"error,omitempty"`
 }
 
 // CooldownState tracks per-(namespace, action) cooldowns for T2 actions.

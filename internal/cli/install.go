@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultInstallRef     = "v2"
+	defaultInstallRef     = "main"
 	defaultInstallOverlay = "install"
 )
 

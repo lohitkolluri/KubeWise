@@ -85,6 +85,38 @@ func normalizePlan(plan *models.RemediationPlan, anomalies []models.AnomalyRecor
 	if plan.Risk.EstimatedTimeToResolve == "" {
 		plan.Risk.EstimatedTimeToResolve = "2m"
 	}
+
+	normalizeRunbookSteps(plan, anomalies)
+	syncActionFromSteps(plan)
+}
+
+func normalizeRunbookSteps(plan *models.RemediationPlan, anomalies []models.AnomalyRecord) {
+	if len(plan.Steps) == 0 {
+		return
+	}
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		if step.Order == 0 {
+			step.Order = i + 1
+		}
+		if step.Type == waitActionType {
+			continue
+		}
+		step.Type = normalizeActionType(step.Type, step.Target)
+		step.Target = cleanTargetName(step.Target)
+		step.Namespace = strings.TrimSpace(step.Namespace)
+		if step.Namespace == "" {
+			step.Namespace = plan.Action.Namespace
+		}
+		if isGenericTarget(step.Target) {
+			if ns, name := inferTargetFromAnomalies(anomalies, step.Namespace); name != "" {
+				if step.Namespace == "" {
+					step.Namespace = ns
+				}
+				step.Target = name
+			}
+		}
+	}
 }
 
 func normalizeActionType(actionType, target string) string {

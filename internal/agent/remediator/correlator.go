@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,8 @@ type Correlator struct {
 	llmClient    *llm.Client
 	tierAssigner *TierAssigner
 	executor     *K8sExecutor
+	investigator *Investigator
+	verifier     *Verifier
 	store        *store.Store
 	cfg          RemediationConfig
 	mu           sync.RWMutex
@@ -65,9 +68,25 @@ func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store,
 		llmClient:    llmClient,
 		tierAssigner: NewTierAssigner(5 * time.Minute),
 		executor:     executor,
+		investigator: newInvestigatorFromExecutor(executor),
+		verifier:     newVerifierFromExecutor(executor),
 		store:        s,
 		cfg:          cfg,
 	}
+}
+
+func newInvestigatorFromExecutor(exec *K8sExecutor) *Investigator {
+	if exec == nil {
+		return nil
+	}
+	return NewInvestigator(exec.Clientset())
+}
+
+func newVerifierFromExecutor(exec *K8sExecutor) *Verifier {
+	if exec == nil {
+		return nil
+	}
+	return NewVerifier(exec.Clientset())
 }
 
 // RunOnce executes one remediation cycle: fetch anomalies, correlate via LLM, execute.
@@ -100,7 +119,17 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
 
 	metricsSummary := c.buildMetricsSummary(correlatable)
-	userPrompt := llm.BuildUserPrompt(correlatable, metricsSummary)
+	investigation := ""
+	if c.investigator != nil {
+		invCtx, invCancel := gatherTimeout(ctx)
+		investigation = c.investigator.Gather(invCtx, correlatable)
+		invCancel()
+		if investigation != "" {
+			log.Printf("remediator: gathered cluster investigation context (%d bytes)", len(investigation))
+		}
+	}
+
+	userPrompt := llm.BuildUserPrompt(correlatable, metricsSummary, investigation)
 	systemPrompt := llm.SystemPrompt()
 	schema := llm.RemediationSchema()
 
@@ -110,19 +139,21 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	}
 
 	normalizePlan(&plan, correlatable)
+	plan.Investigation = models.InvestigationContext{Summary: investigation}
 
-	if err := c.validatePlan(plan, correlatable); err != nil {
+	if err := validateRunbookSteps(plan, correlatable, c.cfg); err != nil {
 		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
 		return fmt.Errorf("plan validation: %w", err)
 	}
 
-	tier := c.tierAssigner.AssignTier(plan)
-	log.Printf("remediator: plan action=%s target=%s/%s tier=%s confidence=%.2f",
-		plan.Action.Type, plan.Action.Namespace, plan.Action.Target, tier, plan.Diagnosis.Confidence)
+	tier := c.tierAssigner.AssignTierPlan(plan)
+	steps := plan.EffectiveSteps()
+	log.Printf("remediator: plan steps=%d primary=%s target=%s/%s tier=%s confidence=%.2f",
+		len(steps), plan.Action.Type, plan.Action.Namespace, plan.Action.Target, tier, plan.Diagnosis.Confidence)
 
 	matched := c.anomaliesMatchingPlan(correlatable, plan)
 
-	reason := c.gateByTier(tier, plan)
+	reason := c.gateByTierPlan(tier, plan)
 	if reason != "" {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, reason, userPrompt, "")
 		log.Printf("remediator: rejected - %s", reason)
@@ -151,9 +182,9 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	}
 
 	if c.cfg.DryRun {
-		log.Printf("remediator: [dry-run] would execute %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+		log.Printf("remediator: [dry-run] would execute %d-step runbook on %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
-		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode", userPrompt, "")
+		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode", userPrompt, c.dryRunSummary(plan))
 		return nil
 	}
 
@@ -166,18 +197,84 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	result, err := c.executor.Execute(ctx, plan)
 	if err != nil {
 		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), userPrompt, result)
-		return fmt.Errorf("execute %s: %w", plan.Action.Type, err)
+		return fmt.Errorf("execute runbook: %w", err)
 	}
 
 	if tier == models.RiskTier2 {
-		c.tierAssigner.SetCooldown(plan.Action.Namespace, plan.Action.Type)
+		for _, step := range steps {
+			if step.Type != waitActionType {
+				c.tierAssigner.SetCooldown(step.Namespace, step.Type)
+			}
+		}
 	}
 
 	now := time.Now()
-	c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
-	c.logAudit(&plan, matched, tier, models.AuditExecuted, reason, userPrompt, result)
-	log.Printf("remediator: executed %s %s/%s: %s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target, result)
+	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
+	if verifyNote == "" {
+		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
+		c.logAuditVerified(&plan, matched, tier, reason, userPrompt, result, verifyNote, &now)
+		log.Printf("remediator: executed and verified %d-step runbook %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
+	} else {
+		c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
+		c.logAudit(&plan, matched, tier, models.AuditVerifyFailed, verifyNote, userPrompt, result)
+		log.Printf("remediator: executed runbook but verification failed: %s", verifyNote)
+	}
 	return nil
+}
+
+func (c *Correlator) dryRunSummary(plan models.RemediationPlan) string {
+	steps := plan.EffectiveSteps()
+	var parts []string
+	for i, s := range steps {
+		if s.Type == waitActionType {
+			parts = append(parts, fmt.Sprintf("[dry-run] step %d: wait", i+1))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("[dry-run] step %d: %s %s/%s", i+1, s.Type, s.Namespace, s.Target))
+	}
+	if len(plan.Verification.Checks) > 0 || plan.Verification.WaitSeconds > 0 {
+		parts = append(parts, "[dry-run] would run post-remediation verification")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (c *Correlator) verifyAfterRemediation(ctx context.Context, plan models.RemediationPlan, execResult string) string {
+	if plan.Action.Type == "noop" || plan.Action.Type == "escalate" {
+		return ""
+	}
+	if c.verifier == nil {
+		return "verifier unavailable"
+	}
+	if err := c.verifier.Verify(ctx, plan); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func (c *Correlator) logAuditVerified(plan *models.RemediationPlan, anomalies []models.AnomalyRecord, tier models.RiskTier, reason, prompt, k8sResult, verifyNote string, verifiedAt *time.Time) {
+	now := time.Now()
+	anomalyIDs := make([]string, 0, len(anomalies))
+	for _, a := range anomalies {
+		anomalyIDs = append(anomalyIDs, a.ID)
+	}
+	record := &models.AuditRecord{
+		ID:               shortID(),
+		AnomalyIDs:       anomalyIDs,
+		Plan:             *plan,
+		RiskTier:         tier,
+		Status:           models.AuditVerified,
+		Reason:           reason,
+		Prompt:           prompt,
+		LLMResponse:      fmt.Sprintf("%+v", *plan),
+		K8sResult:        k8sResult,
+		VerificationNote: verifyNote,
+		CreatedAt:        now,
+		ExecutedAt:       verifiedAt,
+		VerifiedAt:       verifiedAt,
+	}
+	if err := c.store.SaveAuditRecord(record); err != nil {
+		log.Printf("remediator: failed to save audit record: %v", err)
+	}
 }
 
 func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord) []models.AnomalyRecord {
@@ -395,17 +492,18 @@ func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalies []models.A
 		anomalyIDs = append(anomalyIDs, a.ID)
 	}
 	record := &models.AuditRecord{
-		ID:          shortID(),
-		AnomalyID:   "",
-		AnomalyIDs:  anomalyIDs,
-		Plan:        *plan,
-		RiskTier:    tier,
-		Status:      status,
-		Reason:      reason,
-		Prompt:      prompt,
-		LLMResponse: fmt.Sprintf("%+v", *plan),
-		K8sResult:   k8sResult,
-		CreatedAt:   now,
+		ID:               shortID(),
+		AnomalyID:        "",
+		AnomalyIDs:       anomalyIDs,
+		Plan:             *plan,
+		RiskTier:         tier,
+		Status:           status,
+		Reason:           reason,
+		Prompt:           prompt,
+		LLMResponse:      fmt.Sprintf("%+v", *plan),
+		K8sResult:        k8sResult,
+		VerificationNote: "",
+		CreatedAt:        now,
 	}
 
 	if status == models.AuditExecuted {
