@@ -35,15 +35,15 @@ def _ets_forecast(
     values: list[float],
     horizon: int,
     interval_seconds: float = 15.0,
-) -> tuple[list[float], list[float], list[float], str]:
+) -> tuple[list[float], list[float], list[float], list[float], str]:
     """Run ETS (Error-Trend-Seasonality) and return forecast + intervals.
 
-    Returns (timestamps, values, lower_bounds, upper_bounds).
+    Returns (timestamps, values, lower_bounds, upper_bounds, error).
     On failure returns empty lists and an error message.
     """
     n = len(values)
     if n < _MIN_SAMPLES:
-        return [], [], [], f"need >= {_MIN_SAMPLES} points, got {n}"
+        return [], [], [], [], f"need >= {_MIN_SAMPLES} points, got {n}"
 
     series = pd.Series(values)
     try:
@@ -83,7 +83,7 @@ def _ets_forecast(
         return timestamps, pred_mean, lower, upper, ""
 
     except Exception as exc:
-        return [], [], [], f"ETS model failed: {exc}"
+        return [], [], [], [], f"ETS model failed: {exc}"
 
 
 def _infer_seasonal_period(n: int) -> int | None:
@@ -152,7 +152,7 @@ async def serve() -> None:
             ("grpc.max_receive_message_length", 10 * 1024 * 1024),
         ],
     )
-    pb2_grpc.register_ForecasterServicer(server, ForecasterServicer())
+    pb2_grpc.add_ForecasterServicer_to_server(ForecasterServicer(), server)
     listen_addr = f"[::]:{_PORT}"
     server.add_insecure_port(listen_addr)
 

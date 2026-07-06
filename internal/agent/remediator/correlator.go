@@ -107,6 +107,8 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("llm correlation: %w", err)
 	}
 
+	normalizePlan(&plan, correlatable)
+
 	if err := c.validatePlan(plan, correlatable); err != nil {
 		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
 		return fmt.Errorf("plan validation: %w", err)
@@ -134,6 +136,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 
 	if c.cfg.DryRun {
 		log.Printf("remediator: [dry-run] would execute %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode", userPrompt, "")
 		return nil
 	}

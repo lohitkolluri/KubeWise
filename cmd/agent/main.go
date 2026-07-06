@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent"
+	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
 	"github.com/lohitkolluri/KubeWise/internal/agent/remediator"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -35,7 +38,7 @@ func loadConfigFile(path string) (*models.AgentConfig, error) {
 		cfg.LLMProvider = "openrouter"
 	}
 	if cfg.LLMModel == "" {
-		cfg.LLMModel = "openrouter/free"
+		cfg.LLMModel = "meta-llama/llama-3.1-8b-instruct"
 	}
 	if cfg.Remediation.Mode == "" {
 		cfg.Remediation.Mode = "dry-run"
@@ -64,7 +67,7 @@ func main() {
 		ScrapeInterval:    "30s",
 		PrometheusAddress: "http://localhost:9090",
 		LLMProvider:       "openrouter",
-		LLMModel:          "openrouter/free",
+		LLMModel:          "meta-llama/llama-3.1-8b-instruct",
 		Remediation: models.RemediationConfig{
 			Mode:   "dry-run",
 			DryRun: true,
@@ -141,7 +144,16 @@ func main() {
 	}
 
 	// Get API key from env
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	if apiKey != "" {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := llm.NewClient(apiKey, cfg.LLMModel).ValidateKey(checkCtx); err != nil {
+			log.Printf("agent: warning: OpenRouter key validation failed: %v", err)
+		} else {
+			log.Printf("agent: OpenRouter API key validated")
+		}
+		cancel()
+	}
 
 	// Optional Tier-2 forecasting sidecar address
 	forecasterAddr := os.Getenv("FORECASTER_ADDR")

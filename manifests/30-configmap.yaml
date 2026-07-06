@@ -9,9 +9,9 @@ metadata:
 data:
   config.yaml: |
     scrape_interval: 30s
-    prometheus_address: http://prometheus-server.monitoring.svc.cluster.local:9090
+    prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
     llm_provider: openrouter
-    llm_model: openrouter/free
+    llm_model: meta-llama/llama-3.1-8b-instruct
     remediation:
       mode: dry-run
       dry_run: true

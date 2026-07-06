@@ -1,151 +1,123 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"strings"
 	"time"
+
+	openrouter "github.com/OpenRouterTeam/go-sdk"
+	"github.com/OpenRouterTeam/go-sdk/models/components"
+	"github.com/OpenRouterTeam/go-sdk/models/operations"
+	"github.com/OpenRouterTeam/go-sdk/optionalnullable"
 )
 
-// Client sends requests to OpenRouter's chat completions API.
+const (
+	defaultModel = "meta-llama/llama-3.1-8b-instruct"
+	appReferer   = "https://github.com/lohitkolluri/KubeWise"
+	appTitle     = "KubeWise"
+)
+
+// Client sends requests to OpenRouter via the official Go SDK.
+// See https://openrouter.ai/docs/client-sdks/go/overview
 type Client struct {
-	apiKey     string
-	model      string
-	httpClient *http.Client
-	endpoint   string
+	sdk    *openrouter.OpenRouter
+	apiKey string
+	model  string
 }
 
 // NewClient creates an OpenRouter LLM client.
 func NewClient(apiKey, model string) *Client {
+	apiKey = strings.TrimSpace(apiKey)
 	if model == "" {
-		model = "openrouter/free"
+		model = defaultModel
 	}
+
+	var sdk *openrouter.OpenRouter
+	if apiKey != "" {
+		sdk = openrouter.New(
+			openrouter.WithSecurity(apiKey),
+			openrouter.WithHTTPReferer(appReferer),
+			openrouter.WithXTitle(appTitle),
+			openrouter.WithTimeout(60*time.Second),
+		)
+	}
+
 	return &Client{
-		apiKey:   apiKey,
-		model:    model,
-		endpoint: "https://openrouter.ai/api/v1/chat/completions",
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		sdk:    sdk,
+		apiKey: apiKey,
+		model:  model,
 	}
+}
+
+// ValidateKey checks the API key against OpenRouter's auth endpoint.
+func (c *Client) ValidateKey(ctx context.Context) error {
+	if c.apiKey == "" {
+		return fmt.Errorf("openrouter API key is empty")
+	}
+	if c.sdk == nil {
+		return fmt.Errorf("openrouter client not initialized")
+	}
+	if !strings.HasPrefix(c.apiKey, "sk-or-") {
+		return fmt.Errorf("openrouter API key should start with sk-or-v1- (create one at https://openrouter.ai/settings/keys)")
+	}
+	if _, err := c.sdk.APIKeys.GetCurrentKeyMetadata(ctx); err != nil {
+		return fmt.Errorf("openrouter auth failed: %w", err)
+	}
+	return nil
 }
 
 // HasAPIKey reports whether an API key is configured.
 func (c *Client) HasAPIKey() bool {
 	return c.apiKey != ""
 }
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// chatRequest is the request body for OpenRouter chat completions.
-type chatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []Message       `json:"messages"`
-	ResponseFormat *responseFormat `json:"response_format,omitempty"`
-	Temperature float64         `json:"temperature"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-}
-
-type responseFormat struct {
-	Type       string          `json:"type"`
-	JSONSchema *jsonSchema     `json:"json_schema,omitempty"`
-}
-
-type jsonSchema struct {
-	Name   string          `json:"name"`
-	Strict bool            `json:"strict"`
-	Schema json.RawMessage `json:"schema"`
-}
-
-// chatResponse is the response body from OpenRouter.
-type chatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-		Code    string `json:"code,omitempty"`
-	} `json:"error,omitempty"`
-}
-
-// chatCompletion sends a chat completion request and returns the response content.
-func (c *Client) chatCompletion(ctx context.Context, req chatRequest) (string, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/lohitkolluri/KubeWise")
-	httpReq.Header.Set("X-Title", "KubeWise")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openrouter API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp chatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if chatResp.Error != nil {
-		return "", fmt.Errorf("openrouter error: %s (code: %s)", chatResp.Error.Message, chatResp.Error.Code)
-	}
-
-	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("openrouter: no choices returned")
-	}
-
-	return chatResp.Choices[0].Message.Content, nil
-}
 
 // StructuredOutput sends a request with a JSON schema constraint and returns the parsed response.
 // The respPtr must be a pointer to a struct matching the schema.
 func (c *Client) StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error {
-	req := chatRequest{
-		Model:       c.model,
-		Temperature: 0.2,
-		MaxTokens:   2000,
-		Messages: []Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userContent},
-		},
-		ResponseFormat: &responseFormat{
-			Type: "json_schema",
-			JSONSchema: &jsonSchema{
-				Name:   "remediation_plan",
-				Strict: true,
-				Schema: schema,
-			},
-		},
+	if c.sdk == nil {
+		return fmt.Errorf("openrouter client not configured")
 	}
 
-	content, err := c.chatCompletion(ctx, req)
+	var schemaMap map[string]any
+	if err := json.Unmarshal(schema, &schemaMap); err != nil {
+		return fmt.Errorf("parse schema: %w", err)
+	}
+
+	strict := true
+	responseFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
+		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
+		JSONSchema: components.ChatJSONSchemaConfig{
+			Name:   "remediation_plan",
+			Strict: optionalnullable.From(&strict),
+			Schema: schemaMap,
+		},
+	})
+
+	res, err := c.sdk.Chat.Send(ctx, components.ChatRequest{
+		Model:          openrouter.Pointer(c.model),
+		Temperature:    optionalnullable.From(openrouter.Pointer(0.2)),
+		MaxTokens:      optionalnullable.From(openrouter.Pointer(int64(2000))),
+		ResponseFormat: &responseFormat,
+		Messages: []components.ChatMessages{
+			components.CreateChatMessagesSystem(components.ChatSystemMessage{
+				Role:    components.ChatSystemMessageRoleSystem,
+				Content: components.CreateChatSystemMessageContentStr(systemPrompt),
+			}),
+			components.CreateChatMessagesUser(components.ChatUserMessage{
+				Role:    components.ChatUserMessageRoleUser,
+				Content: components.CreateChatUserMessageContentStr(userContent),
+			}),
+		},
+	}, nil)
 	if err != nil {
 		return fmt.Errorf("chat completion: %w", err)
+	}
+
+	content, err := extractMessageContent(res)
+	if err != nil {
+		return err
 	}
 
 	if err := json.Unmarshal([]byte(content), respPtr); err != nil {
@@ -153,4 +125,45 @@ func (c *Client) StructuredOutput(ctx context.Context, systemPrompt, userContent
 	}
 
 	return nil
+}
+
+func extractMessageContent(res *operations.SendChatCompletionRequestResponse) (string, error) {
+	if res == nil || res.ChatResult == nil {
+		return "", fmt.Errorf("openrouter: empty response")
+	}
+	choices := res.ChatResult.GetChoices()
+	if len(choices) == 0 {
+		return "", fmt.Errorf("openrouter: no choices returned")
+	}
+
+	msg := choices[0].GetMessage()
+	contentOpt := msg.GetContent()
+	if contentOpt.IsSet() {
+		contentPtr, _ := contentOpt.Get()
+		if contentPtr != nil && contentPtr.Type == components.ChatAssistantMessageContentTypeStr &&
+			contentPtr.Str != nil && *contentPtr.Str != "" {
+			return *contentPtr.Str, nil
+		}
+	}
+
+	// Some models (especially free tier) put JSON in reasoning instead of content.
+	reasoningOpt := msg.GetReasoning()
+	if reasoningOpt.IsSet() {
+		if rp, ok := reasoningOpt.Get(); ok && rp != nil && *rp != "" {
+			if json := extractJSONObject(*rp); json != "" {
+				return json, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("openrouter: empty message content")
+}
+
+func extractJSONObject(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return ""
 }
