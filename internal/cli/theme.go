@@ -57,9 +57,9 @@ var (
 				Bold(true)
 
 	emptyStateStyle = lipgloss.NewStyle().
-				Foreground(colorMuted).
-				Italic(true).
-				Padding(1, 2)
+			Foreground(colorMuted).
+			Italic(true).
+			Padding(1, 2)
 
 	confirmBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

@@ -38,34 +38,34 @@ type Action struct {
 
 // Risk describes the blast radius and reversibility of the action.
 type Risk struct {
-	BlastRadius           string `json:"blast_radius"`
-	Reversible            bool   `json:"reversible"`
+	BlastRadius            string `json:"blast_radius"`
+	Reversible             bool   `json:"reversible"`
 	EstimatedTimeToResolve string `json:"estimated_time_to_resolve"`
 }
 
 // RemediationAction represents an automated remediation action taken or planned.
 type RemediationAction struct {
-	ID          string            `json:"id"`
-	Type        string            `json:"type"`
-	Target      string            `json:"target"`
-	Status      string            `json:"status"`
-	Params      map[string]string `json:"params,omitempty"`
-	ExecutedAt  *time.Time        `json:"executed_at,omitempty"`
-	VerifiedAt  *time.Time        `json:"verified_at,omitempty"`
-	Error       string            `json:"error,omitempty"`
+	ID         string            `json:"id"`
+	Type       string            `json:"type"`
+	Target     string            `json:"target"`
+	Status     string            `json:"status"`
+	Params     map[string]string `json:"params,omitempty"`
+	ExecutedAt *time.Time        `json:"executed_at,omitempty"`
+	VerifiedAt *time.Time        `json:"verified_at,omitempty"`
+	Error      string            `json:"error,omitempty"`
 }
 
 // AuditStatus describes the outcome of a remediation decision.
 type AuditStatus string
 
 const (
-	AuditApproved AuditStatus = "approved"
-	AuditRejected AuditStatus = "rejected"
-	AuditExecuted AuditStatus = "executed"
-	AuditFailed   AuditStatus = "failed"
-	AuditDryRun   AuditStatus = "dry_run"
+	AuditApproved  AuditStatus = "approved"
+	AuditRejected  AuditStatus = "rejected"
+	AuditExecuted  AuditStatus = "executed"
+	AuditFailed    AuditStatus = "failed"
+	AuditDryRun    AuditStatus = "dry_run"
 	AuditEscalated AuditStatus = "escalated"
-	AuditPending  AuditStatus = "pending_approval"
+	AuditPending   AuditStatus = "pending_approval"
 )
 
 // AuditRecord stores every remediation decision for observability.

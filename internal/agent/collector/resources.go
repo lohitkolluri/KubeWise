@@ -54,8 +54,8 @@ type ResourcesCollector struct {
 	nodeInformer cache.Controller
 	depInformer  cache.Controller
 
-	synced        bool
-	syncTimeout   time.Duration
+	synced      bool
+	syncTimeout time.Duration
 }
 
 // NewResourcesCollector creates and starts resource informers.

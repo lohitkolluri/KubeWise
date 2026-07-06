@@ -28,10 +28,10 @@ func SetScrapeInterval(d time.Duration) {
 }
 
 type PodResource struct {
-	Name       string
-	Namespace  string
-	CPULimit   float64
-	MemLimit   float64
+	Name      string
+	Namespace string
+	CPULimit  float64
+	MemLimit  float64
 }
 
 type ResourceSnapshot struct {
@@ -194,7 +194,7 @@ func lookupMemLimit(resources ResourceSnapshot, namespace, pod string) float64 {
 		if pr.Name != pod {
 			continue
 		}
-	if namespace != "" && pr.Namespace != "" && pr.Namespace != namespace {
+		if namespace != "" && pr.Namespace != "" && pr.Namespace != namespace {
 			continue
 		}
 		if namespace == "" && pr.Namespace != "" {

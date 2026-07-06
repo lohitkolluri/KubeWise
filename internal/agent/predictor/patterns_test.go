@@ -239,8 +239,8 @@ func TestPredictorRunPatterns(t *testing.T) {
 	pred.AddPattern(&DegradationPattern{})
 
 	resources := ResourceSnapshot{
-		PodResources:  []PodResource{{Name: "web-1", Namespace: "default", MemLimit: testMemLimit}},
-		FailingPods:   []string{"broken-pod"},
+		PodResources: []PodResource{{Name: "web-1", Namespace: "default", MemLimit: testMemLimit}},
+		FailingPods:  []string{"broken-pod"},
 	}
 	now := time.Now()
 	metrics := []MetricResult{
