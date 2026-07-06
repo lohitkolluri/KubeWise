@@ -98,6 +98,9 @@ func (e *K8sExecutor) scaleReplicas(ctx context.Context, namespace, name string,
 	if _, err := fmt.Sscanf(replicasStr, "%d", &replicas); err != nil {
 		return "", fmt.Errorf("invalid replicas value %q: %w", replicasStr, err)
 	}
+	if replicas < 0 || replicas > 100 {
+		return "", fmt.Errorf("replicas %d out of allowed range [0, 100]", replicas)
+	}
 
 	patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas)
 	_, err := e.clientset.AppsV1().Deployments(namespace).Patch(

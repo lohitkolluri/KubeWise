@@ -44,6 +44,9 @@ const (
 	// DefaultChangepointInterval is how often (in data points) to run the
 	// O(n log n) changepoint detector.
 	DefaultChangepointInterval = 50
+
+	// maxChangepointBuffer caps buffered values to prevent unbounded growth.
+	maxChangepointBuffer = 500
 )
 
 // ---------------------------------------------------------------------------
@@ -219,6 +222,9 @@ func (c *ChangepointDetector) Add(v float64) bool {
 	}()
 
 	c.buffer = append(c.buffer, v)
+	if len(c.buffer) > maxChangepointBuffer {
+		c.buffer = c.buffer[len(c.buffer)-maxChangepointBuffer:]
+	}
 	c.pointsSince++
 
 	if c.pointsSince < c.checkEvery || len(c.buffer) < c.minSegment*3 {

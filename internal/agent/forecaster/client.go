@@ -80,6 +80,16 @@ func NewClient(address string, timeout time.Duration) (*Client, error) {
 
 // Forecast sends metric history to the Python sidecar and returns predictions.
 func (c *Client) Forecast(ctx context.Context, req *ForecastRequest) (*ForecastResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("forecast request is nil")
+	}
+	if len(req.Values) != len(req.Timestamps) {
+		return nil, fmt.Errorf("values and timestamps length mismatch: %d vs %d", len(req.Values), len(req.Timestamps))
+	}
+	if len(req.Values) == 0 {
+		return nil, fmt.Errorf("forecast request has no values")
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -109,6 +119,9 @@ func (c *Client) Forecast(ctx context.Context, req *ForecastRequest) (*ForecastR
 			LowerBound: p.LowerBound,
 			UpperBound: p.UpperBound,
 		})
+	}
+	if resp.Status != "" && resp.Status != "ok" {
+		return resp, fmt.Errorf("forecaster error: %s", resp.ErrorMessage)
 	}
 	return resp, nil
 }

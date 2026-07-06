@@ -36,7 +36,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"uptime":     s.uptime().String(),
 		"started_at": s.startAt.UTC().Format(time.RFC3339),
-		"scrapes":    s.scrapes,
+		"scrapes":    s.scrapes.Load(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -42,6 +42,8 @@ type Agent struct {
 	mu                 sync.Mutex
 	stopOnce           sync.Once
 	stopCh             chan struct{}
+	runCtx             context.Context
+	runCancel          context.CancelFunc
 	k8sCancel          context.CancelFunc
 }
 
@@ -115,6 +117,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		interval:    interval,
 		apiAddr:     apiAddr,
 	}
+	a.runCtx, a.runCancel = context.WithCancel(context.Background())
 
 	if k8s, kerr := k8sclient.NewInCluster(); kerr == nil {
 		cs := k8s.Clientset()
@@ -151,12 +154,6 @@ func (a *Agent) persistEventAnomaly(record collector.EventRecord) {
 	}
 	entity := models.FormatEntity(record.Namespace, name)
 	score := 1.0
-
-	result := a.anomalyGate.Filter(entity, "k8s_event", score, "pattern", now)
-	if !result.Pass {
-		log.Printf("agent: gate dropped k8s event entity=%s reason=%s", entity, result.Reason)
-		return
-	}
 
 	anomaly := &models.AnomalyRecord{
 		ID:         a.nextAnomalyID("event"),
@@ -209,6 +206,9 @@ func (a *Agent) Run() error {
 // Stop signals the agent loop to stop.
 func (a *Agent) Stop() {
 	a.stopOnce.Do(func() {
+		if a.runCancel != nil {
+			a.runCancel()
+		}
 		if a.k8sCancel != nil {
 			a.k8sCancel()
 		}
@@ -289,7 +289,13 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 }
 
 func (a *Agent) runOnce() {
-	scrapeCtx, scrapeCancel := context.WithTimeout(context.Background(), a.interval)
+	select {
+	case <-a.runCtx.Done():
+		return
+	default:
+	}
+
+	scrapeCtx, scrapeCancel := context.WithTimeout(a.runCtx, a.interval)
 	defer scrapeCancel()
 
 	a.mu.Lock()
@@ -298,8 +304,12 @@ func (a *Agent) runOnce() {
 	a.mu.Unlock()
 
 	metrics, err := a.collector.CollectMetrics(scrapeCtx)
-	if err != nil && len(metrics) == 0 {
-		log.Printf("agent[%d]: collect error: %v", scrapeNum, err)
+	if len(metrics) == 0 {
+		if err != nil {
+			log.Printf("agent[%d]: collect failed: %v", scrapeNum, err)
+		} else {
+			log.Printf("agent[%d]: no metrics collected, skipping scrape", scrapeNum)
+		}
 		return
 	}
 	if err != nil {
@@ -322,25 +332,34 @@ func (a *Agent) runOnce() {
 		a.persistPrediction(p, "anomaly", now, scrapeNum)
 	}
 
+	patternCount := 0
 	events, err := a.store.ListAnomalies(20)
 	if err != nil {
-		log.Printf("agent[%d]: list anomalies error: %v", scrapeNum, err)
+		log.Printf("agent[%d]: list anomalies error: %v — skipping pattern pass", scrapeNum, err)
+	} else {
+		enrichedMetrics := a.predictor.PreparePatternMetrics(predMetrics)
+		resources := a.buildResourceSnapshot()
+		patternResults := a.predictor.RunPatterns(enrichedMetrics, events, resources)
+		patternCount = len(patternResults)
+		for _, pr := range patternResults {
+			a.persistPrediction(pr, "pattern", now, scrapeNum)
+		}
 	}
-
-	enrichedMetrics := a.predictor.PreparePatternMetrics(predMetrics)
-	resources := a.buildResourceSnapshot()
-	patternResults := a.predictor.RunPatterns(enrichedMetrics, events, resources)
-	for _, pr := range patternResults {
-		a.persistPrediction(pr, "pattern", now, scrapeNum)
-	}
-
-	log.Printf("agent[%d]: predictions=%d patterns=%d", scrapeNum, len(predictions), len(patternResults))
+	log.Printf("agent[%d]: predictions=%d patterns=%d", scrapeNum, len(predictions), patternCount)
 
 	if a.forecaster != nil && len(metrics) > 0 {
-		a.runForecast(scrapeCtx, metrics, scrapeNum)
+		fcastCtx, fcastCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		a.runForecast(fcastCtx, metrics, scrapeNum)
+		fcastCancel()
 	}
 
-	remCtx, remCancel := context.WithTimeout(context.Background(), remediationTimeout)
+	select {
+	case <-a.runCtx.Done():
+		return
+	default:
+	}
+
+	remCtx, remCancel := context.WithTimeout(a.runCtx, remediationTimeout)
 	defer remCancel()
 	if err := a.correlator.RunOnce(remCtx); err != nil {
 		log.Printf("agent[%d]: remediation error: %v", scrapeNum, err)

@@ -141,9 +141,59 @@ func aggregatePodMemorySeries(pts []MetricPoint) []MetricPoint {
 	return result
 }
 
+func aggregatePodRestartSeries(pts []MetricPoint) []MetricPoint {
+	if len(pts) == 0 {
+		return nil
+	}
+	containers := make(map[string]struct{})
+	for _, p := range pts {
+		if c := p.Labels["container"]; c != "" {
+			containers[c] = struct{}{}
+		}
+	}
+	if len(containers) <= 1 {
+		sorted := make([]MetricPoint, len(pts))
+		copy(sorted, pts)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+		})
+		return sorted
+	}
+
+	byTS := make(map[int64]float64)
+	labels := make(map[string]string)
+	for k, v := range pts[0].Labels {
+		labels[k] = v
+	}
+	for _, p := range pts {
+		ts := p.Timestamp.UnixNano()
+		if p.Value > byTS[ts] {
+			byTS[ts] = p.Value
+		}
+	}
+	result := make([]MetricPoint, 0, len(byTS))
+	for ts, val := range byTS {
+		result = append(result, MetricPoint{
+			Value:     val,
+			Timestamp: time.Unix(0, ts),
+			Labels:    labels,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Timestamp.Before(result[j].Timestamp)
+	})
+	return result
+}
+
 func lookupMemLimit(resources ResourceSnapshot, namespace, pod string) float64 {
 	for _, pr := range resources.PodResources {
-		if pr.Name == pod && (pr.Namespace == namespace || namespace == "") && pr.MemLimit > 0 {
+		if pr.Name != pod {
+			continue
+		}
+		if namespace != "" && pr.Namespace != "" && pr.Namespace != namespace {
+			continue
+		}
+		if pr.MemLimit > 0 {
 			return pr.MemLimit
 		}
 	}
@@ -152,7 +202,19 @@ func lookupMemLimit(resources ResourceSnapshot, namespace, pod string) float64 {
 
 func hasEvent(events []models.AnomalyRecord, entity, pattern string) bool {
 	for _, e := range events {
-		if e.Pattern == pattern && (e.Entity == entity || strings.HasSuffix(e.Entity, "/"+entity)) {
+		if e.Pattern != pattern {
+			continue
+		}
+		eNs, eName := models.ParseEntity(e.Entity)
+		if e.Namespace != "" && eNs == "" {
+			eNs = e.Namespace
+		}
+		aNs, aName := "", entity
+		if idx := strings.LastIndex(entity, "/"); idx >= 0 {
+			aNs = entity[:idx]
+			aName = entity[idx+1:]
+		}
+		if eName == aName && (eNs == "" || aNs == "" || eNs == aNs) {
 			return true
 		}
 	}

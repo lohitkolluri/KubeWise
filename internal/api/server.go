@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -19,7 +20,7 @@ type Server struct {
 	store    Store
 	server   *http.Server
 	startAt  time.Time
-	scrapes  int64
+	scrapes atomic.Int64
 }
 
 func NewServer(store Store, addr string) *Server {
@@ -51,7 +52,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) IncrementScrapes() {
-	s.scrapes++
+	s.scrapes.Add(1)
 }
 
 func (s *Server) uptime() time.Duration {
