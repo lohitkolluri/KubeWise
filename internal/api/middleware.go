@@ -4,18 +4,25 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
-func withMiddleware(next http.Handler) http.Handler {
+func withMiddleware(next http.Handler, apiToken string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+		if apiToken != "" && r.URL.Path != "/health" {
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != apiToken {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+		}
 
+		start := time.Now()
 		lw := &logWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(lw, r)
-
-		duration := time.Since(start)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, lw.status, duration)
+		log.Printf("%s %s %d %s", r.Method, r.URL.Path, lw.status, time.Since(start))
 	})
 }
 
@@ -33,9 +40,26 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("api: json encode error: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func parseLimit(r *http.Request, defaultLimit, maxLimit int) (int, error) {
+	l := r.URL.Query().Get("limit")
+	if l == "" {
+		return defaultLimit, nil
+	}
+	parsed, err := strconv.Atoi(l)
+	if err != nil {
+		return 0, err
+	}
+	if parsed <= 0 || parsed > maxLimit {
+		return 0, strconv.ErrRange
+	}
+	return parsed, nil
 }

@@ -11,9 +11,16 @@ func FormatEntity(namespace, name string) string {
 }
 
 // ParseEntity splits a canonical entity ID into namespace and name.
+// Kind-prefixed forms like Pod/nginx-abc return ("", "nginx-abc").
 func ParseEntity(entity string) (namespace, name string) {
 	if idx := strings.Index(entity, "/"); idx >= 0 {
-		return entity[:idx], entity[idx+1:]
+		left, right := entity[:idx], entity[idx+1:]
+		switch left {
+		case "Pod", "Deployment", "Service", "Node", "ReplicaSet":
+			return "", right
+		default:
+			return left, right
+		}
 	}
 	return "", entity
 }

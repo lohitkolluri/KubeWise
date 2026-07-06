@@ -11,25 +11,25 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(remediationCmd)
+	rootCmd.AddCommand(anomaliesCmd)
 }
 
-var remediationCmd = &cobra.Command{
-	Use:   "remediation",
-	Short: "Show recent remediation actions",
-	Long:  `Fetch and display remediation audit records from the agent.`,
+var anomaliesCmd = &cobra.Command{
+	Use:   "anomalies",
+	Short: "Show detected anomalies",
+	Long:  `Fetch and display anomaly records from the agent.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}
-		body, _, err := agentGet("/api/v1/audit")
+		body, _, err := agentGet("/api/v1/anomalies")
 		if err != nil {
 			return err
 		}
 
-		var records []models.AuditRecord
+		var records []models.AnomalyRecord
 		if err := json.Unmarshal(body, &records); err != nil {
-			return fmt.Errorf("parsing audit records: %w", err)
+			return fmt.Errorf("parsing anomalies: %w", err)
 		}
 
 		switch outputFormat {
@@ -44,16 +44,19 @@ var remediationCmd = &cobra.Command{
 			return enc.Encode(records)
 		default:
 			if len(records) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No remediation records.")
+				fmt.Fprintln(cmd.OutOrStdout(), "No anomalies.")
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
-				"ID", "STATUS", "ACTION", "TIER", "REASON")
+			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-8s %s\n",
+				"TYPE", "ENTITY", "SCORE", "STATUS", "METRIC")
 			fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
 			for _, r := range records {
-				action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
-				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
-					trunc(r.ID, 28), string(r.Status), trunc(action, 18), string(r.RiskTier), trunc(r.Reason, 30))
+				typ := r.Pattern
+				if typ == "" {
+					typ = "statistical"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-8s %s\n",
+					trunc(typ, 10), trunc(r.Entity, 22), r.Score, string(r.Status), trunc(r.MetricName, 30))
 			}
 			return nil
 		}

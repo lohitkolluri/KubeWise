@@ -140,12 +140,16 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := c.stub.Forecast(ctx, &pb.ForecastRequest{
-		Values:  []float64{1, 2, 3, 4, 5},
-		Horizon: 1,
+	resp, err := c.Forecast(ctx, &ForecastRequest{
+		Values:     []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+		Timestamps: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+		Horizon:    1,
 	})
 	if err != nil {
 		return fmt.Errorf("forecaster healthcheck: %w", err)
+	}
+	if resp.Status != "ok" {
+		return fmt.Errorf("forecaster healthcheck: %s", resp.ErrorMessage)
 	}
 	log.Printf("forecaster: sidecar at %s is healthy", c.address)
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -28,10 +29,9 @@ type MetricPoint struct {
 
 // PrometheusCollector collects metrics from a Prometheus server.
 type PrometheusCollector struct {
-	addr   string
-	api    v1.API
-	client api.Client
-	store  *store.Store
+	addr  string
+	api   v1.API
+	store *store.Store
 }
 
 // NewPrometheusCollector creates a new collector connecting to the given Prometheus address.
@@ -43,10 +43,9 @@ func NewPrometheusCollector(addr string, s *store.Store) (*PrometheusCollector, 
 		return nil, fmt.Errorf("create prometheus client: %w", err)
 	}
 	return &PrometheusCollector{
-		addr:   addr,
-		api:    v1.NewAPI(client),
-		client: client,
-		store:  s,
+		addr:  addr,
+		api:   v1.NewAPI(client),
+		store: s,
 	}, nil
 }
 
@@ -79,34 +78,53 @@ func queries() []promQuery {
 	}
 }
 
-// CollectMetrics executes all PromQL queries and stores the results.
+type queryOutcome struct {
+	name   string
+	result MetricResult
+	err    error
+}
+
+// CollectMetrics executes all PromQL queries concurrently and stores the results.
 func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
+	qs := queries()
+	outcomes := make(chan queryOutcome, len(qs))
+	var wg sync.WaitGroup
+	for _, q := range qs {
+		wg.Add(1)
+		go func(q promQuery) {
+			defer wg.Done()
+			result, err := c.execQuery(ctx, q.Name, q.Query)
+			outcomes <- queryOutcome{name: q.Name, result: result, err: err}
+		}(q)
+	}
+	go func() {
+		wg.Wait()
+		close(outcomes)
+	}()
+
 	var results []MetricResult
-	queries := queries()
 	failCount := 0
-	for _, q := range queries {
-		result, err := c.execQuery(ctx, q.Name, q.Query)
-		if err != nil {
+	for o := range outcomes {
+		if o.err != nil {
 			failCount++
-			log.Printf("prometheus: query %q failed: %v", q.Name, err)
+			log.Printf("prometheus: query %q failed: %v", o.name, o.err)
 			continue
 		}
-		results = append(results, result)
-
-		for _, pt := range result.Values {
-			if err := c.store.AppendMetricSeries(result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
-				log.Printf("store: append metric %q failed: %v", result.Name, err)
+		results = append(results, o.result)
+		for _, pt := range o.result.Values {
+			if err := c.store.AppendMetricSeries(o.result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
+				log.Printf("store: append metric %q failed: %v", o.result.Name, err)
 			}
 		}
 	}
 	if len(results) == 0 {
-		return nil, fmt.Errorf("all %d prometheus queries failed", len(queries))
+		return nil, fmt.Errorf("all %d prometheus queries failed", len(qs))
 	}
 	if failCount > 0 {
-		return results, fmt.Errorf("%d/%d prometheus queries failed", failCount, len(queries))
+		return results, fmt.Errorf("%d/%d prometheus queries failed", failCount, len(qs))
 	}
 	return results, nil
 }

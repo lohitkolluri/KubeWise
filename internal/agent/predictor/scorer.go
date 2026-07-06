@@ -10,12 +10,15 @@ type ScorerConfig struct {
 	HoeffdingDelta float64
 
 	// HoeffdingK is the sensitivity multiplier: score reaches 1.0 when
-	// |x-median| >= K * epsilon (default 3.0).
+	// |x-median| >= K * epsilon (default 5.0).
 	HoeffdingK float64
 
 	// MinWarmup is the minimum data points per metric key before scoring
 	// starts (default 10).
 	MinWarmup int
+
+	// MinScore is the minimum combined score to emit a prediction (default 0.3).
+	MinScore float64
 
 	// ROCBoostWeight controls how much the rate-of-change acceleration
 	// can boost the final score (default 0.3 = max 0.3 boost).
@@ -33,6 +36,7 @@ func DefaultScorerConfig() ScorerConfig {
 		HoeffdingDelta: 0.05,
 		HoeffdingK:     5.0,
 		MinWarmup:      MinimumWarmupPoints,
+		MinScore:       0.3,
 		ROCBoostWeight: 0.3,
 	}
 }
@@ -57,6 +61,9 @@ func NewScorer(config ScorerConfig) *Scorer {
 	}
 	if cfg.ROCBoostWeight <= 0 {
 		cfg.ROCBoostWeight = 0.3
+	}
+	if cfg.MinScore <= 0 {
+		cfg.MinScore = 0.3
 	}
 	return &Scorer{config: cfg}
 }

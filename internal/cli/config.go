@@ -3,8 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
@@ -20,19 +18,14 @@ var configCmd = &cobra.Command{
 	Short: "Show agent configuration",
 	Long:  `Fetch and display the agent's current configuration.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		base := resolveAgentURL()
-		resp, err := http.Get(base + "/api/v1/config")
-		if err != nil {
-			return fmt.Errorf("connecting to agent: %w", err)
+		if err := validateOutputFormat(); err != nil {
+			return err
 		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
+		body, _, err := agentGet("/api/v1/config")
 		if err != nil {
-			return fmt.Errorf("reading response: %w", err)
+			return err
 		}
 
-		// Might be a "no config saved" message
 		var msg map[string]string
 		if err := json.Unmarshal(body, &msg); err == nil {
 			if m, ok := msg["message"]; ok {
@@ -54,6 +47,7 @@ var configCmd = &cobra.Command{
 		case "yaml":
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
+			defer enc.Close()
 			return enc.Encode(cfg)
 		default:
 			fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Scrape Interval:", cfg.ScrapeInterval)

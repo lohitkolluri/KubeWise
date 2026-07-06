@@ -70,7 +70,8 @@ const (
 // AuditRecord stores every remediation decision for observability.
 type AuditRecord struct {
 	ID          string          `json:"id"`
-	AnomalyID   string          `json:"anomaly_id"`
+	AnomalyID   string          `json:"anomaly_id,omitempty"`
+	AnomalyIDs  []string        `json:"anomaly_ids,omitempty"`
 	Plan        RemediationPlan `json:"plan"`
 	RiskTier    RiskTier        `json:"risk_tier"`
 	Status      AuditStatus     `json:"status"`

@@ -36,7 +36,7 @@ func seriesKey(name string, labels map[string]string) string {
 	key := name
 	for _, k := range []string{"pod", "container", "namespace", "node", "instance"} {
 		if v, ok := labels[k]; ok && v != "" {
-			key += "/" + v
+			key += "/" + k + "=" + v
 		}
 	}
 	return key
@@ -75,9 +75,15 @@ func (s *Store) AppendMetricSeries(name string, labels map[string]string, value 
 			count++
 		}
 		if count > maxSamplesPerMetric {
-			k, _ := c.First()
-			if k != nil {
-				b.Delete(k)
+			toDelete := count - maxSamplesPerMetric
+			for i := 0; i < toDelete; i++ {
+				k, _ := c.First()
+				if k == nil {
+					break
+				}
+				if err := b.Delete(k); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -175,11 +181,50 @@ func ParseSeriesKey(key string) (string, map[string]string, error) {
 	}
 	name := parts[0]
 	labels := make(map[string]string)
-	labelKeys := []string{"pod", "container", "namespace", "node", "instance"}
-	for i, part := range parts[1:] {
-		if i < len(labelKeys) {
-			labels[labelKeys[i]] = part
+	if len(parts) == 1 {
+		return name, labels, nil
+	}
+	if strings.Contains(parts[1], "=") {
+		for _, part := range parts[1:] {
+			k, v, ok := strings.Cut(part, "=")
+			if ok && k != "" {
+				labels[k] = v
+			}
+		}
+		return name, labels, nil
+	}
+	// Legacy positional keys (container slot may be omitted).
+	labelOrder := []string{"pod", "container", "namespace", "node", "instance"}
+	rest := parts[1:]
+	if len(rest) == 2 {
+		labels["pod"] = rest[0]
+		labels["namespace"] = rest[1]
+		return name, labels, nil
+	}
+	for i, part := range rest {
+		if i < len(labelOrder) {
+			labels[labelOrder[i]] = part
 		}
 	}
 	return name, labels, nil
+}
+
+// ListMetricNames returns distinct metric names stored in the metrics bucket.
+func (s *Store) ListMetricNames() ([]string, error) {
+	seen := make(map[string]struct{})
+	var names []string
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketMetrics).ForEach(func(k, _ []byte) error {
+			metricName, _, err := ParseSeriesKey(string(k))
+			if err != nil {
+				return nil
+			}
+			if _, ok := seen[metricName]; !ok {
+				seen[metricName] = struct{}{}
+				names = append(names, metricName)
+			}
+			return nil
+		})
+	})
+	return names, err
 }

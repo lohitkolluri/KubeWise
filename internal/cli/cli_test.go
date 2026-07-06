@@ -129,10 +129,10 @@ func TestStatusWithFakeAgent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Override the agent URL resolution for the test
-	oldResolve := resolveAgentURL
-	resolveAgentURL = func() string { return ts.URL }
-	defer func() { resolveAgentURL = oldResolve }()
+	// Override the agent URL for the test
+	oldURL := agentURL
+	agentURL = ts.URL
+	defer func() { agentURL = oldURL }()
 
 	output, err := executeCommand("status")
 	if err != nil {
@@ -153,9 +153,9 @@ func TestConfigWithFakeAgent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	oldResolve := resolveAgentURL
-	resolveAgentURL = func() string { return ts.URL }
-	defer func() { resolveAgentURL = oldResolve }()
+	oldURL := agentURL
+	agentURL = ts.URL
+	defer func() { agentURL = oldURL }()
 
 	output, err := executeCommand("config")
 	if err != nil {
@@ -174,9 +174,9 @@ func TestConfigNoConfigMessage(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	oldResolve := resolveAgentURL
-	resolveAgentURL = func() string { return ts.URL }
-	defer func() { resolveAgentURL = oldResolve }()
+	oldURL := agentURL
+	agentURL = ts.URL
+	defer func() { agentURL = oldURL }()
 
 	output, err := executeCommand("config")
 	if err != nil {
@@ -194,9 +194,9 @@ func TestPredictEmptyWithFakeAgent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	oldResolve := resolveAgentURL
-	resolveAgentURL = func() string { return ts.URL }
-	defer func() { resolveAgentURL = oldResolve }()
+	oldURL := agentURL
+	agentURL = ts.URL
+	defer func() { agentURL = oldURL }()
 
 	output, err := executeCommand("predict", "-o", "table")
 	if err != nil {
@@ -210,13 +210,13 @@ func TestPredictEmptyWithFakeAgent(t *testing.T) {
 func TestPredictWithResults(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `[{"type":"OOM","entity":"pod-a","namespace":"default","action":"restart","confidence":0.85,"eta":60000000000,"timestamp":"2026-07-06T01:00:00Z","score":0.85}]`)
+		fmt.Fprintln(w, `[{"type":"OOM","entity":"pod-a","namespace":"default","action":"restart","confidence":0.85,"eta_seconds":60,"timestamp":"2026-07-06T01:00:00Z","score":0.85}]`)
 	}))
 	defer ts.Close()
 
-	oldResolve := resolveAgentURL
-	resolveAgentURL = func() string { return ts.URL }
-	defer func() { resolveAgentURL = oldResolve }()
+	oldURL := agentURL
+	agentURL = ts.URL
+	defer func() { agentURL = oldURL }()
 
 	output, err := executeCommand("predict")
 	if err != nil {

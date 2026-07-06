@@ -33,7 +33,10 @@ func NewClient(apiKey, model string) *Client {
 	}
 }
 
-// Message represents a chat message in the API request.
+// HasAPIKey reports whether an API key is configured.
+func (c *Client) HasAPIKey() bool {
+	return c.apiKey != ""
+}
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -94,7 +97,7 @@ func (c *Client) chatCompletion(ctx context.Context, req chatRequest) (string, e
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}
@@ -125,7 +128,7 @@ func (c *Client) StructuredOutput(ctx context.Context, systemPrompt, userContent
 	req := chatRequest{
 		Model:       c.model,
 		Temperature: 0.2,
-		MaxTokens:   1000,
+		MaxTokens:   2000,
 		Messages: []Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userContent},

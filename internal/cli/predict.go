@@ -3,9 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
@@ -22,16 +19,12 @@ var predictCmd = &cobra.Command{
 	Short:   "Show active predictions",
 	Long:    `Fetch and display predictions from the agent.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		base := resolveAgentURL()
-		resp, err := http.Get(base + "/api/v1/predictions")
-		if err != nil {
-			return fmt.Errorf("connecting to agent: %w", err)
+		if err := validateOutputFormat(); err != nil {
+			return err
 		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
+		body, _, err := agentGet("/api/v1/predictions")
 		if err != nil {
-			return fmt.Errorf("reading response: %w", err)
+			return err
 		}
 
 		var predictions []models.PredictionResult
@@ -47,23 +40,31 @@ var predictCmd = &cobra.Command{
 		case "yaml":
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
+			defer enc.Close()
 			return enc.Encode(predictions)
 		default:
 			if len(predictions) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "No active predictions.")
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %-10s %-12s %-10s %s\n",
-				"TYPE", "ENTITY", "CONFIDENCE", "ETA", "ACTION")
-			fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 60))
+			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-10s %s\n",
+				"TYPE", "ENTITY", "SCORE", "ETA(s)", "ACTION")
+			fmt.Fprintln(cmd.OutOrStdout(), repeatLine(80))
 			for _, p := range predictions {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-20s %-10s %-12.2f %-10s %s\n",
-					trunc(p.Type, 18), trunc(p.Entity, 8), p.Confidence,
-					p.Action, p.Type)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-10.0f %s\n",
+					trunc(p.Type, 10), trunc(p.Entity, 22), p.Score, p.ETASeconds, trunc(p.Action, 30))
 			}
 			return nil
 		}
 	},
+}
+
+func repeatLine(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = '-'
+	}
+	return string(b)
 }
 
 func trunc(s string, n int) string {
@@ -71,11 +72,4 @@ func trunc(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
-}
-
-func formatETA(p models.PredictionResult) string {
-	if p.Timestamp.IsZero() {
-		return "-"
-	}
-	return p.Timestamp.Format("15:04:05")
 }

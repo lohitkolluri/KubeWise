@@ -33,7 +33,7 @@ const (
 
 	// DefaultHoeffdingK is the default sensitivity multiplier: score reaches
 	// 1.0 when |x-median| >= K * epsilon.
-	DefaultHoeffdingK = 3.0
+	DefaultHoeffdingK = 5.0
 
 	// MinimumWarmupPoints is the minimum data points before producing anomaly scores.
 	MinimumWarmupPoints = 10

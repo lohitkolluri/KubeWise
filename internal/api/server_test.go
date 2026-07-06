@@ -32,6 +32,10 @@ func (m *mockStore) ListAuditRecords(limit int) ([]models.AuditRecord, error) {
 	return []models.AuditRecord{}, nil
 }
 
+func (m *mockStore) GetLatestPredictions() ([]models.PredictionResult, error) {
+	return []models.PredictionResult{}, nil
+}
+
 func setupTestServer() *httptest.Server {
 	store := &mockStore{
 		anomalies: []models.AnomalyRecord{
@@ -46,7 +50,7 @@ func setupTestServer() *httptest.Server {
 	mux := http.NewServeMux()
 	s := NewServer(store, ":0")
 	s.registerRoutes(mux)
-	return httptest.NewServer(withMiddleware(mux))
+	return httptest.NewServer(withMiddleware(mux, ""))
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -147,7 +151,7 @@ func TestAnomaliesEmptyStore(t *testing.T) {
 	mux := http.NewServeMux()
 	s := NewServer(store, ":0")
 	s.registerRoutes(mux)
-	ts := httptest.NewServer(withMiddleware(mux))
+	ts := httptest.NewServer(withMiddleware(mux, ""))
 	defer ts.Close()
 
 	resp, _ := http.Get(ts.URL + "/api/v1/anomalies")
@@ -188,7 +192,7 @@ func TestConfigNoConfig(t *testing.T) {
 	mux := http.NewServeMux()
 	s := NewServer(store, ":0")
 	s.registerRoutes(mux)
-	ts := httptest.NewServer(withMiddleware(mux))
+	ts := httptest.NewServer(withMiddleware(mux, ""))
 	defer ts.Close()
 
 	resp, _ := http.Get(ts.URL + "/api/v1/config")

@@ -63,7 +63,7 @@ func patternToResult(m PatternMatch) models.PredictionResult {
 		Action:     m.SuggestedAction,
 		Confidence: m.Confidence,
 		Score:      m.Confidence,
-		ETA:        m.TimeToFailure,
+		ETASeconds: m.TimeToFailure.Seconds(),
 		Timestamp:  time.Now(),
 	}
 }
@@ -129,10 +129,14 @@ func aggregatePodMemorySeries(pts []MetricPoint) []MetricPoint {
 	}
 	result := make([]MetricPoint, 0, len(byTS))
 	for ts, val := range byTS {
+		ptLabels := make(map[string]string, len(labels))
+		for k, v := range labels {
+			ptLabels[k] = v
+		}
 		result = append(result, MetricPoint{
 			Value:     val,
 			Timestamp: time.Unix(0, ts),
-			Labels:    labels,
+			Labels:    ptLabels,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -190,7 +194,10 @@ func lookupMemLimit(resources ResourceSnapshot, namespace, pod string) float64 {
 		if pr.Name != pod {
 			continue
 		}
-		if namespace != "" && pr.Namespace != "" && pr.Namespace != namespace {
+	if namespace != "" && pr.Namespace != "" && pr.Namespace != namespace {
+			continue
+		}
+		if namespace == "" && pr.Namespace != "" {
 			continue
 		}
 		if pr.MemLimit > 0 {
@@ -200,7 +207,7 @@ func lookupMemLimit(resources ResourceSnapshot, namespace, pod string) float64 {
 	return defaultMemLimitBytes
 }
 
-func hasEvent(events []models.AnomalyRecord, entity, pattern string) bool {
+func hasEvent(events []models.AnomalyRecord, namespace, entity, pattern string) bool {
 	for _, e := range events {
 		if e.Pattern != pattern {
 			continue
@@ -209,12 +216,7 @@ func hasEvent(events []models.AnomalyRecord, entity, pattern string) bool {
 		if e.Namespace != "" && eNs == "" {
 			eNs = e.Namespace
 		}
-		aNs, aName := "", entity
-		if idx := strings.LastIndex(entity, "/"); idx >= 0 {
-			aNs = entity[:idx]
-			aName = entity[idx+1:]
-		}
-		if eName == aName && (eNs == "" || aNs == "" || eNs == aNs) {
+		if eName == entity && eNs == namespace {
 			return true
 		}
 	}
@@ -244,7 +246,13 @@ func estimateOOMTimeToFailure(pts []MetricPoint, usageRatio float64) time.Durati
 	}
 	growth := perStepDelta(pts)
 	if growth <= 0 {
-		return 0
+		if usageRatio >= 0.85 {
+			return time.Hour
+		}
+		if usageRatio >= 0.6 {
+			return 6 * time.Hour
+		}
+		return 24 * time.Hour
 	}
 	steps := (oomRatioThreshold - usageRatio) / growth
 	maxSteps := float64(24 * time.Hour / scrapeInterval)
@@ -293,13 +301,13 @@ func estimateDegradationTimeToFailure(pts []MetricPoint, currentValue float64) t
 	return time.Duration(steps * float64(scrapeInterval))
 }
 
-func findMetric(metrics []MetricResult, name string) *MetricResult {
-	for i := range metrics {
-		if metrics[i].Name == name {
-			return &metrics[i]
+func findMetric(metrics []MetricResult, name string) (MetricResult, bool) {
+	for _, m := range metrics {
+		if m.Name == name {
+			return m, true
 		}
 	}
-	return nil
+	return MetricResult{}, false
 }
 
 func estimateTrend(pts []MetricPoint) float64 {

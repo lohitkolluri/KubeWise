@@ -13,6 +13,9 @@ const configKey = "agent_config"
 
 // SaveConfig persists the agent configuration.
 func (s *Store) SaveConfig(cfg *models.AgentConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("config must not be nil")
+	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

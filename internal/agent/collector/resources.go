@@ -134,8 +134,13 @@ func (rc *ResourcesCollector) Run(ctx context.Context) {
 	go rc.depInformer.Run(ctx.Done())
 
 	if !cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced) {
-		log.Printf("resources: informer cache sync timed out")
-		return
+		log.Printf("resources: informer cache sync timed out, retrying")
+		if err := wait.PollImmediate(2*time.Second, rc.syncTimeout, func() (bool, error) {
+			return cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced), nil
+		}); err != nil {
+			log.Printf("resources: informer cache sync failed after retry")
+			return
+		}
 	}
 	rc.mu.Lock()
 	rc.synced = true
@@ -157,20 +162,30 @@ func (rc *ResourcesCollector) WaitForSync() bool {
 	return err == nil
 }
 
-// GetFailingPods returns pods that are not Running or are Running but not Ready.
-func (rc *ResourcesCollector) GetFailingPods() []PodState {
+// Snapshot returns a consistent point-in-time view of resource state.
+func (rc *ResourcesCollector) Snapshot() (failing []PodState, unhealthy []string, pods []PodState) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
-	var failing []PodState
 	for _, p := range rc.pods {
-		if p.Phase != string(corev1.PodRunning) {
-			failing = append(failing, p)
+		if p.Phase == string(corev1.PodSucceeded) {
 			continue
 		}
-		if !p.Ready {
+		if p.Phase != string(corev1.PodRunning) || !p.Ready {
 			failing = append(failing, p)
 		}
+		pods = append(pods, p)
 	}
+	for _, n := range rc.nodes {
+		if !n.Ready {
+			unhealthy = append(unhealthy, n.Name)
+		}
+	}
+	return failing, unhealthy, pods
+}
+
+// GetFailingPods returns pods that are not Running or are Running but not Ready.
+func (rc *ResourcesCollector) GetFailingPods() []PodState {
+	failing, _, _ := rc.Snapshot()
 	return failing
 }
 
@@ -238,14 +253,20 @@ func podKey(p *corev1.Pod) string {
 }
 
 func (rc *ResourcesCollector) handlePodAdd(obj interface{}) {
-	pod := obj.(*corev1.Pod)
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.pods[podKey(pod)] = podToState(pod)
 }
 
 func (rc *ResourcesCollector) handlePodUpdate(oldObj, newObj interface{}) {
-	pod := newObj.(*corev1.Pod)
+	pod, ok := newObj.(*corev1.Pod)
+	if !ok {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.pods[podKey(pod)] = podToState(pod)
@@ -294,14 +315,20 @@ func podToState(pod *corev1.Pod) PodState {
 // --- Node handlers ---
 
 func (rc *ResourcesCollector) handleNodeAdd(obj interface{}) {
-	node := obj.(*corev1.Node)
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.nodes[node.Name] = nodeToState(node)
 }
 
 func (rc *ResourcesCollector) handleNodeUpdate(oldObj, newObj interface{}) {
-	node := newObj.(*corev1.Node)
+	node, ok := newObj.(*corev1.Node)
+	if !ok {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.nodes[node.Name] = nodeToState(node)
@@ -340,14 +367,20 @@ func depKey(d *appsv1.Deployment) string {
 }
 
 func (rc *ResourcesCollector) handleDepAdd(obj interface{}) {
-	dep := obj.(*appsv1.Deployment)
+	dep, ok := obj.(*appsv1.Deployment)
+	if !ok {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.deps[depKey(dep)] = deploymentToState(dep)
 }
 
 func (rc *ResourcesCollector) handleDepUpdate(oldObj, newObj interface{}) {
-	dep := newObj.(*appsv1.Deployment)
+	dep, ok := newObj.(*appsv1.Deployment)
+	if !ok {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.deps[depKey(dep)] = deploymentToState(dep)
