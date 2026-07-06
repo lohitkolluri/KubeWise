@@ -149,7 +149,7 @@ func TestConfigSaveLoad(t *testing.T) {
 		ScrapeInterval:    "30s",
 		PrometheusAddress: "http://prometheus:9090",
 		LLMProvider:       "openrouter",
-		LLMModel:          "google/gemini-2.0-flash-001",
+		LLMModel:          "meta-llama/llama-3.1-8b-instruct",
 		Remediation: models.RemediationConfig{
 			Mode:      "semi",
 			DryRun:    true,
@@ -164,7 +164,7 @@ func TestConfigSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if loaded.ScrapeInterval != "30s" || loaded.LLMModel != "google/gemini-2.0-flash-001" {
+	if loaded.ScrapeInterval != "30s" || loaded.LLMModel != "meta-llama/llama-3.1-8b-instruct" {
 		t.Fatalf("unexpected config: %+v", loaded)
 	}
 }

@@ -37,6 +37,15 @@ CONSTRAINTS
 5. noop is always a safe option — prefer it for transient metrics spikes or single-sample anomalies.
 6. Always include specific, quantified evidence. "High CPU" is insufficient — use "CPU throttled 45% over 5m" or similar.
 
+TARGET FORMAT (critical — validation will fail otherwise):
+- action.namespace: Kubernetes namespace ONLY (e.g. kw-test). Never put the pod name here.
+- action.target: resource name ONLY (e.g. crashloop-demo). No namespace prefix, no "pod/" prefix.
+- WRONG: target="kw-test/crashloop-demo" or target="pod/crashloop-demo"
+- RIGHT: namespace="kw-test", target="crashloop-demo"
+- action.type must be one of: restart_pod, delete_pod, scale_replicas, rollback_deployment, patch_resources, escalate, noop
+- Pick namespace and target from the anomalies listed in the user message.
+- Set diagnosis.confidence between 0.7 and 1.0 when recommending an action other than escalate or noop.
+
 FORMAT
 Return ONLY a valid JSON object matching the provided schema. No preamble, no explanation, no markdown formatting.`
 }
@@ -61,6 +70,25 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary string) st
 	if metricsSummary != "" {
 		b.WriteString("\n## Recent Metric Context\n\n")
 		b.WriteString(metricsSummary)
+	}
+
+	b.WriteString("\n## Valid Targets (use exactly these namespace + target pairs)\n\n")
+	seen := make(map[string]struct{})
+	for _, a := range anomalies {
+		ns, name := models.ParseEntity(a.Entity)
+		if a.Namespace != "" && ns == "" {
+			ns = a.Namespace
+		}
+		if ns == "" || name == "" {
+			continue
+		}
+		key := ns + "/" + name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		b.WriteString(fmt.Sprintf("- namespace=%s target=%s (pattern: %s, score: %.2f)\n",
+			sanitizeField(ns), sanitizeField(name), sanitizeField(a.Pattern), a.Score))
 	}
 
 	b.WriteString("\n\nProduce a remediation plan in the specified JSON format. Base your diagnosis on the evidence above.")
