@@ -71,7 +71,7 @@ docker_build_agent() {
   platform="$(detect_target_platform)"
   log "building agent image ${tag} (${platform})"
   docker build --platform "${platform}" -t "${tag}" \
-    -f "${ROOT_DIR}/build/agent/Dockerfile" "${ROOT_DIR}"
+    -f "${ROOT_DIR}/docker/agent/Dockerfile" "${ROOT_DIR}"
 }
 
 docker_build_forecaster() {
