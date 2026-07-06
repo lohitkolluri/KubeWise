@@ -45,14 +45,19 @@ func (e *K8sExecutor) SetDryRun(dryRun bool) {
 	e.dryRun = dryRun
 }
 
-// Execute runs the given action and returns a result string.
-func (e *K8sExecutor) Execute(ctx context.Context, plan models.RemediationPlan) (string, error) {
-	return e.execute(ctx, plan, e.dryRun)
+// Clientset exposes the underlying Kubernetes client.
+func (e *K8sExecutor) Clientset() kubernetes.Interface {
+	return e.clientset
 }
 
-// ExecuteForce runs the action even when dry-run is enabled (operator-approved).
+// Execute runs the given plan (single action or multi-step runbook).
+func (e *K8sExecutor) Execute(ctx context.Context, plan models.RemediationPlan) (string, error) {
+	return e.ExecuteRunbook(ctx, plan, e.dryRun)
+}
+
+// ExecuteForce runs the plan even when dry-run is enabled (operator-approved).
 func (e *K8sExecutor) ExecuteForce(ctx context.Context, plan models.RemediationPlan) (string, error) {
-	return e.execute(ctx, plan, false)
+	return e.ExecuteRunbook(ctx, plan, false)
 }
 
 func (e *K8sExecutor) execute(ctx context.Context, plan models.RemediationPlan, dryRun bool) (string, error) {

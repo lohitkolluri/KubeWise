@@ -1,5 +1,5 @@
 # Remote one-click install overlay (public container images).
-#   kubectl apply -k github.com/lohitkolluri/KubeWise/manifests/overlays/install?ref=v2
+#   kubectl apply -k github.com/lohitkolluri/KubeWise/manifests/overlays/install?ref=main
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

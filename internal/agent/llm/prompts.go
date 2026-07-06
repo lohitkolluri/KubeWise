@@ -20,14 +20,27 @@ You can analyze the following signals from Prometheus and Kubernetes:
 - Network: TCP retransmit rate, network receive errors
 - Node health: load averages, memory pressure, disk pressure conditions
 
-You can recommend these remediation actions:
+You can recommend these remediation actions (as single actions or ordered runbook steps):
 - restart_pod: Restart a single pod. Low risk, fast recovery.
 - scale_replicas: Scale a deployment up or down. Use for resource pressure or redundancy.
 - rollback_deployment: Roll back a deployment to a previous revision. For bad rollouts.
 - patch_resources: Adjust resource requests/limits. For OOM or CPU throttling.
 - delete_pod: Force-delete a stuck pod. Only for pods stuck in Pending/CrashLoopBackOff.
+- wait: Pause between steps (set wait_seconds on the step). Use after restarts before verification.
 - escalate: Raise to a human operator. Use when confidence is low or risk is high.
 - noop: Take no action. Use for transient spikes, benign anomalies, or insufficient data.
+
+MULTI-STEP RUNBOOKS
+When a single action is insufficient, return an ordered "steps" array (max 5 steps). Examples:
+- OOM: patch_resources (raise memory) → wait → restart_pod
+- Bad rollout: rollback_deployment → wait → scale if needed
+- Crash loop after config fix: patch_resources → wait 30s → delete_pod
+Always mirror the first real action in "action" for compatibility.
+Include "verification" with checks to confirm success (pod_ready, no_crashloop, deployment_ready).
+
+ROOT CAUSE ANALYSIS
+You will receive live cluster investigation data: pod describe status, container states, recent events, and log tails.
+Use this evidence in diagnosis.root_cause and diagnosis.evidence. Cite specific log lines, exit codes, and event reasons.
 
 CONSTRAINTS
 1. Only operate in namespaces explicitly listed in the context. Never touch kube-system, kube-public, or kube-node-lease.
@@ -35,23 +48,20 @@ CONSTRAINTS
 3. If confidence is below 0.7, recommend escalate instead of guessing an action.
 4. Never recommend deleting Deployments, StatefulSets, Services, Namespaces, or CRDs.
 5. noop is always a safe option — prefer it for transient metrics spikes or single-sample anomalies.
-6. Always include specific, quantified evidence. "High CPU" is insufficient — use "CPU throttled 45% over 5m" or similar.
+6. Always include specific, quantified evidence from metrics AND investigation context.
 
 TARGET FORMAT (critical — validation will fail otherwise):
-- action.namespace: Kubernetes namespace ONLY (e.g. kw-test). Never put the pod name here.
-- action.target: resource name ONLY (e.g. crashloop-demo). No namespace prefix, no "pod/" prefix.
-- WRONG: target="kw-test/crashloop-demo" or target="pod/crashloop-demo"
-- RIGHT: namespace="kw-test", target="crashloop-demo"
-- action.type must be one of: restart_pod, delete_pod, scale_replicas, rollback_deployment, patch_resources, escalate, noop
-- Pick namespace and target from the anomalies listed in the user message.
-- Set diagnosis.confidence between 0.7 and 1.0 when recommending an action other than escalate or noop.
+- namespace: Kubernetes namespace ONLY (e.g. kw-test). Never put the pod name here.
+- target: resource name ONLY (e.g. crashloop-demo). No namespace prefix, no "pod/" prefix.
+- steps[].order must be sequential starting at 1.
+- verification.checks must validate the expected healthy end state.
 
 FORMAT
 Return ONLY a valid JSON object matching the provided schema. No preamble, no explanation, no markdown formatting.`
 }
 
-// BuildUserPrompt constructs the user prompt from anomaly records and recent metrics.
-func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary string) string {
+// BuildUserPrompt constructs the user prompt from anomaly records, metrics, and investigation context.
+func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary, investigation string) string {
 	var b strings.Builder
 
 	b.WriteString("Analyze the following Kubernetes cluster anomalies and produce a remediation plan.\n\n")
@@ -70,6 +80,11 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary string) st
 	if metricsSummary != "" {
 		b.WriteString("\n## Recent Metric Context\n\n")
 		b.WriteString(metricsSummary)
+	}
+
+	if investigation != "" {
+		b.WriteString("\n## Live Cluster Investigation (describe, events, logs)\n\n")
+		b.WriteString(investigation)
 	}
 
 	b.WriteString("\n## Valid Targets (use exactly these namespace + target pairs)\n\n")
@@ -91,7 +106,7 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary string) st
 			sanitizeField(ns), sanitizeField(name), sanitizeField(a.Pattern), a.Score))
 	}
 
-	b.WriteString("\n\nProduce a remediation plan in the specified JSON format. Base your diagnosis on the evidence above.")
+	b.WriteString("\n\nProduce a remediation plan with diagnosis, optional multi-step runbook (steps), and verification checks. Base root cause analysis on metrics AND investigation data above.")
 	return b.String()
 }
 

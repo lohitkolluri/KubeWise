@@ -69,21 +69,42 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 		return fmt.Errorf("execute approved plan: %w", err)
 	}
 
+	steps := plan.EffectiveSteps()
 	if record.RiskTier == models.RiskTier2 {
-		c.tierAssigner.SetCooldown(plan.Action.Namespace, plan.Action.Type)
+		for _, step := range steps {
+			if step.Type != waitActionType {
+				c.tierAssigner.SetCooldown(step.Namespace, step.Type)
+			}
+		}
 	}
 
-	record.Status = models.AuditExecuted
+	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
+	anomalies, _ := c.store.ListAnomalies(100)
+	matched := c.anomaliesMatchingPlan(anomalies, plan)
+
+	if verifyNote == "" {
+		record.Status = models.AuditVerified
+		record.VerificationNote = verifyNote
+		record.ExecutedAt = &now
+		record.VerifiedAt = &now
+		record.K8sResult = result
+		if err := c.store.UpdateAuditRecord(record); err != nil {
+			return err
+		}
+		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
+		log.Printf("remediator: approved, executed & verified %d-step runbook %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
+		return nil
+	}
+
+	record.Status = models.AuditVerifyFailed
+	record.VerificationNote = verifyNote
 	record.ExecutedAt = &now
 	record.K8sResult = result
 	if err := c.store.UpdateAuditRecord(record); err != nil {
 		return err
 	}
-
-	anomalies, _ := c.store.ListAnomalies(100)
-	matched := c.anomaliesMatchingPlan(anomalies, plan)
 	c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
-	log.Printf("remediator: approved & executed %s %s/%s: %s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target, result)
+	log.Printf("remediator: approved & executed but verification failed: %s", verifyNote)
 	return nil
 }
 

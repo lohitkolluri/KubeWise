@@ -4,55 +4,7 @@
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    subgraph Operator["Your machine"]
-        KW["kwctl CLI / TUI"]
-    end
-
-    subgraph Cluster["Kubernetes cluster"]
-        subgraph Sources["Data sources"]
-            PROM[("Prometheus")]
-            K8S[("Kubernetes API")]
-        end
-
-        subgraph Pod["kubewise-agent pod"]
-            direction TB
-
-            subgraph GoAgent["Go agent"]
-                COL["Collectors<br/><small>PromQL · events · informers</small>"]
-                STORE[("bbolt store")]
-                PRED["Predictor<br/><small>EWMA · Z-score · patterns</small>"]
-                GATE["Anomaly gate"]
-                API["HTTP API :8080"]
-                REM["Remediator"]
-            end
-
-            FCST["Forecaster sidecar<br/><small>gRPC · ETS</small>"]
-            LLM[("OpenRouter LLM")]
-        end
-    end
-
-    PROM -->|"metrics"| COL
-    K8S -->|"events & workload state"| COL
-
-    COL --> STORE
-    STORE --> PRED
-    PRED --> GATE
-    GATE -->|"predictions & anomalies"| STORE
-
-    STORE <-->|"history"| FCST
-    FCST -->|"forecasts"| STORE
-
-    STORE --> REM
-    REM <-->|"remediation plan"| LLM
-    REM -->|"T1/T2 execute · T3 approve"| K8S
-
-    STORE <--> API
-    API <-->|"port-forward"| KW
-
-    KW -.->|"install / config"| K8S
-```
+[![KubeWise architecture](docs/architecture.svg)](docs/architecture.svg)
 
 **Scrape loop (every ~30s):** collect → predict → gate → store → forecast → remediate.
 
@@ -67,13 +19,13 @@ You need **kubectl** pointed at a cluster and permission to create namespaces an
 **One command** (no clone required):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/v2/hack/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/main/hack/bootstrap.sh | bash
 ```
 
 Or with the CLI:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/v2/hack/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/main/hack/install.sh | bash
 kwctl install --yes
 ```
 
@@ -162,14 +114,14 @@ Base URL is usually `http://localhost:8080` after port-forwarding.
 
 The agent pod runs two containers: a **Go agent** and a **Python forecaster sidecar**.
 
-| Stage         | What happens                                                                                      |
-| ------------- | ------------------------------------------------------------------------------------------------- |
-| **Collect**   | Pull metrics from Prometheus; watch K8s events and workload state                                 |
-| **Predict**   | Score anomalies (EWMA, Z-score, rate-of-change) and match patterns (OOM, crash loop, degradation) |
-| **Gate**      | Drop noise — cooldowns, sustainment, deduplication                                                |
-| **Forecast**  | Sidecar projects metric trends (ETS) from stored history                                          |
-| **Remediate** | LLM correlates anomalies into a plan; T1/T2 auto-execute in live mode, T3 needs approval          |
-| **Store**     | Everything persists in embedded bbolt — no external database                                      |
+| Stage         | What happens                                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Collect**   | Pull metrics from Prometheus; watch K8s events and workload state                                                                    |
+| **Predict**   | Score anomalies (EWMA, Z-score, rate-of-change) and match patterns (OOM, crash loop, degradation)                                    |
+| **Gate**      | Drop noise — cooldowns, sustainment, deduplication                                                                                   |
+| **Forecast**  | Sidecar projects metric trends (ETS) from stored history                                                                             |
+| **Remediate** | LLM correlates anomalies into a plan; multi-step runbooks; post-fix verification; T1/T2 auto-execute in live mode, T3 needs approval |
+| **Store**     | Everything persists in embedded bbolt — no external database                                                                         |
 
 You interact via **kwctl** (TUI or commands) or the **HTTP API** on port 8080.
 
@@ -194,6 +146,7 @@ Layout:
 | `manifests/base`                        | Kustomize base           |
 | `manifests/overlays/{dev,install,prod}` | Environment overlays     |
 | `hack/bootstrap.sh`                     | One-click installer      |
+| `docs/architecture.svg`                 | Architecture diagram     |
 | `forecaster-sidecar`                    | gRPC forecasting service |
 
 Requires Go 1.26+, Docker, and for local clusters: [kind](https://kind.sigs.k8s.io/) + Helm.

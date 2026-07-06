@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # KubeWise one-click installer — cluster + optional kwctl CLI.
 #
-#   curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/v2/hack/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/main/hack/bootstrap.sh | bash
 #
 # Options (env or flags):
 #   --yes / -y          non-interactive
 #   --local             kind + build images (laptop dev)
 #   OPENROUTER_API_KEY  optional LLM key
-#   KUBEWISE_REF        git ref for remote manifests (default: v2)
+#   KUBEWISE_REF        git ref for remote manifests (default: main)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../scripts/lib.sh"
 
 REPO="${REPO:-lohitkolluri/KubeWise}"
-REF="${KUBEWISE_REF:-v2}"
+REF="${KUBEWISE_REF:-main}"
 OVERLAY="${OVERLAY:-install}"
 NAMESPACE="${KUBEWISE_NAMESPACE:-kubewise}"
 YES=0
@@ -38,7 +38,7 @@ Options:
 Environment:
   OPENROUTER_API_KEY     optional LLM API key
   KUBEWISE_API_TOKEN     optional agent HTTP API token
-  KUBEWISE_REF           manifest git ref (default: v2)
+  KUBEWISE_REF           manifest git ref (default: main)
   INSTALL_KWCTL=0        skip kwctl CLI install
 
 Examples:
