@@ -1,15 +1,27 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
-	yaml "gopkg.in/yaml.v3"
+)
+
+var (
+	predictWatch     bool
+	predictInterval  time.Duration
+	predictNamespace string
 )
 
 func init() {
+	predictCmd.Flags().BoolVarP(&predictWatch, "watch", "w", false, "watch for prediction updates")
+	predictCmd.Flags().DurationVar(&predictInterval, "interval", 5*time.Second, "watch refresh interval")
+	predictCmd.Flags().StringVar(&predictNamespace, "namespace", "", "filter by namespace")
 	rootCmd.AddCommand(predictCmd)
 }
 
@@ -17,59 +29,86 @@ var predictCmd = &cobra.Command{
 	Use:     "predict",
 	Aliases: []string{"predictions"},
 	Short:   "Show active predictions",
-	Long:    `Fetch and display predictions from the agent.`,
+	Long:    `Fetch and display predictions from the agent. Use --watch to tail updates.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}
-		body, _, err := agentGet("/api/v1/predictions")
-		if err != nil {
-			return err
+		if predictWatch {
+			return runPredictWatch(cmd)
 		}
-
-		var predictions []models.PredictionResult
-		if err := json.Unmarshal(body, &predictions); err != nil {
-			return fmt.Errorf("parsing predictions: %w", err)
-		}
-
-		switch outputFormat {
-		case "json":
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(predictions)
-		case "yaml":
-			enc := yaml.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent(2)
-			defer enc.Close()
-			return enc.Encode(predictions)
-		default:
-			if len(predictions) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No active predictions.")
-				return nil
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-10s %s\n",
-				"TYPE", "ENTITY", "SCORE", "ETA(s)", "ACTION")
-			fmt.Fprintln(cmd.OutOrStdout(), repeatLine(80))
-			for _, p := range predictions {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-10.0f %s\n",
-					trunc(p.Type, 10), trunc(p.Entity, 22), p.Score, p.ETASeconds, trunc(p.Action, 30))
-			}
-			return nil
-		}
+		return renderPredictions(cmd, nil)
 	},
 }
 
-func repeatLine(n int) string {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = '-'
+func runPredictWatch(cmd *cobra.Command) error {
+	seen := make(map[string]struct{})
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(done)
+
+	for {
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+		preds, err := fetchPredictions()
+		if err != nil {
+			return err
+		}
+		preds = filterPredictions(preds)
+		for _, p := range preds {
+			key := p.Type + "|" + p.Entity + "|" + p.MetricName
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s %s score=%.2f eta=%.0fs %s\n",
+				time.Now().Format("15:04:05"), p.Type, p.Entity, p.Score, p.ETASeconds, p.Action)
+		}
+		select {
+		case <-done:
+			return nil
+		case <-time.After(predictInterval):
+		}
 	}
-	return string(b)
 }
 
-func trunc(s string, n int) string {
-	if len(s) <= n {
-		return s
+func renderPredictions(cmd *cobra.Command, preds []models.PredictionResult) error {
+	if preds == nil {
+		var err error
+		preds, err = fetchPredictions()
+		if err != nil {
+			return err
+		}
 	}
-	return s[:n-1] + "…"
+	preds = filterPredictions(preds)
+	return writeOutput(cmd.OutOrStdout(), outputFormat, preds, func() error {
+		if len(preds) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "No active predictions.")
+			return nil
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-10s %s\n",
+			"TYPE", "ENTITY", "SCORE", "ETA(s)", "ACTION")
+		fmt.Fprintln(cmd.OutOrStdout(), repeatLine(80))
+		for _, p := range preds {
+			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-10.0f %s\n",
+				trunc(p.Type, 10), trunc(p.Entity, 22), p.Score, p.ETASeconds, trunc(p.Action, 30))
+		}
+		return nil
+	})
+}
+
+func filterPredictions(preds []models.PredictionResult) []models.PredictionResult {
+	if predictNamespace == "" {
+		return preds
+	}
+	var out []models.PredictionResult
+	for _, p := range preds {
+		if p.Namespace == predictNamespace || strings.HasPrefix(p.Entity, predictNamespace+"/") {
+			out = append(out, p)
+		}
+	}
+	return out
 }

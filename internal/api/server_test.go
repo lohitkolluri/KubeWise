@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -26,6 +27,11 @@ func (m *mockStore) ListAnomalies(limit int) ([]models.AnomalyRecord, error) {
 
 func (m *mockStore) LoadConfig() (*models.AgentConfig, error) {
 	return m.config, nil
+}
+
+func (m *mockStore) SaveConfig(cfg *models.AgentConfig) error {
+	m.config = cfg
+	return nil
 }
 
 func (m *mockStore) ListAuditRecords(limit int) ([]models.AuditRecord, error) {
@@ -184,6 +190,33 @@ func TestConfigEndpoint(t *testing.T) {
 	}
 	if cfg.ScrapeInterval != "30s" {
 		t.Fatalf("expected scrape_interval 30s, got %s", cfg.ScrapeInterval)
+	}
+}
+
+func TestConfigPutEndpoint(t *testing.T) {
+	ts := setupTestServer()
+	defer ts.Close()
+
+	body := `{"scrape_interval":"60s","prometheus_address":"http://prom:9090"}`
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/config", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/v1/config: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var cfg models.AgentConfig
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if cfg.ScrapeInterval != "60s" {
+		t.Fatalf("expected 60s, got %s", cfg.ScrapeInterval)
 	}
 }
 

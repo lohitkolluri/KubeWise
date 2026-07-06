@@ -18,6 +18,15 @@ func executeCommand(args ...string) (string, error) {
 	return buf.String(), err
 }
 
+// withUnreachableAgent forces commands to fail fast in unit tests even when a local agent is running.
+func withUnreachableAgent(t *testing.T, fn func()) {
+	t.Helper()
+	oldURL := agentURL
+	agentURL = "http://127.0.0.1:1"
+	defer func() { agentURL = oldURL }()
+	fn()
+}
+
 func TestRootHelp(t *testing.T) {
 	output, err := executeCommand("--help")
 	if err != nil {
@@ -38,28 +47,33 @@ func TestRootHelp(t *testing.T) {
 }
 
 func TestStatusNeedsAgent(t *testing.T) {
-	// Without a running agent, status should fail to connect
-	_, err := executeCommand("status")
-	if err == nil {
-		t.Fatal("expected error when no agent is running")
-	}
-	if !strings.Contains(err.Error(), "connecting to agent") {
-		t.Fatalf("expected connection error, got: %v", err)
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("status")
+		if err == nil {
+			t.Fatal("expected error when no agent is running")
+		}
+		if !strings.Contains(err.Error(), "connecting to agent") {
+			t.Fatalf("expected connection error, got: %v", err)
+		}
+	})
 }
 
 func TestConfigNeedsAgent(t *testing.T) {
-	_, err := executeCommand("config")
-	if err == nil {
-		t.Fatal("expected error when no agent is running")
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("config")
+		if err == nil {
+			t.Fatal("expected error when no agent is running")
+		}
+	})
 }
 
 func TestPredictNeedsAgent(t *testing.T) {
-	_, err := executeCommand("predict")
-	if err == nil {
-		t.Fatal("expected error when no agent is running")
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("predict")
+		if err == nil {
+			t.Fatal("expected error when no agent is running")
+		}
+	})
 }
 
 func TestTableOutput(t *testing.T) {
@@ -67,10 +81,12 @@ func TestTableOutput(t *testing.T) {
 	outputFormat = "table"
 	defer func() { outputFormat = saved }()
 
-	_, err := executeCommand("status")
-	if err == nil {
-		t.Fatal("expected connection error")
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("status")
+		if err == nil {
+			t.Fatal("expected connection error")
+		}
+	})
 }
 
 func TestJSONOutput(t *testing.T) {
@@ -78,10 +94,12 @@ func TestJSONOutput(t *testing.T) {
 	outputFormat = "json"
 	defer func() { outputFormat = saved }()
 
-	_, err := executeCommand("status")
-	if err == nil {
-		t.Fatal("expected connection error")
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("status")
+		if err == nil {
+			t.Fatal("expected connection error")
+		}
+	})
 }
 
 func TestYAMLOutput(t *testing.T) {
@@ -89,10 +107,12 @@ func TestYAMLOutput(t *testing.T) {
 	outputFormat = "yaml"
 	defer func() { outputFormat = saved }()
 
-	_, err := executeCommand("status")
-	if err == nil {
-		t.Fatal("expected connection error")
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("status")
+		if err == nil {
+			t.Fatal("expected connection error")
+		}
+	})
 }
 
 func TestUnknownCommand(t *testing.T) {
@@ -103,10 +123,12 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestStatusWithFormatFlag(t *testing.T) {
-	_, err := executeCommand("status", "-o", "json")
-	if err == nil {
-		t.Fatal("expected connection error with format flag")
-	}
+	withUnreachableAgent(t, func() {
+		_, err := executeCommand("status", "-o", "json")
+		if err == nil {
+			t.Fatal("expected connection error with format flag")
+		}
+	})
 }
 
 func TestMultipleSubcommandsInHelp(t *testing.T) {
@@ -114,7 +136,7 @@ func TestMultipleSubcommandsInHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--help: %v", err)
 	}
-	for _, cmd := range []string{"status", "config", "predict"} {
+	for _, cmd := range []string{"status", "config", "predict", "ui", "watch", "connect", "profile", "logs", "agent"} {
 		if !strings.Contains(output, cmd) {
 			t.Fatalf("expected %q subcommand in help", cmd)
 		}
@@ -253,11 +275,12 @@ func TestOutputFlagFormat(t *testing.T) {
 }
 
 func TestRootNoArgs(t *testing.T) {
-	// Running with no args should show help/usage
+	// Non-TTY stdout in tests should show help without error.
 	output, err := executeCommand()
 	if err != nil {
-		// cobra returns nil error for run with no args if Run/RunE is nil
-		// root has no RunE set, so it should just print help
+		t.Fatalf("no args: %v", err)
 	}
-	_ = output
+	if !strings.Contains(output, "kwctl") {
+		t.Fatal("expected help output")
+	}
 }

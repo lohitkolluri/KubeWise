@@ -1,48 +1,33 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
-	yaml "gopkg.in/yaml.v3"
 )
 
+var auditLimit int
+
 func init() {
+	remediationCmd.Flags().IntVarP(&auditLimit, "limit", "l", 20, "max records")
 	rootCmd.AddCommand(remediationCmd)
 }
 
 var remediationCmd = &cobra.Command{
-	Use:   "remediation",
-	Short: "Show recent remediation actions",
-	Long:  `Fetch and display remediation audit records from the agent.`,
+	Use:     "remediation",
+	Aliases: []string{"audit", "remediations"},
+	Short:   "Show remediation audit log",
+	Long:    `Fetch and display remediation audit records from the agent.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}
-		body, _, err := agentGet("/api/v1/audit")
+		records, err := fetchAudit(auditLimit)
 		if err != nil {
 			return err
 		}
-
-		var records []models.AuditRecord
-		if err := json.Unmarshal(body, &records); err != nil {
-			return fmt.Errorf("parsing audit records: %w", err)
-		}
-
-		switch outputFormat {
-		case "json":
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(records)
-		case "yaml":
-			enc := yaml.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent(2)
-			defer enc.Close()
-			return enc.Encode(records)
-		default:
+		return writeOutput(cmd.OutOrStdout(), outputFormat, records, func() error {
 			if len(records) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "No remediation records.")
 				return nil
@@ -56,6 +41,6 @@ var remediationCmd = &cobra.Command{
 					trunc(r.ID, 28), string(r.Status), trunc(action, 18), string(r.RiskTier), trunc(r.Reason, 30))
 			}
 			return nil
-		}
+		})
 	},
 }

@@ -13,7 +13,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /api/v1/predictions", s.handlePredictions)
 	mux.HandleFunc("GET /api/v1/anomalies", s.handleAnomalies)
-	mux.HandleFunc("GET /api/v1/config", s.handleConfig)
+	mux.HandleFunc("GET /api/v1/config", s.handleConfigGet)
+	mux.HandleFunc("PUT /api/v1/config", s.handleConfigPut)
+	mux.HandleFunc("POST /api/v1/config", s.handleConfigPut)
+	s.registerRemediationRoutes(mux)
 	mux.HandleFunc("GET /api/v1/remediations", s.handleRemediations)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /", s.handleNotFound)
@@ -74,7 +77,11 @@ func (s *Server) handleAnomalies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, records)
 }
 
-func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	cfg, err := s.store.LoadConfig()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load config: %v", err))
@@ -82,6 +89,23 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if cfg == nil {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "no config saved"})
+		return
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var cfg models.AgentConfig
+	if err := decodeJSON(r, &cfg); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.store.SaveConfig(&cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)

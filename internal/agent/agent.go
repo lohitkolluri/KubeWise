@@ -104,6 +104,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	ag := gate.NewGate(gateCfg)
 
 	apiSrv := api.NewServer(s, apiAddr)
+	apiSrv.SetRemediator(corr)
 
 	a := &Agent{
 		store:       s,
@@ -419,14 +420,16 @@ func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
 				IntervalSeconds: a.interval.Seconds(),
 			})
 			if err != nil {
-				log.Printf("agent[%d]: forecast error for %s: %v", scrapeNum, metricName, err)
+				if !benignForecastError(err.Error()) {
+					log.Printf("agent[%d]: forecast error for %s: %v", scrapeNum, metricName, err)
+				}
 				continue
 			}
 			if resp.Status == "ok" && len(resp.Points) > 0 {
 				last := resp.Points[len(resp.Points)-1]
 				log.Printf("agent[%d]: forecast %s -> %d points (last: %.2f [%.2f, %.2f])",
 					scrapeNum, metricName, len(resp.Points), last.Value, last.LowerBound, last.UpperBound)
-			} else if resp.Status != "ok" {
+			} else if resp.Status != "ok" && !benignForecastError(resp.ErrorMessage) {
 				log.Printf("agent[%d]: forecast error for %s: %s", scrapeNum, metricName, resp.ErrorMessage)
 			}
 		}
@@ -450,4 +453,12 @@ func toPredictorMetrics(metrics []collector.MetricResult) []predictor.MetricResu
 		})
 	}
 	return result
+}
+
+// benignForecastError reports whether a forecaster failure is expected for short/young series.
+func benignForecastError(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "seasonal") ||
+		strings.Contains(msg, "need >=") ||
+		strings.Contains(msg, "two full seasonal")
 }

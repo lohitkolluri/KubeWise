@@ -65,6 +65,7 @@ const (
 	AuditFailed   AuditStatus = "failed"
 	AuditDryRun   AuditStatus = "dry_run"
 	AuditEscalated AuditStatus = "escalated"
+	AuditPending  AuditStatus = "pending_approval"
 )
 
 // AuditRecord stores every remediation decision for observability.
