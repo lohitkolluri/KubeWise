@@ -9,6 +9,7 @@ type AgentConfig struct {
 	LLMBaseURL        string              `json:"llm_base_url,omitempty" yaml:"llm_base_url,omitempty"`
 	Remediation       RemediationConfig   `json:"remediation" yaml:"remediation"`
 	Notifications     NotificationsConfig `json:"notifications" yaml:"notifications"`
+	WatchNamespaces   []string            `json:"watch_namespaces,omitempty" yaml:"watch_namespaces,omitempty"`
 }
 
 // RemediationConfig controls remediation behavior.
@@ -19,6 +20,7 @@ type RemediationConfig struct {
 	NamespaceDenylist []string `json:"namespace_denylist,omitempty" yaml:"namespace_denylist,omitempty"`
 	Allowlist         []string `json:"allowlist,omitempty" yaml:"allowlist,omitempty"`
 	MinConfidence     float64  `json:"min_confidence,omitempty" yaml:"min_confidence,omitempty"`
+	WatchNamespaces   []string `json:"watch_namespaces,omitempty" yaml:"watch_namespaces,omitempty"`
 }
 
 // RemediationModeView is the runtime remediation mode exposed via the agent API.

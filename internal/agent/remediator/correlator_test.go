@@ -15,13 +15,25 @@ func testAnomalies() []models.AnomalyRecord {
 func TestFilterNewAnomalies_SkipsCorrelated(t *testing.T) {
 	c := &Correlator{}
 	records := []models.AnomalyRecord{
-		{ID: "1", Status: models.AnomalyStatusDetected},
-		{ID: "2", Status: models.AnomalyStatusCorrelated},
-		{ID: "3", Status: models.AnomalyStatusRemediated},
+		{ID: "1", Status: models.AnomalyStatusDetected, Namespace: "demo"},
+		{ID: "2", Status: models.AnomalyStatusCorrelated, Namespace: "demo"},
+		{ID: "3", Status: models.AnomalyStatusRemediated, Namespace: "demo"},
 	}
 	filtered := c.filterNewAnomalies(records, RemediationConfig{})
 	if len(filtered) != 1 || filtered[0].ID != "1" {
 		t.Fatalf("expected only detected anomaly, got %v", filtered)
+	}
+}
+
+func TestFilterNewAnomalies_WatchNamespaces(t *testing.T) {
+	c := &Correlator{}
+	records := []models.AnomalyRecord{
+		{ID: "1", Status: models.AnomalyStatusDetected, Namespace: "demo"},
+		{ID: "2", Status: models.AnomalyStatusDetected, Namespace: "staging"},
+	}
+	filtered := c.filterNewAnomalies(records, RemediationConfig{WatchNamespaces: []string{"demo"}})
+	if len(filtered) != 1 || filtered[0].Namespace != "demo" {
+		t.Fatalf("expected demo only, got %v", filtered)
 	}
 }
 

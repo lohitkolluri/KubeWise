@@ -23,12 +23,13 @@ func (c *Correlator) RemediationState() models.RemediationModeView {
 // ApplyRemediationConfig syncs from persisted agent config.
 func (c *Correlator) ApplyRemediationConfig(cfg models.RemediationConfig) {
 	rem := RemediationConfig{
-		Mode:          cfg.Mode,
-		DryRun:        cfg.DryRun,
-		Allowlist:     cfg.Allowlist,
-		Denylist:      cfg.NamespaceDenylist,
-		MinConfidence: cfg.MinConfidence,
-		RateLimit:     cfg.RateLimit,
+		Mode:            cfg.Mode,
+		DryRun:          cfg.DryRun,
+		Allowlist:       cfg.Allowlist,
+		Denylist:        cfg.NamespaceDenylist,
+		MinConfidence:   cfg.MinConfidence,
+		RateLimit:       cfg.RateLimit,
+		WatchNamespaces: cfg.WatchNamespaces,
 	}
 	if rem.MinConfidence <= 0 {
 		rem.MinConfidence = c.cfg.MinConfidence

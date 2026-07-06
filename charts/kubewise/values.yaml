@@ -1,0 +1,90 @@
+# Default values for kubewise.
+
+namespace:
+  create: true
+  name: kubewise
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  agent:
+    repository: kubewise/agent
+    tag: latest
+    pullPolicy: IfNotPresent
+  forecaster:
+    repository: kubewise/forecaster
+    tag: latest
+    pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: kubewise-agent
+
+rbac:
+  create: true
+  # clusterScoped=true grants ClusterRole (default). false uses Role in release namespace only.
+  clusterScoped: true
+  # When clusterScoped=false, create Role+RoleBinding in these additional namespaces.
+  extraNamespaces: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+persistence:
+  enabled: false
+  size: 2Gi
+  storageClass: ""
+
+agent:
+  scrapeInterval: 30s
+  prometheusAddress: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+  llmProvider: openrouter
+  llmModel: meta-llama/llama-3.1-8b-instruct
+  llmBaseURL: ""
+  # Empty = watch all namespaces (subject to denylist). Non-empty limits observation scope.
+  watchNamespaces: []
+  remediation:
+    mode: dry-run
+    dryRun: true
+    rateLimit: 3
+    minConfidence: 0.7
+    namespaceDenylist:
+      - kube-system
+      - kubewise
+    allowlist: []
+  notifications:
+    enabled: false
+    webhookURL: ""
+    slackWebhookURL: ""
+    minScore: 0.7
+    onPrediction: true
+    onRemediation: true
+    onApproval: true
+
+secrets:
+  # Set via --set secrets.openrouterApiKey=... or existingSecret
+  openrouterApiKey: ""
+  apiToken: ""
+  existingSecret: ""
+
+security:
+  # When true, agent refuses to start without KUBEWISE_API_TOKEN (fail closed).
+  requireApiToken: false
+
+resources:
+  agent:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  forecaster:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi

@@ -1,0 +1,81 @@
+{{- if .Values.rbac.create }}
+{{- $ns := include "kubewise.namespace" . }}
+{{- $sa := include "kubewise.serviceAccountName" . }}
+{{- if .Values.rbac.clusterScoped }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kubewise.fullname" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/status, nodes, nodes/status, events]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [deployments, deployments/status, replicasets, replicasets/status]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+  - apiGroups: ["apps"]
+    resources: [deployments]
+    verbs: [patch, update]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, list, watch, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kubewise.fullname" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kubewise.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $ns }}
+{{- else }}
+{{- $namespaces := append (list $ns) .Values.rbac.extraNamespaces }}
+{{- range $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kubewise.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "kubewise.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/status, events]
+    verbs: [get, list, watch, delete]
+  - apiGroups: ["apps"]
+    resources: [deployments, deployments/status, replicasets, replicasets/status]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, list, watch, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kubewise.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "kubewise.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kubewise.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $ns }}
+{{- end }}
+{{- end }}
+{{- end }}

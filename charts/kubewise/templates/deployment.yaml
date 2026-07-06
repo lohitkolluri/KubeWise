@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubewise.fullname" . }}
+  namespace: {{ include "kubewise.namespace" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "kubewise.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubewise.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kubewise.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kubewise.fullname" . }}-config
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kubewise.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: forecaster-tmp
+          emptyDir: {}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag }}"
+          imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kubewise
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/kubewise
+          env:
+            - name: KUBEWISE_CONFIG_PATH
+              value: /etc/kubewise/config.yaml
+            - name: KUBEWISE_DATA_DIR
+              value: /var/lib/kubewise
+            - name: FORECASTER_ADDR
+              value: localhost:50051
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubewise.secretName" . }}
+                  key: openrouter_api_key
+                  optional: true
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.agent.llmBaseURL | quote }}
+            - name: KUBEWISE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubewise.secretName" . }}
+                  key: api_token
+                  optional: true
+            - name: KUBEWISE_REQUIRE_API_TOKEN
+              value: {{ .Values.security.requireApiToken | quote }}
+          resources:
+            {{- toYaml .Values.resources.agent | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 12
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+        - name: forecaster
+          image: "{{ .Values.image.forecaster.repository }}:{{ .Values.image.forecaster.tag }}"
+          imagePullPolicy: {{ .Values.image.forecaster.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: forecaster-tmp
+              mountPath: /tmp
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: FORECASTER_PORT
+              value: "50051"
+            - name: FORECASTER_HEALTH_PORT
+              value: "8081"
+          resources:
+            {{- toYaml .Values.resources.forecaster | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            failureThreshold: 18
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 3

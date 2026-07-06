@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubewise.fullname" . }}-config
+  namespace: {{ include "kubewise.namespace" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    scrape_interval: {{ .Values.agent.scrapeInterval | quote }}
+    prometheus_address: {{ .Values.agent.prometheusAddress | quote }}
+    llm_provider: {{ .Values.agent.llmProvider | quote }}
+    llm_model: {{ .Values.agent.llmModel | quote }}
+    {{- if .Values.agent.llmBaseURL }}
+    llm_base_url: {{ .Values.agent.llmBaseURL | quote }}
+    {{- end }}
+    {{- if .Values.agent.watchNamespaces }}
+    watch_namespaces:
+    {{- range .Values.agent.watchNamespaces }}
+      - {{ . | quote }}
+    {{- end }}
+    {{- end }}
+    remediation:
+      mode: {{ .Values.agent.remediation.mode | quote }}
+      dry_run: {{ .Values.agent.remediation.dryRun }}
+      rate_limit: {{ .Values.agent.remediation.rateLimit }}
+      min_confidence: {{ .Values.agent.remediation.minConfidence }}
+      namespace_denylist:
+      {{- range .Values.agent.remediation.namespaceDenylist }}
+        - {{ . | quote }}
+      {{- end }}
+      allowlist:
+      {{- range .Values.agent.remediation.allowlist }}
+        - {{ . | quote }}
+      {{- end }}
+    notifications:
+      enabled: {{ .Values.agent.notifications.enabled }}
+      {{- if .Values.agent.notifications.webhookURL }}
+      webhook_url: {{ .Values.agent.notifications.webhookURL | quote }}
+      {{- end }}
+      {{- if .Values.agent.notifications.slackWebhookURL }}
+      slack_webhook_url: {{ .Values.agent.notifications.slackWebhookURL | quote }}
+      {{- end }}
+      min_score: {{ .Values.agent.notifications.minScore }}
+      on_prediction: {{ .Values.agent.notifications.onPrediction }}
+      on_remediation: {{ .Values.agent.notifications.onRemediation }}
+      on_approval: {{ .Values.agent.notifications.onApproval }}

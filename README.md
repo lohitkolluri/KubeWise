@@ -38,6 +38,25 @@ kwctl install --yes
 
 Same binary either way. Node 16+.
 
+### Helm
+
+```bash
+helm install kubewise ./charts/kubewise \
+  --namespace kubewise --create-namespace \
+  --set secrets.openrouterApiKey=$OPENROUTER_API_KEY \
+  --set persistence.enabled=true \
+  --set security.requireApiToken=true \
+  --set secrets.apiToken=$(openssl rand -hex 24)
+```
+
+Namespace-scoped RBAC (no ClusterRole):
+
+```bash
+helm install kubewise ./charts/kubewise \
+  --set rbac.clusterScoped=false \
+  --set agent.watchNamespaces="{demo,staging}"
+```
+
 ### curl
 
 ```bash
