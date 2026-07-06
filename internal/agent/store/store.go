@@ -22,7 +22,27 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init bbolt: %w", err)
 	}
+	if err := s.ensureAnomalyIndexes(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("rebuild anomaly indexes: %w", err)
+	}
 	return s, nil
+}
+
+func (s *Store) ensureAnomalyIndexes() error {
+	need := false
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		main := tx.Bucket(bucketAnomalies)
+		idx := tx.Bucket(bucketAnomalyIndex)
+		if main != nil && main.Stats().KeyN > 0 && (idx == nil || idx.Stats().KeyN == 0) {
+			need = true
+		}
+		return nil
+	})
+	if need {
+		return s.RebuildAnomalyIndexes()
+	}
+	return nil
 }
 
 // Close shuts down the database.

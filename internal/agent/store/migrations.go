@@ -13,6 +13,10 @@ var (
 	bucketConfig       = []byte("config")
 	bucketPredictions  = []byte("predictions")
 	bucketOutcomes     = []byte("outcomes")
+	bucketAnomalyIndex = []byte("anomaly_idx")
+	bucketAnomalyOpen  = []byte("anomaly_open")
+	bucketAuditIndex   = []byte("audit_idx")
+	bucketAuditStatus  = []byte("audit_status")
 )
 
 // Init ensures all required buckets exist.
@@ -26,6 +30,10 @@ func (s *Store) Init() error {
 			bucketConfig,
 			bucketPredictions,
 			bucketOutcomes,
+			bucketAnomalyIndex,
+			bucketAnomalyOpen,
+			bucketAuditIndex,
+			bucketAuditStatus,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err

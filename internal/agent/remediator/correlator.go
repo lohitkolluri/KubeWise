@@ -54,8 +54,9 @@ type RemediationConfig struct {
 	DryRun        bool     // when true, log actions but don't execute
 	Allowlist     []string // allowed action types (empty = all)
 	Denylist      []string // denied namespaces
-	MinConfidence float64  // minimum LLM confidence to execute
-	RateLimit     int      // max anomalies per LLM call (0 = unlimited)
+	MinConfidence   float64  // minimum LLM confidence to execute
+	RateLimit       int      // max anomalies per LLM call (0 = unlimited)
+	WatchNamespaces []string // empty = all namespaces (minus denylist)
 }
 
 // NewCorrelator creates the remediation pipeline.
@@ -329,6 +330,9 @@ func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord, cfg Reme
 		if denied {
 			continue
 		}
+		if !namespaceAllowed(r.Namespace, cfg.WatchNamespaces) {
+			continue
+		}
 		filtered = append(filtered, r)
 	}
 	return filtered
@@ -575,4 +579,16 @@ func (c *Correlator) anomalyFetchLimit(cfg RemediationConfig) int {
 		limit = 100
 	}
 	return limit
+}
+
+func namespaceAllowed(ns string, watch []string) bool {
+	if len(watch) == 0 {
+		return true
+	}
+	for _, w := range watch {
+		if w == ns {
+			return true
+		}
+	}
+	return false
 }

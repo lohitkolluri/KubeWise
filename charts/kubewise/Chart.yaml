@@ -1,0 +1,14 @@
+apiVersion: v2
+name: kubewise
+description: In-cluster Kubernetes predictive observability and safe AI remediation agent
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords:
+  - kubernetes
+  - observability
+  - sre
+  - remediation
+home: https://github.com/lohitkolluri/KubeWise
+sources:
+  - https://github.com/lohitkolluri/KubeWise

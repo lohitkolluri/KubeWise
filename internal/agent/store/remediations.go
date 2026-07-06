@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -25,7 +26,21 @@ func (s *Store) SaveAuditRecord(r *models.AuditRecord) error {
 		if err != nil {
 			return err
 		}
-		return b.Put([]byte(r.ID), data)
+		if err := b.Put([]byte(r.ID), data); err != nil {
+			return err
+		}
+		idx, err := tx.CreateBucketIfNotExists(bucketAuditIndex)
+		if err != nil {
+			return err
+		}
+		if err := idx.Put(auditTimeIndexKey(r.CreatedAt, r.ID), []byte(r.ID)); err != nil {
+			return err
+		}
+		st, err := tx.CreateBucketIfNotExists(bucketAuditStatus)
+		if err != nil {
+			return err
+		}
+		return st.Put(auditStatusIndexKey(r.Status, r.CreatedAt, r.ID), []byte(r.ID))
 	})
 }
 
@@ -59,6 +74,41 @@ func (s *Store) ListAuditRecords(limit int) ([]models.AuditRecord, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
+	var records []models.AuditRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		idx := tx.Bucket(bucketAuditIndex)
+		main := tx.Bucket(bucketAuditLog)
+		if idx == nil || main == nil {
+			return nil
+		}
+		c := idx.Cursor()
+		for k, _ := c.First(); k != nil && len(records) < limit; k, _ = c.Next() {
+			parts := strings.SplitN(string(k), "|", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			data := main.Get([]byte(parts[1]))
+			if data == nil {
+				continue
+			}
+			var r models.AuditRecord
+			if err := json.Unmarshal(data, &r); err != nil {
+				return err
+			}
+			records = append(records, r)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return s.listAllAuditRecordsLimited(limit)
+	}
+	return records, nil
+}
+
+func (s *Store) listAllAuditRecordsLimited(limit int) ([]models.AuditRecord, error) {
 	records, err := s.listAllAuditRecords()
 	if err != nil {
 		return nil, err
@@ -130,7 +180,20 @@ func (s *Store) UpdateAuditRecord(r *models.AuditRecord) error {
 		if b.Get([]byte(r.ID)) == nil {
 			return fmt.Errorf("audit record %q not found", r.ID)
 		}
-		return b.Put([]byte(r.ID), data)
+		var prev models.AuditRecord
+		_ = json.Unmarshal(b.Get([]byte(r.ID)), &prev)
+		if err := b.Put([]byte(r.ID), data); err != nil {
+			return err
+		}
+		if idx := tx.Bucket(bucketAuditIndex); idx != nil {
+			_ = idx.Delete(auditTimeIndexKey(prev.CreatedAt, r.ID))
+			_ = idx.Put(auditTimeIndexKey(r.CreatedAt, r.ID), []byte(r.ID))
+		}
+		if st := tx.Bucket(bucketAuditStatus); st != nil {
+			_ = st.Delete(auditStatusIndexKey(prev.Status, prev.CreatedAt, r.ID))
+			_ = st.Put(auditStatusIndexKey(r.Status, r.CreatedAt, r.ID), []byte(r.ID))
+		}
+		return nil
 	})
 }
 
@@ -139,6 +202,48 @@ func (s *Store) ListAuditRecordsByStatus(status models.AuditStatus, limit int) (
 	if limit <= 0 {
 		limit = 20
 	}
+	prefix := []byte(string(status) + "|")
+	var out []models.AuditRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		st := tx.Bucket(bucketAuditStatus)
+		main := tx.Bucket(bucketAuditLog)
+		if st == nil || main == nil {
+			return nil
+		}
+		c := st.Cursor()
+		for k, v := c.Seek(prefix); k != nil && len(out) < limit; k, v = c.Next() {
+			if !strings.HasPrefix(string(k), string(prefix)) {
+				break
+			}
+			id := string(v)
+			if id == "" {
+				parts := strings.Split(string(k), "|")
+				if len(parts) >= 3 {
+					id = parts[2]
+				}
+			}
+			data := main.Get([]byte(id))
+			if data == nil {
+				continue
+			}
+			var r models.AuditRecord
+			if err := json.Unmarshal(data, &r); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return s.listAuditByStatusLegacy(status, limit)
+	}
+	return out, nil
+}
+
+func (s *Store) listAuditByStatusLegacy(status models.AuditStatus, limit int) ([]models.AuditRecord, error) {
 	records, err := s.listAllAuditRecords()
 	if err != nil {
 		return nil, err

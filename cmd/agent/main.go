@@ -127,12 +127,13 @@ func main() {
 		}
 	}
 	remCfg := remediator.RemediationConfig{
-		Mode:          cfg.Remediation.Mode,
-		DryRun:        cfg.Remediation.DryRun || cfg.Remediation.Mode == models.RemediationModeDryRun,
-		Allowlist:     cfg.Remediation.Allowlist,
-		Denylist:      cfg.Remediation.NamespaceDenylist,
-		MinConfidence: minConf,
-		RateLimit:     cfg.Remediation.RateLimit,
+		Mode:            cfg.Remediation.Mode,
+		DryRun:          cfg.Remediation.DryRun || cfg.Remediation.Mode == models.RemediationModeDryRun,
+		Allowlist:       cfg.Remediation.Allowlist,
+		Denylist:        cfg.Remediation.NamespaceDenylist,
+		MinConfidence:   minConf,
+		RateLimit:       cfg.Remediation.RateLimit,
+		WatchNamespaces: cfg.WatchNamespaces,
 	}
 	if remCfg.RateLimit <= 0 {
 		remCfg.RateLimit = 10
@@ -187,6 +188,10 @@ func main() {
 
 	if strings.TrimSpace(os.Getenv("KUBEWISE_API_TOKEN")) == "" {
 		log.Printf("agent: WARNING: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
+	}
+	if os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" && strings.TrimSpace(os.Getenv("KUBEWISE_API_TOKEN")) == "" {
+		fmt.Fprintln(os.Stderr, "KUBEWISE_REQUIRE_API_TOKEN is set but KUBEWISE_API_TOKEN is empty — refusing to start")
+		os.Exit(1)
 	}
 
 	// Create the agent (wraps collector, predictor, LLM, remediation, API server)

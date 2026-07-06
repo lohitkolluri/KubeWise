@@ -103,6 +103,9 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	if cfg.Remediation.RateLimit > 0 {
 		remCfg.RateLimit = cfg.Remediation.RateLimit
 	}
+	if len(cfg.WatchNamespaces) > 0 {
+		remCfg.WatchNamespaces = cfg.WatchNamespaces
+	}
 
 	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg)
 	notifier := notify.New(cfg.Notifications)
@@ -274,6 +277,13 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 	entity := models.FormatEntity(p.Namespace, p.Entity)
 	if p.Namespace == "" {
 		entity = p.Entity
+	}
+	ns := p.Namespace
+	if ns == "" {
+		ns, _ = models.ParseEntity(entity)
+	}
+	if !namespaceInScope(ns, a.cfg.WatchNamespaces) {
+		return
 	}
 
 	if p.Score < a.minScore {
@@ -486,6 +496,18 @@ func toPredictorMetrics(metrics []collector.MetricResult) []predictor.MetricResu
 		})
 	}
 	return result
+}
+
+func namespaceInScope(ns string, watch []string) bool {
+	if len(watch) == 0 {
+		return true
+	}
+	for _, w := range watch {
+		if w == ns {
+			return true
+		}
+	}
+	return false
 }
 
 // benignForecastError reports whether a forecaster failure is expected for short/young series.
