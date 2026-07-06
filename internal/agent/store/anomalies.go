@@ -97,3 +97,46 @@ func (s *Store) UpdateAnomaly(r *models.AnomalyRecord) error {
 		return tx.Bucket(bucketAnomalies).Put([]byte(r.ID), data)
 	})
 }
+
+// FindOpenAnomaly returns the newest open anomaly for entity+signal if one exists.
+func (s *Store) FindOpenAnomaly(entity, signal string) (*models.AnomalyRecord, error) {
+	records, err := s.ListAnomalies(100)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range records {
+		if r.Entity != entity {
+			continue
+		}
+		if r.MetricName != signal && r.Pattern != signal {
+			continue
+		}
+		switch r.Status {
+		case models.AnomalyStatusDetected, models.AnomalyStatusActive:
+			return &r, nil
+		}
+	}
+	return nil, nil
+}
+
+// UpsertOpenAnomaly saves a new anomaly or updates score/timestamp on an existing open one.
+// Returns true if a new record was created.
+func (s *Store) UpsertOpenAnomaly(r *models.AnomalyRecord) (bool, error) {
+	signal := r.MetricName
+	if signal == "" {
+		signal = r.Pattern
+	}
+	existing, err := s.FindOpenAnomaly(r.Entity, signal)
+	if err != nil {
+		return false, err
+	}
+	if existing != nil {
+		existing.Score = r.Score
+		existing.DetectedAt = r.DetectedAt
+		if r.Pattern != "" {
+			existing.Pattern = r.Pattern
+		}
+		return false, s.UpdateAnomaly(existing)
+	}
+	return true, s.SaveAnomaly(r)
+}

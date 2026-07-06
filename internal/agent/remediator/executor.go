@@ -3,7 +3,10 @@ package remediator
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -110,26 +113,47 @@ func (e *K8sExecutor) rollbackDeployment(ctx context.Context, namespace, name st
 	if err != nil {
 		return "", fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
 	}
-
-	// Rollback: set the annotation to trigger a rollback to the previous revision
-	if deployment.Annotations == nil {
-		deployment.Annotations = make(map[string]string)
-	}
-	deployment.Annotations["kubectl.kubernetes.io/rollback"] = "true"
-
-	// For a proper rollback, we use the Rollback API or set the revision annotation.
-	// Since client-go doesn't have a direct rollback API in newer versions,
-	// we use the deployment's rollout undo mechanism via annotation.
 	if deployment.Spec.Paused {
 		return "", fmt.Errorf("deployment %s/%s is paused, cannot rollback", namespace, name)
 	}
 
-	_, err = e.clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	labelSelector := metav1.FormatLabelSelector(deployment.Spec.Selector)
+	rsList, err := e.clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
 	if err != nil {
-		return "", fmt.Errorf("rollback deployment %s/%s: %w", namespace, name, err)
+		return "", fmt.Errorf("list replicasets for %s/%s: %w", namespace, name, err)
 	}
 
-	return fmt.Sprintf("initiated rollback of deployment %s/%s", namespace, name), nil
+	type revisionedRS struct {
+		revision int64
+		rs       appsv1.ReplicaSet
+	}
+	var revisions []revisionedRS
+	for _, rs := range rsList.Items {
+		revStr := rs.Annotations["deployment.kubernetes.io/revision"]
+		if revStr == "" {
+			continue
+		}
+		rev, err := strconv.ParseInt(revStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		revisions = append(revisions, revisionedRS{revision: rev, rs: rs})
+	}
+	if len(revisions) < 2 {
+		return "", fmt.Errorf("deployment %s/%s has no previous revision to roll back to", namespace, name)
+	}
+
+	sort.Slice(revisions, func(i, j int) bool { return revisions[i].revision > revisions[j].revision })
+	previous := revisions[1].rs
+	deployment.Spec.Template = previous.Spec.Template
+	_, err = e.clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	if err != nil {
+		return "", fmt.Errorf("rollback deployment %s/%s to revision %d: %w", namespace, name, revisions[1].revision, err)
+	}
+
+	return fmt.Sprintf("rolled back deployment %s/%s to revision %d", namespace, name, revisions[1].revision), nil
 }
 
 func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string, params map[string]string) (string, error) {
@@ -137,46 +161,11 @@ func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string
 	// Expected params: container, cpu_request, cpu_limit, memory_request, memory_limit
 	container := params["container"]
 	if container == "" {
-		container = name // default: target name is the container name
+		container = name
 	}
 
-	patchMap := make(map[string]interface{})
-	resources := make(map[string]interface{})
-
-	if v, ok := params["cpu_request"]; ok {
-		resources["cpu"] = map[string]string{"request": v}
-	}
-	if v, ok := params["cpu_limit"]; ok {
-		if _, exists := resources["cpu"]; !exists {
-			resources["cpu"] = make(map[string]string)
-		}
-		resources["cpu"].(map[string]string)["limit"] = v
-	}
-	if v, ok := params["memory_request"]; ok {
-		resources["memory"] = map[string]string{"request": v}
-	}
-	if v, ok := params["memory_limit"]; ok {
-		if _, exists := resources["memory"]; !exists {
-			resources["memory"] = make(map[string]string)
-		}
-		resources["memory"].(map[string]string)["limit"] = v
-	}
-
-	if len(resources) == 0 {
+	if len(resourceParams(params)) == 0 {
 		return "", fmt.Errorf("patch_resources requires at least one resource parameter")
-	}
-
-	patchMap["spec"] = map[string]interface{}{
-		"template": map[string]interface{}{
-			"spec": map[string]interface{}{
-				"containers": []map[string]interface{}{
-					{
-						"name":      container,
-						"resources": resources,
-					},
-				},
-			},
-		},
 	}
 
 	patchJSON := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":%q,"resources":%s}]}}}}`,
@@ -191,8 +180,7 @@ func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string
 	return fmt.Sprintf("patched resources for deployment %s/%s container %s", namespace, name, container), nil
 }
 
-// resourcePatchValue builds the resources JSON fragment for the patch.
-func resourcePatchValue(params map[string]string) string {
+func resourceParams(params map[string]string) map[string]map[string]string {
 	parts := make(map[string]map[string]string)
 	for k, v := range params {
 		if k == "container" {
@@ -209,6 +197,11 @@ func resourcePatchValue(params map[string]string) string {
 			ensureMap(parts, "memory")["limit"] = v
 		}
 	}
+	return parts
+}
+
+func resourcePatchValue(params map[string]string) string {
+	parts := resourceParams(params)
 
 	// Build JSON manually since we need a simple deterministic output
 	json := "{"

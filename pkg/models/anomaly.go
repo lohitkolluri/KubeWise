@@ -7,6 +7,7 @@ const (
 	AnomalyStatusDetected   = "detected"
 	AnomalyStatusActive     = "active"
 	AnomalyStatusCorrelated = "correlated"
+	AnomalyStatusRejected   = "rejected"
 	AnomalyStatusRemediated = "remediated"
 	AnomalyStatusResolved   = "resolved"
 )

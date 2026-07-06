@@ -8,9 +8,12 @@ import (
 
 func TestPredictorEmptyMetrics(t *testing.T) {
 	p := NewPredictor(DefaultScorerConfig())
-	_, err := p.Run(nil)
-	if err == nil {
-		t.Fatal("expected error for nil metrics")
+	results, err := p.Run(nil)
+	if err != nil {
+		t.Fatalf("expected no error for nil metrics, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results, got %d", len(results))
 	}
 }
 

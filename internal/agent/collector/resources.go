@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -133,7 +134,7 @@ func (rc *ResourcesCollector) Run(ctx context.Context) {
 	go rc.depInformer.Run(ctx.Done())
 
 	if !cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced) {
-		fmt.Println("resources: informer cache sync timed out")
+		log.Printf("resources: informer cache sync timed out")
 		return
 	}
 	rc.mu.Lock()
@@ -156,13 +157,17 @@ func (rc *ResourcesCollector) WaitForSync() bool {
 	return err == nil
 }
 
-// GetFailingPods returns pods with non-Running phases or excessive restarts.
+// GetFailingPods returns pods that are not Running/Ready or are in a failed phase.
 func (rc *ResourcesCollector) GetFailingPods() []PodState {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	var failing []PodState
 	for _, p := range rc.pods {
-		if p.Phase != string(corev1.PodRunning) || p.RestartCount > 3 {
+		if p.Phase != string(corev1.PodRunning) {
+			failing = append(failing, p)
+			continue
+		}
+		if !p.Ready && p.RestartCount > 0 {
 			failing = append(failing, p)
 		}
 	}

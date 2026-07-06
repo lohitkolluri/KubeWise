@@ -104,12 +104,23 @@ func main() {
 	}
 
 	// Build remediation config from the agent config
+	minConf := cfg.Remediation.MinConfidence
+	if minConf <= 0 {
+		minConf = 0.7
+	}
+	switch cfg.Remediation.Mode {
+	case "dry-run", "auto", "off", "":
+	default:
+		log.Printf("agent: unknown remediation mode %q, defaulting to dry-run", cfg.Remediation.Mode)
+		cfg.Remediation.Mode = "dry-run"
+	}
 	remCfg := remediator.RemediationConfig{
 		Mode:          cfg.Remediation.Mode,
 		DryRun:        cfg.Remediation.DryRun || cfg.Remediation.Mode == "dry-run",
 		Allowlist:     cfg.Remediation.Allowlist,
 		Denylist:      cfg.Remediation.NamespaceDenylist,
-		MinConfidence: 0.7,
+		MinConfidence: minConf,
+		RateLimit:     cfg.Remediation.RateLimit,
 	}
 
 	// Get API key from env

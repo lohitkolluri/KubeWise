@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,8 @@ import (
 	k8sclient "github.com/lohitkolluri/KubeWise/pkg/k8s"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
+
+const remediationTimeout = 2 * time.Minute
 
 // Agent is the main orchestration loop: collect → detect → gate → store → correlate → remediate.
 type Agent struct {
@@ -50,6 +53,9 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	if apiAddr == "" {
 		apiAddr = ":8080"
 	}
+	if remCfg.Mode == "auto" && remCfg.DryRun {
+		log.Printf("agent: warning: remediation mode=auto with dry_run=true — actions will not execute")
+	}
 
 	col, err := collector.NewPrometheusCollector(cfg.PrometheusAddress, s)
 	if err != nil {
@@ -68,6 +74,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	predCfg := predictor.DefaultScorerConfig()
 	pred := predictor.NewPredictor(predCfg)
 	predictor.SetScrapeInterval(interval)
+	pred.LoadPatternHistory(s, predictor.MaxPatternHistory)
 	pred.AddPattern(&predictor.CrashLoopPattern{})
 	pred.AddPattern(&predictor.OOMPattern{})
 	pred.AddPattern(&predictor.DegradationPattern{})
@@ -78,6 +85,13 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	if err != nil {
 		log.Printf("agent: k8s executor unavailable (not in-cluster?): %v", err)
 		exec = nil
+	}
+
+	if cfg.Remediation.MinConfidence > 0 {
+		remCfg.MinConfidence = cfg.Remediation.MinConfidence
+	}
+	if cfg.Remediation.RateLimit > 0 {
+		remCfg.RateLimit = cfg.Remediation.RateLimit
 	}
 
 	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg)
@@ -102,11 +116,10 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		apiAddr:     apiAddr,
 	}
 
-	// Optional K8s collectors for events and live resource state.
 	if k8s, kerr := k8sclient.NewInCluster(); kerr == nil {
 		cs := k8s.Clientset()
 		a.resourcesCollector = collector.NewResourcesCollector(cs)
-		a.eventsCollector = collector.NewEventsCollector(cs, "", s)
+		a.eventsCollector = collector.NewEventsCollector(cs, "")
 
 		k8sCtx, k8sCancel := context.WithCancel(context.Background())
 		a.k8sCancel = k8sCancel
@@ -132,25 +145,30 @@ func (a *Agent) watchK8sEvents(ctx context.Context) {
 
 func (a *Agent) persistEventAnomaly(record collector.EventRecord) {
 	now := time.Now()
-	entity := record.InvolvedObject
+	name := record.InvolvedObject
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	entity := models.FormatEntity(record.Namespace, name)
 	score := 1.0
-	result := a.anomalyGate.Filter(entity, "k8s_event", score, "event", now)
+
+	result := a.anomalyGate.Filter(entity, "k8s_event", score, "pattern", now)
 	if !result.Pass {
 		log.Printf("agent: gate dropped k8s event entity=%s reason=%s", entity, result.Reason)
 		return
 	}
-	id := a.nextAnomalyID("event")
+
 	anomaly := &models.AnomalyRecord{
-		ID:         id,
+		ID:         a.nextAnomalyID("event"),
 		Entity:     entity,
 		Namespace:  record.Namespace,
 		MetricName: "k8s_event",
 		Score:      score,
 		Pattern:    record.Reason,
-		Status:     models.AnomalyStatusActive,
+		Status:     models.AnomalyStatusDetected,
 		DetectedAt: &now,
 	}
-	if err := a.store.SaveAnomaly(anomaly); err != nil {
+	if _, err := a.store.UpsertOpenAnomaly(anomaly); err != nil {
 		log.Printf("agent: save event anomaly: %v", err)
 	}
 }
@@ -163,6 +181,14 @@ func (a *Agent) Run() error {
 			log.Printf("agent: api server error: %v", err)
 		}
 	}()
+
+	if a.resourcesCollector != nil {
+		go func() {
+			if a.resourcesCollector.WaitForSync() {
+				log.Printf("agent: resource informers synced")
+			}
+		}()
+	}
 
 	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
@@ -189,6 +215,11 @@ func (a *Agent) Stop() {
 		if a.forecaster != nil {
 			a.forecaster.Close()
 		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("agent: api shutdown error: %v", err)
+		}
 		close(a.stopCh)
 	})
 }
@@ -200,11 +231,11 @@ func (a *Agent) nextAnomalyID(prefix string) string {
 
 func (a *Agent) buildResourceSnapshot() predictor.ResourceSnapshot {
 	snap := predictor.ResourceSnapshot{}
-	if a.resourcesCollector == nil {
+	if a.resourcesCollector == nil || !a.resourcesCollector.HasSynced() {
 		return snap
 	}
 	for _, p := range a.resourcesCollector.GetFailingPods() {
-		snap.FailingPods = append(snap.FailingPods, fmt.Sprintf("%s/%s", p.Namespace, p.Name))
+		snap.FailingPods = append(snap.FailingPods, models.FormatEntity(p.Namespace, p.Name))
 	}
 	for _, n := range a.resourcesCollector.GetUnhealthyNodes() {
 		snap.UnhealthyNodes = append(snap.UnhealthyNodes, n.Name)
@@ -220,13 +251,20 @@ func (a *Agent) buildResourceSnapshot() predictor.ResourceSnapshot {
 }
 
 func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now time.Time, scrapeNum int64) {
+	entity := models.FormatEntity(p.Namespace, p.Entity)
+	if p.Namespace == "" {
+		entity = p.Entity
+	}
+
 	if p.Score < 0.3 {
+		a.anomalyGate.ObserveScore(entity, p.MetricName, p.Score, now)
 		return
 	}
-	result := a.anomalyGate.Filter(p.Entity, p.MetricName, p.Score, p.Type, now)
+
+	result := a.anomalyGate.Filter(entity, p.MetricName, p.Score, p.Type, now)
 	if !result.Pass {
 		log.Printf("agent[%d]: gate dropped %s anomaly entity=%s score=%.2f reason=%s",
-			scrapeNum, p.Type, p.Entity, p.Score, result.Reason)
+			scrapeNum, p.Type, entity, p.Score, result.Reason)
 		return
 	}
 
@@ -237,7 +275,7 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 
 	anomaly := &models.AnomalyRecord{
 		ID:         a.nextAnomalyID(prefix),
-		Entity:     p.Entity,
+		Entity:     entity,
 		Namespace:  p.Namespace,
 		MetricName: p.MetricName,
 		Score:      p.Score,
@@ -245,29 +283,32 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 		Status:     models.AnomalyStatusDetected,
 		DetectedAt: &now,
 	}
-	if err := a.store.SaveAnomaly(anomaly); err != nil {
+	if _, err := a.store.UpsertOpenAnomaly(anomaly); err != nil {
 		log.Printf("agent[%d]: save anomaly: %v", scrapeNum, err)
 	}
 }
 
-// runOnce executes a single collection → prediction → remediation cycle.
 func (a *Agent) runOnce() {
-	ctx, cancel := context.WithTimeout(context.Background(), a.interval)
-	defer cancel()
+	scrapeCtx, scrapeCancel := context.WithTimeout(context.Background(), a.interval)
+	defer scrapeCancel()
 
 	a.mu.Lock()
 	a.scrapes++
 	scrapeNum := a.scrapes
 	a.mu.Unlock()
 
-	metrics, err := a.collector.CollectMetrics(ctx)
-	if err != nil {
+	metrics, err := a.collector.CollectMetrics(scrapeCtx)
+	if err != nil && len(metrics) == 0 {
 		log.Printf("agent[%d]: collect error: %v", scrapeNum, err)
 		return
+	}
+	if err != nil {
+		log.Printf("agent[%d]: partial collect error: %v", scrapeNum, err)
 	}
 	log.Printf("agent[%d]: collected %d metrics", scrapeNum, len(metrics))
 
 	a.apiServer.IncrementScrapes()
+	a.anomalyGate.PruneStale(time.Now(), 24*time.Hour)
 
 	predMetrics := toPredictorMetrics(metrics)
 
@@ -296,10 +337,12 @@ func (a *Agent) runOnce() {
 	log.Printf("agent[%d]: predictions=%d patterns=%d", scrapeNum, len(predictions), len(patternResults))
 
 	if a.forecaster != nil && len(metrics) > 0 {
-		a.runForecast(ctx, metrics, scrapeNum)
+		a.runForecast(scrapeCtx, metrics, scrapeNum)
 	}
 
-	if err := a.correlator.RunOnce(ctx); err != nil {
+	remCtx, remCancel := context.WithTimeout(context.Background(), remediationTimeout)
+	defer remCancel()
+	if err := a.correlator.RunOnce(remCtx); err != nil {
 		log.Printf("agent[%d]: remediation error: %v", scrapeNum, err)
 	}
 }
@@ -323,7 +366,7 @@ func (a *Agent) runForecast(ctx context.Context, metrics []collector.MetricResul
 			})
 			if err != nil {
 				log.Printf("agent[%d]: forecast error for %s: %v", scrapeNum, m.Name, err)
-				break
+				continue
 			}
 			if resp.Status == "ok" {
 				log.Printf("agent[%d]: forecast %s -> %d points (last: %.2f [%.2f, %.2f])",
@@ -335,7 +378,6 @@ func (a *Agent) runForecast(ctx context.Context, metrics []collector.MetricResul
 			} else {
 				log.Printf("agent[%d]: forecast error for %s: %s", scrapeNum, m.Name, resp.ErrorMessage)
 			}
-			break
 		}
 	}
 }

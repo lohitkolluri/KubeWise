@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -87,16 +88,14 @@ func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResul
 	for _, q := range queries() {
 		result, err := c.execQuery(ctx, q.Name, q.Query)
 		if err != nil {
-			// Log and continue — one failing query shouldn't block the entire scrape
-			fmt.Printf("prometheus: query %q failed: %v\n", q.Name, err)
+			log.Printf("prometheus: query %q failed: %v", q.Name, err)
 			continue
 		}
 		results = append(results, result)
 
-		// Persist to store with labels for per-entity history
 		for _, pt := range result.Values {
 			if err := c.store.AppendMetricSeries(result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
-				fmt.Printf("store: append metric %q failed: %v\n", result.Name, err)
+				log.Printf("store: append metric %q failed: %v", result.Name, err)
 			}
 		}
 	}
@@ -126,7 +125,7 @@ func (c *PrometheusCollector) execQuery(ctx context.Context, name, query string)
 		return MetricResult{}, fmt.Errorf("promql query %q: %w", name, err)
 	}
 	if len(warnings) > 0 {
-		fmt.Printf("prometheus: warnings for %q: %v\n", name, warnings)
+		log.Printf("prometheus: warnings for %q: %v", name, warnings)
 	}
 
 	switch vec := result.(type) {
@@ -139,11 +138,16 @@ func (c *PrometheusCollector) execQuery(ctx context.Context, name, query string)
 	}
 }
 
+func promTimestamp(ts model.Time) time.Time {
+	ms := int64(ts)
+	return time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond))
+}
+
 func vectorToResult(name string, vec model.Vector) MetricResult {
 	r := MetricResult{Name: name}
 	for _, s := range vec {
 		pt := MetricPoint{
-			Timestamp: time.Unix(int64(s.Timestamp)/1000, 0),
+			Timestamp: promTimestamp(s.Timestamp),
 			Value:     float64(s.Value),
 			Labels:    labelMap(s.Metric),
 		}
@@ -157,7 +161,7 @@ func matrixToResult(name string, mat model.Matrix) MetricResult {
 	for _, ss := range mat {
 		for _, p := range ss.Values {
 			pt := MetricPoint{
-				Timestamp: time.Unix(int64(p.Timestamp)/1000, 0),
+				Timestamp: promTimestamp(p.Timestamp),
 				Value:     float64(p.Value),
 				Labels:    labelMap(ss.Metric),
 			}

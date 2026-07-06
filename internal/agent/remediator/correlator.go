@@ -29,12 +29,16 @@ type RemediationConfig struct {
 	Allowlist     []string // allowed action types (empty = all)
 	Denylist      []string // denied namespaces
 	MinConfidence float64  // minimum LLM confidence to execute
+	RateLimit     int      // max anomalies per LLM call (0 = unlimited)
 }
 
 // NewCorrelator creates the remediation pipeline.
 func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig) *Correlator {
 	if cfg.MinConfidence <= 0 {
 		cfg.MinConfidence = 0.7
+	}
+	if cfg.RateLimit <= 0 {
+		cfg.RateLimit = 10
 	}
 	return &Correlator{
 		llmClient:    llmClient,
@@ -51,7 +55,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	anomalies, err := c.store.ListAnomalies(20)
+	anomalies, err := c.store.ListAnomalies(50)
 	if err != nil {
 		return fmt.Errorf("list anomalies: %w", err)
 	}
@@ -63,6 +67,9 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	correlatable := c.filterNewAnomalies(anomalies)
 	if len(correlatable) == 0 {
 		return nil
+	}
+	if c.cfg.RateLimit > 0 && len(correlatable) > c.cfg.RateLimit {
+		correlatable = correlatable[:c.cfg.RateLimit]
 	}
 
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
@@ -76,10 +83,8 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("llm correlation: %w", err)
 	}
 
-	// Mark anomalies as correlated so they are not re-sent to the LLM.
-	c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
-
 	if err := c.validatePlan(plan); err != nil {
+		c.markAnomalyStatus(correlatable, models.AnomalyStatusRejected, nil)
 		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
 		return fmt.Errorf("plan validation: %w", err)
 	}
@@ -90,10 +95,14 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 
 	reason := c.gateByTier(tier, plan)
 	if reason != "" {
+		c.markAnomalyStatus(correlatable, models.AnomalyStatusRejected, nil)
 		c.logAudit(&plan, correlatable, tier, models.AuditRejected, reason, userPrompt, "")
 		log.Printf("remediator: rejected - %s", reason)
 		return nil
 	}
+
+	// Plan accepted — mark correlated so they are not re-sent to the LLM.
+	c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
 
 	if c.cfg.DryRun {
 		log.Printf("remediator: [dry-run] would execute %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
@@ -128,7 +137,8 @@ func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord) []models
 	var filtered []models.AnomalyRecord
 	for _, r := range records {
 		switch r.Status {
-		case models.AnomalyStatusCorrelated, models.AnomalyStatusRemediated, models.AnomalyStatusResolved:
+		case models.AnomalyStatusCorrelated, models.AnomalyStatusRejected,
+			models.AnomalyStatusRemediated, models.AnomalyStatusResolved:
 			continue
 		}
 		denied := false
