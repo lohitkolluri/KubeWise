@@ -145,12 +145,39 @@ func main() {
 
 	// Get API key from env
 	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
-	if apiKey != "" {
+	llmBaseURL := strings.TrimSpace(os.Getenv("OLLAMA_BASE_URL"))
+	if cfg.LLMBaseURL != "" {
+		llmBaseURL = cfg.LLMBaseURL
+	}
+	llmCfg := llm.Config{
+		Provider: cfg.LLMProvider,
+		APIKey:   apiKey,
+		Model:    cfg.LLMModel,
+		BaseURL:  llmBaseURL,
+	}
+	if llmCfg.Provider == "" {
+		llmCfg.Provider = "openrouter"
+	}
+	if llmCfg.Provider == "openrouter" && apiKey != "" {
 		checkCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := llm.NewClient(apiKey, cfg.LLMModel).ValidateKey(checkCtx); err != nil {
-			log.Printf("agent: warning: OpenRouter key validation failed: %v", err)
+		client, err := llm.NewClient(llmCfg)
+		if err != nil {
+			log.Printf("agent: warning: llm client: %v", err)
+		} else if err := client.ValidateKey(checkCtx); err != nil {
+			log.Printf("agent: warning: LLM key validation failed: %v", err)
 		} else {
-			log.Printf("agent: OpenRouter API key validated")
+			log.Printf("agent: LLM provider %s validated", client.ProviderName())
+		}
+		cancel()
+	} else if llmCfg.Provider == "ollama" {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		client, err := llm.NewClient(llmCfg)
+		if err != nil {
+			log.Printf("agent: warning: ollama client: %v", err)
+		} else if err := client.ValidateKey(checkCtx); err != nil {
+			log.Printf("agent: warning: ollama unreachable: %v", err)
+		} else {
+			log.Printf("agent: ollama at %s ready", llmBaseURL)
 		}
 		cancel()
 	}
@@ -158,8 +185,12 @@ func main() {
 	// Optional Tier-2 forecasting sidecar address
 	forecasterAddr := os.Getenv("FORECASTER_ADDR")
 
+	if strings.TrimSpace(os.Getenv("KUBEWISE_API_TOKEN")) == "" {
+		log.Printf("agent: WARNING: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
+	}
+
 	// Create the agent (wraps collector, predictor, LLM, remediation, API server)
-	agt, err := agent.NewAgent(s, cfg, interval, apiKey, cfg.LLMModel, remCfg, forecasterAddr, apiAddr)
+	agt, err := agent.NewAgent(s, cfg, interval, llmCfg, remCfg, forecasterAddr, apiAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create agent: %v\n", err)
 		os.Exit(1)

@@ -246,32 +246,6 @@ func resourceParams(params map[string]string) map[string]map[string]string {
 	return parts
 }
 
-func resourcePatchValue(params map[string]string) string {
-	parts := resourceParams(params)
-
-	// Build JSON manually since we need a simple deterministic output
-	json := "{"
-	first := true
-	for resType, limits := range parts {
-		if !first {
-			json += ","
-		}
-		first = false
-		json += fmt.Sprintf("%q:{", resType)
-		subFirst := true
-		for k, v := range limits {
-			if !subFirst {
-				json += ","
-			}
-			subFirst = false
-			json += fmt.Sprintf("%q:%q", k, v)
-		}
-		json += "}"
-	}
-	json += "}"
-	return json
-}
-
 func ensureMap(m map[string]map[string]string, key string) map[string]string {
 	if _, ok := m[key]; !ok {
 		m[key] = make(map[string]string)

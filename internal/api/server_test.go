@@ -42,6 +42,15 @@ func (m *mockStore) GetLatestPredictions() ([]models.PredictionResult, error) {
 	return []models.PredictionResult{}, nil
 }
 
+func (m *mockStore) ComputeAgentStats() (models.AgentStats, error) {
+	return models.AgentStats{
+		PredictionsTotal:   10,
+		PredictionsHit:     7,
+		PredictionsMissed:  3,
+		PredictionAccuracy: 0.7,
+	}, nil
+}
+
 func setupTestServer() *httptest.Server {
 	store := &mockStore{
 		anomalies: []models.AnomalyRecord{
@@ -258,6 +267,27 @@ func TestPredictionsEndpoint(t *testing.T) {
 	}
 	if predictions == nil {
 		t.Fatal("expected empty array, not null")
+	}
+}
+
+func TestStatsEndpoint(t *testing.T) {
+	ts := setupTestServer()
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/stats")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stats: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var stats models.AgentStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if stats.PredictionAccuracy != 0.7 {
+		t.Fatalf("expected accuracy 0.7, got %f", stats.PredictionAccuracy)
 	}
 }
 

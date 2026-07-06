@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,11 +10,13 @@ import (
 	"time"
 )
 
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
+
 func withMiddleware(next http.Handler, apiToken string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if apiToken != "" && r.URL.Path != "/health" {
 			auth := r.Header.Get("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != apiToken {
+			if !strings.HasPrefix(auth, "Bearer ") || !secureCompare(strings.TrimPrefix(auth, "Bearer "), apiToken) {
 				writeError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
@@ -24,6 +27,13 @@ func withMiddleware(next http.Handler, apiToken string) http.Handler {
 		next.ServeHTTP(lw, r)
 		log.Printf("%s %s %d %s", r.Method, r.URL.Path, lw.status, time.Since(start))
 	})
+}
+
+func secureCompare(got, want string) bool {
+	if got == "" || want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 type logWriter struct {
@@ -49,7 +59,8 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-func decodeJSON(r *http.Request, dst any) error {
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)

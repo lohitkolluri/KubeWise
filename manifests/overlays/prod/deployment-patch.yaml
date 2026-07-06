@@ -26,3 +26,7 @@ spec:
             limits:
               cpu: '2'
               memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kubewise-agent-data

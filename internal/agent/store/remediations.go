@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -91,19 +90,27 @@ func (s *Store) ListAuditRecordsSince(since time.Time, limit int) ([]models.Audi
 	return filtered, nil
 }
 
-// GetAuditRecord returns a single audit record by ID (prefix match supported).
+// GetAuditRecord returns a single audit record by exact ID.
 func (s *Store) GetAuditRecord(id string) (*models.AuditRecord, error) {
-	records, err := s.listAllAuditRecords()
+	if id == "" {
+		return nil, fmt.Errorf("audit record ID must not be empty")
+	}
+	var record models.AuditRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAuditLog)
+		if b == nil {
+			return fmt.Errorf("audit record %q not found", id)
+		}
+		data := b.Get([]byte(id))
+		if data == nil {
+			return fmt.Errorf("audit record %q not found", id)
+		}
+		return json.Unmarshal(data, &record)
+	})
 	if err != nil {
 		return nil, err
 	}
-	for i := range records {
-		if records[i].ID == id || strings.HasPrefix(records[i].ID, id) {
-			r := records[i]
-			return &r, nil
-		}
-	}
-	return nil, fmt.Errorf("audit record %q not found", id)
+	return &record, nil
 }
 
 // UpdateAuditRecord overwrites an existing audit record.

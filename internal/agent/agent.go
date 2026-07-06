@@ -13,6 +13,8 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/forecaster"
 	"github.com/lohitkolluri/KubeWise/internal/agent/gate"
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
+	"github.com/lohitkolluri/KubeWise/internal/agent/notify"
+	"github.com/lohitkolluri/KubeWise/internal/agent/outcome"
 	"github.com/lohitkolluri/KubeWise/internal/agent/predictor"
 	"github.com/lohitkolluri/KubeWise/internal/agent/remediator"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
@@ -22,6 +24,7 @@ import (
 )
 
 const remediationTimeout = 2 * time.Minute
+const maxForecastSeriesPerScrape = 32
 
 // Agent is the main orchestration loop: collect → detect → gate → store → correlate → remediate.
 type Agent struct {
@@ -33,6 +36,8 @@ type Agent struct {
 	forecaster         *forecaster.Client
 	correlator         *remediator.Correlator
 	anomalyGate        *gate.AnomalyGate
+	outcomeTracker     *outcome.Tracker
+	notifier           *notify.Notifier
 	apiServer          *api.Server
 	cfg                *models.AgentConfig
 	interval           time.Duration
@@ -40,7 +45,6 @@ type Agent struct {
 	minScore           float64
 	scrapes            atomic.Int64
 	anomalySeq         uint64
-	mu                 sync.Mutex
 	stopOnce           sync.Once
 	stopCh             chan struct{}
 	runCtx             context.Context
@@ -49,7 +53,7 @@ type Agent struct {
 }
 
 // NewAgent creates and wires the complete agent pipeline.
-func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, llmKey, llmModel string, remCfg remediator.RemediationConfig, forecasterAddr, apiAddr string) (*Agent, error) {
+func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, llmCfg llm.Config, remCfg remediator.RemediationConfig, forecasterAddr, apiAddr string) (*Agent, error) {
 	if cfg == nil {
 		cfg = &models.AgentConfig{}
 	}
@@ -82,7 +86,10 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	pred.AddPattern(&predictor.OOMPattern{})
 	pred.AddPattern(&predictor.DegradationPattern{})
 
-	llmClient := llm.NewClient(llmKey, llmModel)
+	llmClient, err := llm.NewClient(llmCfg)
+	if err != nil {
+		return nil, fmt.Errorf("create llm client: %w", err)
+	}
 
 	exec, err := remediator.NewK8sExecutor(remCfg.DryRun)
 	if err != nil {
@@ -98,6 +105,8 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	}
 
 	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg)
+	notifier := notify.New(cfg.Notifications)
+	corr.SetNotifier(notifier)
 
 	gateCfg := gate.DefaultConfig()
 	gateCfg.ScrapeInterval = interval
@@ -111,8 +120,10 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		collector:   col,
 		predictor:   pred,
 		forecaster:  fcast,
-		correlator:  corr,
-		anomalyGate: ag,
+		correlator:     corr,
+		anomalyGate:    ag,
+		outcomeTracker: outcome.NewTracker(s),
+		notifier:       notifier,
 		apiServer:   apiSrv,
 		cfg:         cfg,
 		stopCh:      make(chan struct{}),
@@ -355,6 +366,16 @@ func (a *Agent) runOnce() {
 		for _, pr := range patternResults {
 			a.persistPrediction(pr, "pattern", now, scrapeNum)
 		}
+		if a.outcomeTracker != nil {
+			a.outcomeTracker.TrackPatternPredictions(patternResults, now)
+		}
+		if a.notifier != nil {
+			notifyCtx, notifyCancel := context.WithTimeout(a.runCtx, 5*time.Second)
+			for _, pr := range patternResults {
+				a.notifier.NotifyPrediction(notifyCtx, pr)
+			}
+			notifyCancel()
+		}
 	}
 	if err := a.store.SaveLatestPredictions(allPredictions); err != nil {
 		log.Printf("agent[%d]: save predictions: %v", scrapeNum, err)
@@ -364,6 +385,10 @@ func (a *Agent) runOnce() {
 	a.apiServer.SetGateStats(gateStats)
 	log.Printf("agent[%d]: predictions=%d patterns=%d gate_passed=%d gate_dropped=%d",
 		scrapeNum, len(predictions), patternCount, gateStats.Passed, gateStats.Dropped)
+
+	if a.outcomeTracker != nil {
+		a.outcomeTracker.VerifyPending(a.buildResourceSnapshot(), now)
+	}
 
 	if a.forecaster != nil {
 		fcastCtx, fcastCancel := context.WithTimeout(a.runCtx, 30*time.Second)
@@ -391,12 +416,19 @@ func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
 		log.Printf("agent[%d]: forecast list metrics: %v", scrapeNum, err)
 		return
 	}
+	forecasted := 0
 	for _, name := range names {
+		if forecasted >= maxForecastSeriesPerScrape {
+			break
+		}
 		keys, err := a.store.ListMetricSeries(name)
 		if err != nil {
 			continue
 		}
 		for _, key := range keys {
+			if forecasted >= maxForecastSeriesPerScrape {
+				break
+			}
 			metricName, labels, err := store.ParseSeriesKey(key)
 			if err != nil {
 				continue
@@ -426,6 +458,7 @@ func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
 				continue
 			}
 			if resp.Status == "ok" && len(resp.Points) > 0 {
+				forecasted++
 				last := resp.Points[len(resp.Points)-1]
 				log.Printf("agent[%d]: forecast %s -> %d points (last: %.2f [%.2f, %.2f])",
 					scrapeNum, metricName, len(resp.Points), last.Value, last.LowerBound, last.UpperBound)

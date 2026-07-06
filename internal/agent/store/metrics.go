@@ -68,22 +68,19 @@ func (s *Store) AppendMetricSeries(name string, labels map[string]string, value 
 			return err
 		}
 
-		// Ring buffer: remove oldest if over limit
+		// Ring buffer: drop oldest sample when over limit (single delete per write).
 		c := b.Cursor()
 		count := 0
 		for k, _ := c.First(); k != nil; k, _ = c.Next() {
 			count++
-		}
-		if count > maxSamplesPerMetric {
-			toDelete := count - maxSamplesPerMetric
-			for i := 0; i < toDelete; i++ {
-				k, _ := c.First()
-				if k == nil {
-					break
+			if count > maxSamplesPerMetric {
+				kOld, _ := c.First()
+				if kOld != nil {
+					if err := b.Delete(kOld); err != nil {
+						return err
+					}
 				}
-				if err := b.Delete(k); err != nil {
-					return err
-				}
+				break
 			}
 		}
 		return nil

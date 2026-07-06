@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -18,6 +19,7 @@ type Store interface {
 	SaveConfig(cfg *models.AgentConfig) error
 	ListAuditRecords(limit int) ([]models.AuditRecord, error)
 	GetLatestPredictions() ([]models.PredictionResult, error)
+	ComputeAgentStats() (models.AgentStats, error)
 }
 
 type Server struct {
@@ -36,6 +38,9 @@ func NewServer(store Store, addr string) *Server {
 		store:    store,
 		startAt:  time.Now(),
 		apiToken: os.Getenv("KUBEWISE_API_TOKEN"),
+	}
+	if s.apiToken == "" {
+		log.Printf("api: WARNING: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
 	}
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)

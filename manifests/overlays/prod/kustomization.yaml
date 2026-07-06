@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../../base
   - pdb.yaml
+  - pvc.yaml
 
 images:
   - name: kubewise/agent
