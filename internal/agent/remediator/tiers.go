@@ -73,11 +73,13 @@ func (ta *TierAssigner) CheckCooldown(namespace, action string) bool {
 	defer ta.mu.Unlock()
 
 	key := cooldownKey(namespace, action)
-	until, exists := ta.cooldowns[key]
-	if !exists {
-		return true
+	if until, exists := ta.cooldowns[key]; exists && time.Now().Before(until) {
+		return false
 	}
-	return time.Now().After(until)
+	if until, exists := ta.cooldowns[key]; exists && time.Now().After(until) {
+		delete(ta.cooldowns, key)
+	}
+	return true
 }
 
 // SetCooldown sets the cooldown for a (namespace, action) pair.

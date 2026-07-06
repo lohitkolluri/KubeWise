@@ -142,17 +142,17 @@ func (g *AnomalyGate) ObserveScore(entity string, metricName string, score float
 		}
 	}
 	g.recordSustainmentScore(hKey, score, now)
-	g.pruneStaleLocked(now)
+	g.pruneStaleLocked(now, now.Add(-24*time.Hour))
 }
 
 // PruneStale removes gate state for entities not seen within maxAge.
 func (g *AnomalyGate) PruneStale(now time.Time, maxAge time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.pruneStaleLocked(now.Add(-maxAge))
+	g.pruneStaleLocked(now, now.Add(-maxAge))
 }
 
-func (g *AnomalyGate) pruneStaleLocked(cutoff time.Time) {
+func (g *AnomalyGate) pruneStaleLocked(now, cutoff time.Time) {
 	for key, hist := range g.history {
 		if hist.lastSeen.Before(cutoff) {
 			delete(g.history, key)
@@ -169,7 +169,7 @@ func (g *AnomalyGate) pruneStaleLocked(cutoff time.Time) {
 		}
 	}
 	for entity, until := range g.cooldowns {
-		if until.Before(cutoff) {
+		if until.Before(now) {
 			delete(g.cooldowns, entity)
 		}
 	}

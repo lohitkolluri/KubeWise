@@ -26,9 +26,17 @@ func (s *Store) SaveAnomaly(r *models.AnomalyRecord) error {
 
 // ListAnomalies returns the most recent anomaly records up to limit, ordered by DetectedAt descending.
 func (s *Store) ListAnomalies(limit int) ([]models.AnomalyRecord, error) {
-	if limit <= 0 {
-		return nil, nil
+	records, err := s.listAllAnomalies()
+	if err != nil {
+		return nil, err
 	}
+	if limit > 0 && len(records) > limit {
+		records = records[:limit]
+	}
+	return records, nil
+}
+
+func (s *Store) listAllAnomalies() ([]models.AnomalyRecord, error) {
 	var records []models.AnomalyRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketAnomalies)
@@ -59,10 +67,6 @@ func (s *Store) ListAnomalies(limit int) ([]models.AnomalyRecord, error) {
 		}
 		return ti.After(*tj)
 	})
-
-	if len(records) > limit {
-		records = records[:limit]
-	}
 	return records, nil
 }
 
@@ -94,13 +98,27 @@ func (s *Store) UpdateAnomaly(r *models.AnomalyRecord) error {
 		return fmt.Errorf("marshal anomaly: %w", err)
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketAnomalies).Put([]byte(r.ID), data)
+		b := tx.Bucket(bucketAnomalies)
+		if b.Get([]byte(r.ID)) == nil {
+			return fmt.Errorf("anomaly %s not found", r.ID)
+		}
+		return b.Put([]byte(r.ID), data)
 	})
+}
+
+// isOpenAnomalyStatus reports whether an anomaly is still open for deduplication.
+func isOpenAnomalyStatus(status string) bool {
+	switch status {
+	case models.AnomalyStatusDetected, models.AnomalyStatusActive, models.AnomalyStatusCorrelated:
+		return true
+	default:
+		return false
+	}
 }
 
 // FindOpenAnomaly returns the newest open anomaly for entity+signal if one exists.
 func (s *Store) FindOpenAnomaly(entity, signal string) (*models.AnomalyRecord, error) {
-	records, err := s.ListAnomalies(100)
+	records, err := s.listAllAnomalies()
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +129,7 @@ func (s *Store) FindOpenAnomaly(entity, signal string) (*models.AnomalyRecord, e
 		if r.MetricName != signal && r.Pattern != signal {
 			continue
 		}
-		switch r.Status {
-		case models.AnomalyStatusDetected, models.AnomalyStatusActive:
+		if isOpenAnomalyStatus(r.Status) {
 			return &r, nil
 		}
 	}

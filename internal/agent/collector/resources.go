@@ -157,7 +157,7 @@ func (rc *ResourcesCollector) WaitForSync() bool {
 	return err == nil
 }
 
-// GetFailingPods returns pods that are not Running/Ready or are in a failed phase.
+// GetFailingPods returns pods that are not Running or are Running but not Ready.
 func (rc *ResourcesCollector) GetFailingPods() []PodState {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
@@ -167,7 +167,7 @@ func (rc *ResourcesCollector) GetFailingPods() []PodState {
 			failing = append(failing, p)
 			continue
 		}
-		if !p.Ready && p.RestartCount > 0 {
+		if !p.Ready {
 			failing = append(failing, p)
 		}
 	}
@@ -252,7 +252,15 @@ func (rc *ResourcesCollector) handlePodUpdate(oldObj, newObj interface{}) {
 }
 
 func (rc *ResourcesCollector) handlePodDelete(obj interface{}) {
-	pod := obj.(*corev1.Pod)
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+			pod, ok = tombstone.Obj.(*corev1.Pod)
+		}
+	}
+	if !ok || pod == nil {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	delete(rc.pods, podKey(pod))
@@ -300,7 +308,15 @@ func (rc *ResourcesCollector) handleNodeUpdate(oldObj, newObj interface{}) {
 }
 
 func (rc *ResourcesCollector) handleNodeDelete(obj interface{}) {
-	node := obj.(*corev1.Node)
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+			node, ok = tombstone.Obj.(*corev1.Node)
+		}
+	}
+	if !ok || node == nil {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	delete(rc.nodes, node.Name)
@@ -338,7 +354,15 @@ func (rc *ResourcesCollector) handleDepUpdate(oldObj, newObj interface{}) {
 }
 
 func (rc *ResourcesCollector) handleDepDelete(obj interface{}) {
-	dep := obj.(*appsv1.Deployment)
+	dep, ok := obj.(*appsv1.Deployment)
+	if !ok {
+		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+			dep, ok = tombstone.Obj.(*appsv1.Deployment)
+		}
+	}
+	if !ok || dep == nil {
+		return
+	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	delete(rc.deps, depKey(dep))

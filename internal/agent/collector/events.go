@@ -96,7 +96,9 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 		watcher, err := ec.clientset.CoreV1().Events(ec.namespace).Watch(ctx, opts)
 		if err != nil {
 			log.Printf("events: watch failed, retrying in %v: %v", backoff, err)
-			time.Sleep(backoff)
+			if !sleepWithContext(ctx, backoff) {
+				return
+			}
 			backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
 			backoff += time.Duration(rand.Int63n(int64(backoff / 4)))
 			continue
@@ -146,9 +148,20 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 			}
 		}
 
-		time.Sleep(backoff)
+		if !sleepWithContext(ctx, backoff) {
+			return
+		}
 		backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
 		backoff += time.Duration(rand.Int63n(int64(backoff / 4)))
+	}
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 

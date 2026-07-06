@@ -85,15 +85,19 @@ func (c *Client) GetDeployments(ctx context.Context, namespace string) (*appsv1.
 
 // GetEvents returns events in the given namespace since the specified duration ago.
 func (c *Client) GetEvents(ctx context.Context, namespace string, since time.Duration) (*corev1.EventList, error) {
-	now := time.Now()
-	fieldSelector := fmt.Sprintf("lastTimestamp>=%s", now.Add(-since).Format(time.RFC3339))
-	events, err := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fieldSelector,
-	})
+	events, err := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
-	return events, nil
+	cutoff := time.Now().UTC().Add(-since)
+	filtered := &corev1.EventList{}
+	for _, e := range events.Items {
+		if e.LastTimestamp.Time.Before(cutoff) {
+			continue
+		}
+		filtered.Items = append(filtered.Items, e)
+	}
+	return filtered, nil
 }
 
 // Clientset returns the underlying kubernetes.Interface.

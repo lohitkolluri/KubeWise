@@ -53,7 +53,8 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary string) st
 	} else {
 		for i, a := range anomalies {
 			b.WriteString(fmt.Sprintf("%d. Entity: %s | Namespace: %s | Metric: %s | Score: %.2f | Pattern: %s | Status: %s\n",
-				i+1, a.Entity, a.Namespace, a.MetricName, a.Score, a.Pattern, a.Status))
+				i+1, sanitizeField(a.Entity), sanitizeField(a.Namespace), sanitizeField(a.MetricName),
+				a.Score, sanitizeField(a.Pattern), sanitizeField(a.Status)))
 		}
 	}
 
@@ -64,6 +65,12 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary string) st
 
 	b.WriteString("\n\nProduce a remediation plan in the specified JSON format. Base your diagnosis on the evidence above.")
 	return b.String()
+}
+
+func sanitizeField(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
 }
 
 // FormatMetricContext formats recent metric data for inclusion in the LLM prompt.

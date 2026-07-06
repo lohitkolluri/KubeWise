@@ -85,9 +85,12 @@ func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResul
 	defer cancel()
 
 	var results []MetricResult
-	for _, q := range queries() {
+	queries := queries()
+	failCount := 0
+	for _, q := range queries {
 		result, err := c.execQuery(ctx, q.Name, q.Query)
 		if err != nil {
+			failCount++
 			log.Printf("prometheus: query %q failed: %v", q.Name, err)
 			continue
 		}
@@ -98,6 +101,12 @@ func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResul
 				log.Printf("store: append metric %q failed: %v", result.Name, err)
 			}
 		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("all %d prometheus queries failed", len(queries))
+	}
+	if failCount > 0 {
+		return results, fmt.Errorf("%d/%d prometheus queries failed", failCount, len(queries))
 	}
 	return results, nil
 }

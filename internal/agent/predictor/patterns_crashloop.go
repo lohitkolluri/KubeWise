@@ -18,6 +18,7 @@ func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.Anomaly
 	var matches []PatternMatch
 
 	for entityKey, pts := range restartByEntity {
+		pts = aggregatePodRestartSeries(pts)
 		if len(pts) < 2 {
 			continue
 		}

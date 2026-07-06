@@ -119,12 +119,14 @@ func TestCollectMetrics_ServerError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should not panic — errors are logged and skipped
+	// Total failure should return an error
 	results, err := collector.CollectMetrics(context.Background())
-	if err != nil {
-		t.Fatalf("CollectMetrics should not return error on partial failure: %v", err)
+	if err == nil {
+		t.Fatal("CollectMetrics should return error when all queries fail")
 	}
-	_ = results
+	if len(results) != 0 {
+		t.Fatalf("expected no results on total failure, got %d", len(results))
+	}
 }
 
 func TestCollectQuery(t *testing.T) {
