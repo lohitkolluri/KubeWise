@@ -13,110 +13,77 @@ func (d *DegradationPattern) Name() string { return "Degradation" }
 func (d *DegradationPattern) Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
 	var matches []PatternMatch
 
-	// Check pod_not_ready metric with predictive logic
 	notReadyResult := findMetric(metrics, "pod_not_ready")
 	if notReadyResult != nil {
-		for _, pt := range notReadyResult.Values {
-			if pt.Value > 0 {
-				entity := pt.Labels["pod"]
-				if entity == "" {
-					entity = pt.Labels["instance"]
-				}
-				if entity == "" {
-					entity = "unknown"
-				}
-				namespace := pt.Labels["namespace"]
-				// Predictive confidence based on current not-ready value
-				confidence := 0.5 + pt.Value*0.1
-				if confidence > 0.9 {
-					confidence = 0.9
-				}
-				// Add predictive boost based on trend
+		latest := latestPointsByEntity(notReadyResult.Values)
+		for entityKey, pt := range latest {
+			if pt.Value <= 0 {
+				continue
+			}
+			ns, entity := splitEntityKey(entityKey)
+			confidence := 0.5 + pt.Value*0.1
+			if confidence > 0.9 {
+				confidence = 0.9
+			}
+			matches = append(matches, PatternMatch{
+				Pattern:         "Degradation",
+				Confidence:      confidence,
+				Entity:          entity,
+				Namespace:       ns,
+				SuggestedAction: "Investigate pod readiness and resource constraints",
+				TimeToFailure:   estimateDegradationTimeToFailure(nil, pt.Value),
+			})
+		}
+	}
+
+	diskPressureResult := findMetric(metrics, "node_disk_pressure")
+	if diskPressureResult != nil {
+		latest := latestPointsByEntity(diskPressureResult.Values)
+		for entityKey, pt := range latest {
+			if pt.Value <= 0 {
+				continue
+			}
+			_, entity := splitEntityKey(entityKey)
+			if !hasEntityKey(matches, entityKey) {
 				matches = append(matches, PatternMatch{
 					Pattern:         "Degradation",
-					Confidence:      confidence,
+					Confidence:      0.7,
 					Entity:          entity,
-					Namespace:       namespace,
-					SuggestedAction: "Investigate pod readiness and resource constraints",
+					SuggestedAction: "Free up disk space or expand node storage",
 					TimeToFailure:   estimateDegradationTimeToFailure(nil, pt.Value),
 				})
 			}
 		}
 	}
 
-	// Check node_disk_pressure with predictive logic
-	diskPressureResult := findMetric(metrics, "node_disk_pressure")
-	if diskPressureResult != nil {
-		for _, pt := range diskPressureResult.Values {
-			if pt.Value > 0 {
-				entity := pt.Labels["node"]
-				if entity == "" {
-					entity = pt.Labels["instance"]
-				}
-				if entity == "" {
-					entity = "unknown"
-				}
-				// Predictive confidence based on current disk pressure
-				confidence := 0.7
-				// Add predictive boost based on trend
-				if !hasEntity(matches, entity) {
-					matches = append(matches, PatternMatch{
-						Pattern:         "Degradation",
-						Confidence:      confidence,
-						Entity:          entity,
-						Namespace:       "",
-						SuggestedAction: "Free up disk space or expand node storage",
-						TimeToFailure:   estimateDegradationTimeToFailure(nil, pt.Value),
-					})
-				}
-			}
-		}
-	}
-
-	// Check node_memory_pressure with predictive logic
 	memPressureResult := findMetric(metrics, "node_memory_pressure")
 	if memPressureResult != nil {
-		for _, pt := range memPressureResult.Values {
-			if pt.Value > 0 {
-				// Avoid duplicate if same node already has a disk pressure match
-				entity := pt.Labels["node"]
-				if entity == "" {
-					entity = pt.Labels["instance"]
-				}
-				if entity == "" {
-					entity = "unknown"
-				}
-				// Predictive confidence based on current memory pressure
-				confidence := 0.65
-				// Add predictive boost based on trend
-				if !hasEntity(matches, entity) {
-					matches = append(matches, PatternMatch{
-						Pattern:         "Degradation",
-						Confidence:      confidence,
-						Entity:          entity,
-						Namespace:       "",
-						SuggestedAction: "Reduce memory usage on node or add more nodes",
-						TimeToFailure:   estimateDegradationTimeToFailure(nil, pt.Value),
-					})
-				}
+		latest := latestPointsByEntity(memPressureResult.Values)
+		for entityKey, pt := range latest {
+			if pt.Value <= 0 {
+				continue
+			}
+			_, entity := splitEntityKey(entityKey)
+			if !hasEntityKey(matches, entityKey) {
+				matches = append(matches, PatternMatch{
+					Pattern:         "Degradation",
+					Confidence:      0.65,
+					Entity:          entity,
+					SuggestedAction: "Reduce memory usage on node or add more nodes",
+					TimeToFailure:   estimateDegradationTimeToFailure(nil, pt.Value),
+				})
 			}
 		}
 	}
 
-	// Check failing pods in resource snapshot
 	for _, pod := range resources.FailingPods {
-		entity := pod
-		if idx := strings.LastIndex(pod, "/"); idx >= 0 {
-			entity = pod[idx+1:]
-		}
-		if !hasEntity(matches, entity) {
-			// Predictive confidence for failing pods
-			confidence := 0.6
-			// Add predictive boost based on pod age or history if available
+		if !hasEntityKey(matches, pod) {
+			ns, name := models.ParseEntity(pod)
 			matches = append(matches, PatternMatch{
 				Pattern:         "Degradation",
-				Confidence:      confidence,
-				Entity:          entity,
+				Confidence:      0.6,
+				Entity:          name,
+				Namespace:       ns,
 				SuggestedAction: "Check pod logs and describe for failure details",
 				TimeToFailure:   estimateDegradationTimeToFailure(nil, 1.0),
 			})
@@ -126,9 +93,36 @@ func (d *DegradationPattern) Match(metrics []MetricResult, events []models.Anoma
 	return matches
 }
 
-func hasEntity(matches []PatternMatch, entity string) bool {
+// latestPointsByEntity keeps the newest point per entity (namespace-aware when present).
+func latestPointsByEntity(values []MetricPoint) map[string]MetricPoint {
+	latest := make(map[string]MetricPoint)
+	for _, pt := range values {
+		key := entityKey(pt.Labels)
+		if key == "" || key == "/" {
+			continue
+		}
+		if existing, ok := latest[key]; !ok || pt.Timestamp.After(existing.Timestamp) {
+			latest[key] = pt
+		}
+	}
+	return latest
+}
+
+func splitEntityKey(key string) (namespace, entity string) {
+	if idx := strings.Index(key, "/"); idx >= 0 {
+		return key[:idx], key[idx+1:]
+	}
+	return "", key
+}
+
+func hasEntityKey(matches []PatternMatch, entityKey string) bool {
+	ns, name := splitEntityKey(entityKey)
 	for _, m := range matches {
-		if m.Entity == entity {
+		matchKey := m.Entity
+		if m.Namespace != "" {
+			matchKey = models.FormatEntity(m.Namespace, m.Entity)
+		}
+		if matchKey == entityKey || (ns == "" && m.Entity == name) {
 			return true
 		}
 	}

@@ -551,14 +551,20 @@ func TestVerifyNonUniformTimestamps(t *testing.T) {
 func TestVerifyEmptyMetric(t *testing.T) {
 	pred := NewPredictor(DefaultScorerConfig())
 
-	_, err := pred.Run(nil)
-	if err == nil {
-		t.Error("expected error for nil metrics, got nil")
+	results, err := pred.Run(nil)
+	if err != nil {
+		t.Errorf("expected no error for nil metrics, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected no results for nil metrics, got %d", len(results))
 	}
 
-	_, err = pred.Run([]MetricResult{})
-	if err == nil {
-		t.Error("expected error for empty metrics, got nil")
+	results, err = pred.Run([]MetricResult{})
+	if err != nil {
+		t.Errorf("expected no error for empty metrics, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected no results for empty metrics, got %d", len(results))
 	}
 }
 

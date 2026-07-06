@@ -15,6 +15,9 @@ const (
 	maxPatternHistory    = 20
 )
 
+// MaxPatternHistory is the number of cross-scrape points kept per metric series.
+const MaxPatternHistory = maxPatternHistory
+
 var scrapeInterval = 30 * time.Second
 
 // SetScrapeInterval configures the scrape interval used for ETA projections.

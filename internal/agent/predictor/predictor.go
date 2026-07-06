@@ -1,12 +1,12 @@
 package predictor
 
 import (
-	"fmt"
 	"math"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -37,6 +37,42 @@ func NewPredictor(config ScorerConfig) *Predictor {
 		history:        make(map[string][]MetricPoint),
 		patternHistory: make(map[string][]MetricPoint),
 		datapoints:     make(map[string]int),
+	}
+}
+
+// LoadPatternHistory seeds in-memory pattern history from persisted metric series.
+func (p *Predictor) LoadPatternHistory(s *store.Store, limit int) {
+	if s == nil || limit <= 0 {
+		return
+	}
+	names := []string{
+		"pod_memory_usage", "restart_rate", "crashloop", "oomkilled",
+		"pod_not_ready", "node_disk_pressure", "node_memory_pressure",
+	}
+	for _, name := range names {
+		keys, err := s.ListMetricSeries(name)
+		if err != nil {
+			continue
+		}
+		for _, key := range keys {
+			_, labels, err := store.ParseSeriesKey(key)
+			if err != nil {
+				continue
+			}
+			pts, err := s.GetMetricSeries(name, labels, limit)
+			if err != nil || len(pts) == 0 {
+				continue
+			}
+			p.mu.Lock()
+			for _, pt := range pts {
+				mp := MetricPoint{Timestamp: pt.TS, Value: pt.Value, Labels: labels}
+				p.patternHistory[key] = append(p.patternHistory[key], mp)
+			}
+			if len(p.patternHistory[key]) > limit {
+				p.patternHistory[key] = p.patternHistory[key][len(p.patternHistory[key])-limit:]
+			}
+			p.mu.Unlock()
+		}
 	}
 }
 
@@ -108,7 +144,7 @@ func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyR
 //  5. Combine and emit results with score >= 0.3.
 func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, error) {
 	if len(metrics) == 0 {
-		return nil, fmt.Errorf("no metrics to analyze")
+		return nil, nil
 	}
 
 	var results []models.PredictionResult

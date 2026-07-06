@@ -127,9 +127,64 @@ func (g *AnomalyGate) FilterBatch(predictions []GatePrediction, now time.Time) [
 	return results
 }
 
-// historyKey combines entity and metric for independent sustainment tracking.
-func historyKey(entity, metricName string) string {
-	return entity + "|" + metricName
+// ObserveScore records a score for sustainment tracking without evaluating pass rules.
+// Call on every scrape (including sub-threshold) so sustainment reflects consecutive scrapes.
+func (g *AnomalyGate) ObserveScore(entity string, metricName string, score float64, now time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	hKey := historyKey(entity, metricName)
+	if g.history[hKey] == nil {
+		g.history[hKey] = &entityHistory{
+			scores:           make([]float64, 0),
+			lastSeen:         now,
+			lastPassedScores: make([]float64, 0),
+		}
+	}
+	g.recordSustainmentScore(hKey, score, now)
+	g.pruneStaleLocked(now)
+}
+
+// PruneStale removes gate state for entities not seen within maxAge.
+func (g *AnomalyGate) PruneStale(now time.Time, maxAge time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneStaleLocked(now.Add(-maxAge))
+}
+
+func (g *AnomalyGate) pruneStaleLocked(cutoff time.Time) {
+	for key, hist := range g.history {
+		if hist.lastSeen.Before(cutoff) {
+			delete(g.history, key)
+		}
+	}
+	for entity, metrics := range g.metrics {
+		for metric, ts := range metrics {
+			if ts.Before(cutoff) {
+				delete(metrics, metric)
+			}
+		}
+		if len(metrics) == 0 {
+			delete(g.metrics, entity)
+		}
+	}
+	for entity, until := range g.cooldowns {
+		if until.Before(cutoff) {
+			delete(g.cooldowns, entity)
+		}
+	}
+}
+
+func (g *AnomalyGate) recordSustainmentScore(hKey string, score float64, now time.Time) {
+	history := g.history[hKey]
+	if now.Sub(history.lastSeen) > 2*g.config.ScrapeInterval {
+		history.scores = make([]float64, 0)
+	}
+	history.scores = append(history.scores, score)
+	history.lastSeen = now
+	if len(history.scores) > g.config.SustainCount {
+		history.scores = history.scores[len(history.scores)-g.config.SustainCount:]
+	}
 }
 
 // Filter determines whether an anomaly should be passed through the gate.
@@ -158,6 +213,8 @@ func (g *AnomalyGate) Filter(entity string, metricName string, score float64, re
 		g.metrics[entity] = make(map[string]time.Time)
 	}
 
+	g.recordSustainmentScore(hKey, score, now)
+
 	// Rule 1: Pattern bypass
 	if g.config.BypassPatterns && resultType == "pattern" {
 		if g.checkCooldownAndRecord(entity, metricName, score, now) {
@@ -182,8 +239,8 @@ func (g *AnomalyGate) Filter(entity string, metricName string, score float64, re
 		return Result{Pass: false, Reason: "cooldown_active"}
 	}
 
-	// Rule 4: Sustainment
-	if g.isSustained(hKey, score, now) {
+	// Rule 4: Sustainment — use pre-recorded scores from ObserveScore
+	if g.isSustainedFromHistory(hKey) {
 		if g.checkCooldownAndRecord(entity, metricName, score, now) {
 			return Result{Pass: true, Reason: "sustainment"}
 		}
@@ -198,8 +255,8 @@ func (g *AnomalyGate) Filter(entity string, metricName string, score float64, re
 // Returns true if the check passes (either not in cooldown or cooldown overridden by escalation).
 func (g *AnomalyGate) checkCooldownAndRecord(entity, metricName string, score float64, now time.Time) bool {
 	hKey := historyKey(entity, metricName)
-	// Check if entity is in cooldown
-	if cooldownUntil, exists := g.cooldowns[entity]; exists {
+	// Check per-signal cooldown
+	if cooldownUntil, exists := g.cooldowns[hKey]; exists {
 		if now.Before(cooldownUntil) {
 			// In cooldown - check for escalation override
 			history := g.history[hKey]
@@ -213,8 +270,7 @@ func (g *AnomalyGate) checkCooldownAndRecord(entity, metricName string, score fl
 				}
 				// If current score is higher than last passed score, allow escalation
 				if score > maxLastPassed {
-					// Update cooldown and record pass
-					g.cooldowns[entity] = now.Add(g.config.CooldownDuration)
+					g.cooldowns[hKey] = now.Add(g.config.CooldownDuration)
 					// Update last passed scores
 					history.lastPassedScores = append(history.lastPassedScores, score)
 					// Keep only last SustainCount scores
@@ -228,11 +284,10 @@ func (g *AnomalyGate) checkCooldownAndRecord(entity, metricName string, score fl
 			return false
 		}
 		// Cooldown expired, remove it
-		delete(g.cooldowns, entity)
+		delete(g.cooldowns, hKey)
 	}
 
-	// Not in cooldown (or cooldown expired) - set new cooldown and record pass
-	g.cooldowns[entity] = now.Add(g.config.CooldownDuration)
+	g.cooldowns[hKey] = now.Add(g.config.CooldownDuration)
 	history := g.history[hKey]
 	if history == nil {
 		return true
@@ -245,37 +300,22 @@ func (g *AnomalyGate) checkCooldownAndRecord(entity, metricName string, score fl
 	return true
 }
 
-// isSustained checks if we have SustainCount consecutive scores >= Threshold.
-// It resets the score buffer if the gap since lastSeen exceeds 2*ScrapeInterval.
-func (g *AnomalyGate) isSustained(hKey string, score float64, now time.Time) bool {
+func (g *AnomalyGate) isSustainedFromHistory(hKey string) bool {
 	history := g.history[hKey]
-
-	// Reset if gap too large
-	if now.Sub(history.lastSeen) > 2*g.config.ScrapeInterval {
-		history.scores = make([]float64, 0)
-	}
-
-	// Add current score
-	history.scores = append(history.scores, score)
-	history.lastSeen = now
-
-	// Keep only last SustainCount scores
-	if len(history.scores) > g.config.SustainCount {
-		history.scores = history.scores[len(history.scores)-g.config.SustainCount:]
-	}
-
-	// Need at least SustainCount scores to check
 	if len(history.scores) < g.config.SustainCount {
 		return false
 	}
-
-	// Check if all scores in the window are >= Threshold
 	for _, s := range history.scores {
 		if s < g.config.Threshold {
 			return false
 		}
 	}
 	return true
+}
+
+// historyKey combines entity and metric for independent sustainment tracking.
+func historyKey(entity, metricName string) string {
+	return entity + "|" + metricName
 }
 
 // isCorrelated checks if there are at least 2 different metrics for this entity

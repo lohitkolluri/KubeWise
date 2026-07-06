@@ -16,4 +16,5 @@ type RemediationConfig struct {
 	RateLimit         int      `json:"rate_limit" yaml:"rate_limit"`
 	NamespaceDenylist []string `json:"namespace_denylist,omitempty" yaml:"namespace_denylist,omitempty"`
 	Allowlist         []string `json:"allowlist,omitempty" yaml:"allowlist,omitempty"`
+	MinConfidence     float64  `json:"min_confidence,omitempty" yaml:"min_confidence,omitempty"`
 }

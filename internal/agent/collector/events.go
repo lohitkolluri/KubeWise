@@ -2,7 +2,7 @@ package collector
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"time"
@@ -12,28 +12,26 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-
-	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 )
 
 // failureReasons lists K8s event reasons that indicate potential failures.
 var failureReasons = map[string]bool{
-	"BackOff":           true,
-	"OOMKilling":        true,
-	"FailedMount":       true,
-	"ImagePull":         true,
-	"ImagePullBackOff":  true,
-	"CrashLoopBackOff":  true,
-	"ProbeError":        true,
-	"NodeCondition":     true,
-	"NodeNotReady":      true,
-	"Evicted":           true,
-	"FailedPlacement":   true,
-	"FailedScheduling":  true,
+	"BackOff":            true,
+	"OOMKilling":         true,
+	"FailedMount":        true,
+	"ImagePull":          true,
+	"ImagePullBackOff":   true,
+	"CrashLoopBackOff":   true,
+	"ProbeError":         true,
+	"NodeCondition":      true,
+	"NodeNotReady":       true,
+	"Evicted":            true,
+	"FailedPlacement":    true,
+	"FailedScheduling":   true,
 	"FailedNodeAffinity": true,
-	"OutOfDisk":         true,
-	"MemoryPressure":    true,
-	"DiskPressure":      true,
+	"OutOfDisk":          true,
+	"MemoryPressure":     true,
+	"DiskPressure":       true,
 }
 
 // EventRecord represents a filtered failure-related K8s event.
@@ -52,15 +50,13 @@ type EventRecord struct {
 // EventsCollector watches K8s events and emits failure-related records.
 type EventsCollector struct {
 	clientset kubernetes.Interface
-	store     *store.Store
 	namespace string
 }
 
 // NewEventsCollector creates a new events collector.
-func NewEventsCollector(clientset kubernetes.Interface, namespace string, s *store.Store) *EventsCollector {
+func NewEventsCollector(clientset kubernetes.Interface, namespace string) *EventsCollector {
 	return &EventsCollector{
 		clientset: clientset,
-		store:     s,
 		namespace: namespace,
 	}
 }
@@ -88,10 +84,10 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 		}
 
 		opts := metav1.ListOptions{
-			FieldSelector:   fields.AndSelectors(
+			FieldSelector: fields.AndSelectors(
 				fields.OneTermEqualSelector("type", string(corev1.EventTypeWarning)),
 			).String(),
-			Watch:           true,
+			Watch: true,
 		}
 		if rv != "" {
 			opts.ResourceVersion = rv
@@ -99,19 +95,18 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 
 		watcher, err := ec.clientset.CoreV1().Events(ec.namespace).Watch(ctx, opts)
 		if err != nil {
-			fmt.Printf("events: watch failed, retrying in %v: %v\n", backoff, err)
+			log.Printf("events: watch failed, retrying in %v: %v", backoff, err)
 			time.Sleep(backoff)
 			backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
-			// Add jitter
 			backoff += time.Duration(rand.Int63n(int64(backoff / 4)))
 			continue
 		}
 
-		backoff = 1 * time.Second // Reset on successful connection
+		backoff = 1 * time.Second
 
 		for event := range watcher.ResultChan() {
 			if event.Type == watch.Error {
-				fmt.Printf("events: watch error: %v\n", event.Object)
+				log.Printf("events: watch error: %v", event.Object)
 				watcher.Stop()
 				break
 			}
@@ -130,18 +125,20 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 				Reason:         k8sEvent.Reason,
 				Message:        k8sEvent.Message,
 				Count:          k8sEvent.Count,
-				InvolvedObject: fmt.Sprintf("%s/%s", k8sEvent.InvolvedObject.Kind, k8sEvent.InvolvedObject.Name),
+				InvolvedObject: k8sEvent.InvolvedObject.Name,
 				Namespace:      k8sEvent.Namespace,
 				Source:         k8sEvent.Source.Component,
 				FirstTimestamp: k8sEvent.FirstTimestamp.Time,
 				LastTimestamp:  k8sEvent.LastTimestamp.Time,
 			}
+			if k8sEvent.InvolvedObject.Kind != "" {
+				record.InvolvedObject = k8sEvent.InvolvedObject.Kind + "/" + k8sEvent.InvolvedObject.Name
+			}
 
-			// Emit on channel for the agent to gate and persist.
 			select {
 			case ch <- record:
 			default:
-				// Channel full, drop event
+				log.Printf("events: channel full, dropping %s event for %s", record.Reason, record.InvolvedObject)
 			}
 
 			if event.Type == watch.Deleted || event.Type == watch.Modified {
@@ -149,7 +146,6 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 			}
 		}
 
-		// Watch ended, reconnect
 		time.Sleep(backoff)
 		backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
 		backoff += time.Duration(rand.Int63n(int64(backoff / 4)))
@@ -166,7 +162,7 @@ func (ec *EventsCollector) ListRecentEvents(ctx context.Context, since time.Dura
 	}
 	events, err := ec.clientset.CoreV1().Events(ec.namespace).List(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("list events: %w", err)
+		return nil, err
 	}
 
 	var records []EventRecord
@@ -177,12 +173,16 @@ func (ec *EventsCollector) ListRecentEvents(ctx context.Context, since time.Dura
 		if !failureReasons[e.Reason] {
 			continue
 		}
+		involved := e.InvolvedObject.Name
+		if e.InvolvedObject.Kind != "" {
+			involved = e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
+		}
 		records = append(records, EventRecord{
 			Type:           "Warning",
 			Reason:         e.Reason,
 			Message:        e.Message,
 			Count:          e.Count,
-			InvolvedObject: fmt.Sprintf("%s/%s", e.InvolvedObject.Kind, e.InvolvedObject.Name),
+			InvolvedObject: involved,
 			Namespace:      e.Namespace,
 			Source:         e.Source.Component,
 			FirstTimestamp: e.FirstTimestamp.Time,

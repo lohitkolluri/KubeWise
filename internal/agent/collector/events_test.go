@@ -2,33 +2,17 @@ package collector
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
-
-	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 )
 
 func TestNewEventsCollector(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
 	cs := fake.NewSimpleClientset()
-	ec := NewEventsCollector(cs, "", s)
+	ec := NewEventsCollector(cs, "")
 	if ec == nil {
 		t.Fatal("expected non-nil EventsCollector")
 	}
@@ -67,20 +51,7 @@ func TestListRecentEvents(t *testing.T) {
 		},
 	)
 
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	ec := NewEventsCollector(cs, "", s)
+	ec := NewEventsCollector(cs, "")
 	records, err := ec.ListRecentEvents(context.Background(), 1*time.Hour)
 	if err != nil {
 		t.Fatalf("ListRecentEvents: %v", err)
@@ -111,20 +82,7 @@ func TestListRecentEvents_FiltersOldEvents(t *testing.T) {
 		},
 	)
 
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	ec := NewEventsCollector(cs, "", s)
+	ec := NewEventsCollector(cs, "")
 	records, err := ec.ListRecentEvents(context.Background(), 1*time.Hour)
 	if err != nil {
 		t.Fatalf("ListRecentEvents: %v", err)
