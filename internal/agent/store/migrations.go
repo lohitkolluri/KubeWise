@@ -12,6 +12,7 @@ var (
 	bucketAuditLog     = []byte("audit_log")
 	bucketConfig       = []byte("config")
 	bucketPredictions  = []byte("predictions")
+	bucketOutcomes     = []byte("outcomes")
 )
 
 // Init ensures all required buckets exist.
@@ -24,6 +25,7 @@ func (s *Store) Init() error {
 			bucketAuditLog,
 			bucketConfig,
 			bucketPredictions,
+			bucketOutcomes,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err

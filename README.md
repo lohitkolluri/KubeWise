@@ -1,158 +1,152 @@
+<div align="center">
+
 # KubeWise
 
-**Know before it breaks.** KubeWise watches your Kubernetes cluster, spots trouble early, and helps you respond — from a terminal UI or plain CLI commands.
+**Know before it breaks.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-in--cluster-326CE5?logo=kubernetes&logoColor=white)](manifests/base)
+[![CI](https://github.com/lohitkolluri/KubeWise/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lohitkolluri/KubeWise/actions/workflows/ci.yml)
+
+</div>
+
+KubeWise lives in your cluster. It pulls metrics from Prometheus, watches your workloads, and spots trouble early. Out of the box it only observes: nothing in the cluster changes until you flip remediation on.
 
 ## Architecture
 
-[![KubeWise architecture](docs/architecture.svg)](docs/architecture.svg)
+<p align="center">
+  <img src="docs/architecture.svg" alt="KubeWise system architecture" width="960"/>
+</p>
 
-**Scrape loop (every ~30s):** collect → predict → gate → store → forecast → remediate.
-
-**Default mode is observe** — remediations are logged and audited; nothing changes in the cluster until you switch to live mode and approve risky actions.
-
----
+Roughly every 30 seconds the agent scrapes, scores predictions, filters noise, and writes to a local store. If remediation is enabled, it digs into describe/events/logs, asks an LLM for a runbook, runs it, and checks that the fix actually stuck.
 
 ## Install
 
-You need **kubectl** pointed at a cluster and permission to create namespaces and RBAC.
+You need `kubectl` and a cluster with Prometheus. The installer looks for Prometheus on its own.
 
-**One command** (no clone required):
+### npm (macOS / Linux)
+
+```bash
+npm install -g kwctl
+# or
+npm install -g kubewise-cli
+
+kwctl version
+kwctl install --yes
+```
+
+Same binary either way. Node 16+.
+
+### curl
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/main/hack/bootstrap.sh | bash
 ```
 
-Or with the CLI:
+Or install `kwctl` from GitHub Releases first:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/main/hack/install.sh | bash
 kwctl install --yes
 ```
 
-Optional — enable LLM-backed remediation:
-
-```bash
-OPENROUTER_API_KEY=sk-... kwctl install --yes
-```
-
-**On your laptop** (kind + local images, no registry):
+### Local dev (kind)
 
 ```bash
 git clone https://github.com/lohitkolluri/KubeWise.git && cd KubeWise
 ./hack/bootstrap.sh --local
 ```
 
----
+### LLM remediation (optional)
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+kwctl install --yes
+```
+
+No API key? Predictions and the HTTP API still work. You just won't get LLM runbooks.
+
+### Ollama (local / air-gapped)
+
+```bash
+# set in agent config.yaml or env
+export OLLAMA_BASE_URL="http://ollama:11434"
+# llm_provider: ollama
+# llm_model: llama3.1:8b
+```
+
+### Slack / webhook notifications
+
+Enable in agent `config.yaml`:
+
+```yaml
+notifications:
+  enabled: true
+  slack_webhook_url: https://hooks.slack.com/services/...
+  min_score: 0.7
+```
 
 ## Use it
 
-Port-forward the agent (keep this running in a terminal):
-
 ```bash
+# terminal 1
 kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080
-```
 
-Open the control center — just run `kwctl` in a TTY, or:
-
-```bash
-kwctl ui
-```
-
-Check that everything is connected:
-
-```bash
+# terminal 2
 kwctl connect
 kwctl status
+kwctl          # opens the TUI
 ```
 
----
+Running `kwctl` with no arguments opens the dashboard: predictions, anomalies, audit trail, approvals, config, logs. `Ctrl+P` opens the command palette. `?` lists shortcuts.
 
-## kwctl
+A few you'll use often: `kwctl predict`, `kwctl anomalies`, `kwctl remediation`, `kwctl stats`, `kwctl logs -f`, `kwctl watch`. Config is at `~/.config/kwctl/config.yaml`.
 
-Running `kwctl` with no arguments opens the **interactive control center** (tabs for dashboard, predictions, anomalies, audit, approvals, config, logs). Press `?` for shortcuts, `ctrl+p` for the command palette.
+## API
 
-| Command             | What it does                               |
-| ------------------- | ------------------------------------------ |
-| `kwctl install`     | Deploy the agent into your current cluster |
-| `kwctl ui`          | Full-screen control center                 |
-| `kwctl status`      | Agent health, uptime, scrape count         |
-| `kwctl predict`     | Active failure predictions                 |
-| `kwctl anomalies`   | Recent detected anomalies                  |
-| `kwctl config`      | View or update agent settings              |
-| `kwctl remediation` | Remediation audit log                      |
-| `kwctl logs`        | Agent pod logs (`-f` to follow)            |
-| `kwctl watch`       | Live-updating status view                  |
-| `kwctl profile`     | Save agent URL, namespace, output format   |
-| `kwctl connect`     | Ping the agent API                         |
+After port-forwarding to `:8080`:
 
-Output formats: `-o table` (default), `json`, or `yaml`.
+```bash
+curl localhost:8080/status
+curl localhost:8080/api/v1/predictions
+curl localhost:8080/api/v1/anomalies
+curl localhost:8080/api/v1/stats
+```
 
-Profiles live at `~/.config/kwctl/config.yaml`.
+Also: `/api/v1/audit`, `/api/v1/approvals`, `/api/v1/config`, `/api/v1/stats`, `/api/v1/remediation/mode` (toggle live vs observe).
 
----
+## Remediation
 
-## Agent API
+Actions are grouped by how risky they are:
 
-Base URL is usually `http://localhost:8080` after port-forwarding.
-
-| Method        | Path                             | Description                 |
-| ------------- | -------------------------------- | --------------------------- |
-| `GET`         | `/health`                        | Liveness                    |
-| `GET`         | `/status`                        | Uptime, scrapes, gate stats |
-| `GET`         | `/api/v1/predictions`            | Predictions                 |
-| `GET`         | `/api/v1/anomalies`              | Anomalies (`?limit=N`)      |
-| `GET`         | `/api/v1/audit`                  | Remediation audit log       |
-| `GET`         | `/api/v1/approvals`              | Pending T3 approvals        |
-| `GET` / `PUT` | `/api/v1/config`                 | Agent configuration         |
-| `GET` / `PUT` | `/api/v1/remediation/mode`       | Live vs observe mode        |
-| `POST`        | `/api/v1/approvals/{id}/approve` | Approve a remediation       |
-| `POST`        | `/api/v1/approvals/{id}/reject`  | Reject a remediation        |
-
----
-
-## How it works
-
-The agent pod runs two containers: a **Go agent** and a **Python forecaster sidecar**.
-
-| Stage         | What happens                                                                                                                         |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Collect**   | Pull metrics from Prometheus; watch K8s events and workload state                                                                    |
-| **Predict**   | Score anomalies (EWMA, Z-score, rate-of-change) and match patterns (OOM, crash loop, degradation)                                    |
-| **Gate**      | Drop noise — cooldowns, sustainment, deduplication                                                                                   |
-| **Forecast**  | Sidecar projects metric trends (ETS) from stored history                                                                             |
-| **Remediate** | LLM correlates anomalies into a plan; multi-step runbooks; post-fix verification; T1/T2 auto-execute in live mode, T3 needs approval |
-| **Store**     | Everything persists in embedded bbolt — no external database                                                                         |
-
-You interact via **kwctl** (TUI or commands) or the **HTTP API** on port 8080.
-
----
+| Tier | Examples                         | What happens         |
+| ---- | -------------------------------- | -------------------- |
+| T1   | restart/delete pod               | auto in live mode    |
+| T2   | scale, rollback, patch resources | auto, 5 min cooldown |
+| T3   | escalate                         | needs your approval  |
+| T4   | unknown / cluster-wide           | rejected             |
 
 ## Develop
 
 ```bash
-make help          # all make targets
-make kind-up       # kind + Prometheus + manifests
-make deploy-dev    # rebuild images and rollout
-make test          # unit tests
-make port-forward  # localhost:8080
+make kind-up        # kind + prometheus + deploy
+make deploy-dev     # rebuild and rollout
+make test
+make port-forward
 ```
 
-Layout:
+Go 1.26+, Docker. Local clusters: [kind](https://kind.sigs.k8s.io/) and Helm.
 
-| Path                                    | Purpose                  |
-| --------------------------------------- | ------------------------ |
-| `cmd/agent`                             | In-cluster agent         |
-| `cmd/kwctl`                             | CLI                      |
-| `manifests/base`                        | Kustomize base           |
-| `manifests/overlays/{dev,install,prod}` | Environment overlays     |
-| `hack/bootstrap.sh`                     | One-click installer      |
-| `docs/architecture.svg`                 | Architecture diagram     |
-| `forecaster-sidecar`                    | gRPC forecasting service |
+### Releasing
 
-Requires Go 1.26+, Docker, and for local clusters: [kind](https://kind.sigs.k8s.io/) + Helm.
+Push a `vX.Y.Z` tag on `main`. GoReleaser cuts GitHub Release binaries and publishes `kwctl` and `kubewise-cli` to npm. Set `NPM_TOKEN` in repo secrets ([npm automation token](https://docs.npmjs.com/about-access-tokens)).
 
----
+```bash
+goreleaser release --snapshot --clean
+DRY_RUN=true ./scripts/npm-publish.sh v0.0.0-snapshot dist
+```
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

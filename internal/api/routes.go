@@ -19,6 +19,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	s.registerRemediationRoutes(mux)
 	mux.HandleFunc("GET /api/v1/remediations", s.handleRemediations)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
 	mux.HandleFunc("GET /", s.handleNotFound)
 }
 
@@ -100,7 +101,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cfg models.AgentConfig
-	if err := decodeJSON(r, &cfg); err != nil {
+	if err := decodeJSON(w, r, &cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

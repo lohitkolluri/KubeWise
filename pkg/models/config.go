@@ -2,11 +2,13 @@ package models
 
 // AgentConfig holds the agent's runtime configuration.
 type AgentConfig struct {
-	ScrapeInterval    string            `json:"scrape_interval" yaml:"scrape_interval"`
-	PrometheusAddress string            `json:"prometheus_address" yaml:"prometheus_address"`
-	LLMProvider       string            `json:"llm_provider" yaml:"llm_provider"`
-	LLMModel          string            `json:"llm_model" yaml:"llm_model"`
-	Remediation       RemediationConfig `json:"remediation" yaml:"remediation"`
+	ScrapeInterval    string              `json:"scrape_interval" yaml:"scrape_interval"`
+	PrometheusAddress string              `json:"prometheus_address" yaml:"prometheus_address"`
+	LLMProvider       string              `json:"llm_provider" yaml:"llm_provider"`
+	LLMModel          string              `json:"llm_model" yaml:"llm_model"`
+	LLMBaseURL        string              `json:"llm_base_url,omitempty" yaml:"llm_base_url,omitempty"`
+	Remediation       RemediationConfig   `json:"remediation" yaml:"remediation"`
+	Notifications     NotificationsConfig `json:"notifications" yaml:"notifications"`
 }
 
 // RemediationConfig controls remediation behavior.

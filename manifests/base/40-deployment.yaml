@@ -69,6 +69,8 @@ spec:
                   name: kubewise-agent-secret
                   key: openrouter_api_key
                   optional: true
+            - name: OLLAMA_BASE_URL
+              value: ''
             - name: KUBEWISE_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -122,15 +124,15 @@ spec:
               protocol: TCP
           env:
             - name: FORECASTER_PORT
-              value: "50051"
+              value: '50051'
             - name: FORECASTER_HEALTH_PORT
-              value: "8081"
+              value: '8081'
           resources:
             requests:
               cpu: 200m
               memory: 256Mi
             limits:
-              cpu: "1"
+              cpu: '1'
               memory: 512Mi
           startupProbe:
             httpGet:

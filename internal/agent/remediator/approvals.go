@@ -58,6 +58,25 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 	}
 
 	plan := record.Plan
+	cfg := c.snapshotConfig()
+
+	anomalies, err := c.store.ListAnomalies(100)
+	if err != nil {
+		return fmt.Errorf("list anomalies for approval: %w", err)
+	}
+	matched := c.anomaliesForRecord(anomalies, record)
+	if len(matched) == 0 {
+		matched = c.anomaliesMatchingPlan(anomalies, plan)
+	}
+
+	if err := validateRunbookSteps(plan, matched, cfg); err != nil {
+		return fmt.Errorf("approved plan no longer valid: %w", err)
+	}
+	tier := c.tierAssigner.AssignTierPlan(plan)
+	if reason := c.gateByTierPlan(tier, plan); reason != "" {
+		return fmt.Errorf("approved plan blocked by policy: %s", reason)
+	}
+
 	result, err := c.executor.ExecuteForce(ctx, plan)
 	now := time.Now()
 	record.Reason = "approved by operator"
@@ -79,8 +98,6 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 	}
 
 	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
-	anomalies, _ := c.store.ListAnomalies(100)
-	matched := c.anomaliesMatchingPlan(anomalies, plan)
 
 	if verifyNote == "" {
 		record.Status = models.AuditVerified
@@ -122,7 +139,35 @@ func (c *Correlator) RejectRecord(id, reason string) error {
 	}
 	record.Status = models.AuditRejected
 	record.Reason = reason
-	return c.store.UpdateAuditRecord(record)
+	if err := c.store.UpdateAuditRecord(record); err != nil {
+		return err
+	}
+	anomalies, err := c.store.ListAnomalies(100)
+	if err == nil {
+		matched := c.anomaliesForRecord(anomalies, record)
+		if len(matched) == 0 {
+			matched = c.anomaliesMatchingPlan(anomalies, record.Plan)
+		}
+		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
+	}
+	return nil
+}
+
+func (c *Correlator) anomaliesForRecord(all []models.AnomalyRecord, record *models.AuditRecord) []models.AnomalyRecord {
+	if record == nil || len(record.AnomalyIDs) == 0 {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(record.AnomalyIDs))
+	for _, id := range record.AnomalyIDs {
+		ids[id] = struct{}{}
+	}
+	var matched []models.AnomalyRecord
+	for _, a := range all {
+		if _, ok := ids[a.ID]; ok {
+			matched = append(matched, a)
+		}
+	}
+	return matched
 }
 
 // SetLiveMode enables or disables dry-run execution.

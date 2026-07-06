@@ -19,7 +19,7 @@ func TestFilterNewAnomalies_SkipsCorrelated(t *testing.T) {
 		{ID: "2", Status: models.AnomalyStatusCorrelated},
 		{ID: "3", Status: models.AnomalyStatusRemediated},
 	}
-	filtered := c.filterNewAnomalies(records)
+	filtered := c.filterNewAnomalies(records, RemediationConfig{})
 	if len(filtered) != 1 || filtered[0].ID != "1" {
 		t.Fatalf("expected only detected anomaly, got %v", filtered)
 	}

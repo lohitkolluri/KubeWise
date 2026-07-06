@@ -104,6 +104,18 @@ func fetchAudit(limit int) ([]models.AuditRecord, error) {
 	return records, nil
 }
 
+func fetchStats() (models.AgentStats, error) {
+	body, _, err := agentGet("/api/v1/stats")
+	if err != nil {
+		return models.AgentStats{}, err
+	}
+	var stats models.AgentStats
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return models.AgentStats{}, fmt.Errorf("parse stats: %w", err)
+	}
+	return stats, nil
+}
+
 func putAgentConfig(cfg *models.AgentConfig) error {
 	_, _, err := agentWrite("/api/v1/config", cfg)
 	return err

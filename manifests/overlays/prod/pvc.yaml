@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kubewise-agent-data
+  namespace: kubewise
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

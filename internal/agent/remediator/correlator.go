@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
+	"github.com/lohitkolluri/KubeWise/internal/agent/notify"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -43,6 +44,7 @@ type Correlator struct {
 	verifier     *Verifier
 	store        *store.Store
 	cfg          RemediationConfig
+	notifier     *notify.Notifier
 	mu           sync.RWMutex
 }
 
@@ -89,13 +91,33 @@ func newVerifierFromExecutor(exec *K8sExecutor) *Verifier {
 	return NewVerifier(exec.Clientset())
 }
 
+// SetNotifier wires outbound webhook/Slack notifications for remediation events.
+func (c *Correlator) SetNotifier(n *notify.Notifier) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.notifier = n
+}
+
+func (c *Correlator) emitAuditNotification(record *models.AuditRecord) {
+	c.mu.RLock()
+	n := c.notifier
+	c.mu.RUnlock()
+	if n == nil || record == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n.NotifyRemediation(ctx, *record)
+}
+
 // RunOnce executes one remediation cycle: fetch anomalies, correlate via LLM, execute.
 func (c *Correlator) RunOnce(ctx context.Context) error {
-	if c.cfg.Mode == "off" {
+	cfg := c.snapshotConfig()
+	if cfg.Mode == "off" {
 		return nil
 	}
 
-	anomalies, err := c.store.ListAnomalies(c.anomalyFetchLimit())
+	anomalies, err := c.store.ListAnomalies(c.anomalyFetchLimit(cfg))
 	if err != nil {
 		return fmt.Errorf("list anomalies: %w", err)
 	}
@@ -104,7 +126,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	correlatable := c.filterNewAnomalies(anomalies)
+	correlatable := c.filterNewAnomalies(anomalies, cfg)
 	if len(correlatable) == 0 {
 		return nil
 	}
@@ -112,8 +134,8 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		log.Printf("remediator: skipping — LLM client unavailable or no API key")
 		return nil
 	}
-	if c.cfg.RateLimit > 0 && len(correlatable) > c.cfg.RateLimit {
-		correlatable = correlatable[:c.cfg.RateLimit]
+	if cfg.RateLimit > 0 && len(correlatable) > cfg.RateLimit {
+		correlatable = correlatable[:cfg.RateLimit]
 	}
 
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
@@ -141,8 +163,9 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	normalizePlan(&plan, correlatable)
 	plan.Investigation = models.InvestigationContext{Summary: investigation}
 
-	if err := validateRunbookSteps(plan, correlatable, c.cfg); err != nil {
+	if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
 		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
+		c.markAnomalyStatus(correlatable, models.AnomalyStatusRejected, nil)
 		return fmt.Errorf("plan validation: %w", err)
 	}
 
@@ -156,6 +179,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	reason := c.gateByTierPlan(tier, plan)
 	if reason != "" {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, reason, userPrompt, "")
+		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
 		log.Printf("remediator: rejected - %s", reason)
 		return nil
 	}
@@ -163,7 +187,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if tier == models.RiskTier3 {
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		msg := "awaiting human approval (T3)"
-		if c.cfg.DryRun {
+		if cfg.DryRun {
 			msg = "dry-run: would require human approval (T3)"
 			log.Printf("remediator: [dry-run] T3 %s %s/%s — needs approval when live", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
 			c.logAudit(&plan, matched, tier, models.AuditDryRun, msg, userPrompt, "")
@@ -181,7 +205,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	if c.cfg.DryRun {
+	if cfg.DryRun {
 		log.Printf("remediator: [dry-run] would execute %d-step runbook on %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode", userPrompt, c.dryRunSummary(plan))
@@ -190,6 +214,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 
 	if c.executor == nil {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, "k8s executor unavailable", userPrompt, "")
+		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
 		log.Printf("remediator: rejected - k8s executor unavailable")
 		return nil
 	}
@@ -197,6 +222,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	result, err := c.executor.Execute(ctx, plan)
 	if err != nil {
 		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), userPrompt, result)
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		return fmt.Errorf("execute runbook: %w", err)
 	}
 
@@ -274,10 +300,18 @@ func (c *Correlator) logAuditVerified(plan *models.RemediationPlan, anomalies []
 	}
 	if err := c.store.SaveAuditRecord(record); err != nil {
 		log.Printf("remediator: failed to save audit record: %v", err)
+		return
 	}
+	c.emitAuditNotification(record)
 }
 
-func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord) []models.AnomalyRecord {
+func (c *Correlator) snapshotConfig() RemediationConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg
+}
+
+func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord, cfg RemediationConfig) []models.AnomalyRecord {
 	var filtered []models.AnomalyRecord
 	for _, r := range records {
 		switch r.Status {
@@ -286,7 +320,7 @@ func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord) []models
 			continue
 		}
 		denied := false
-		for _, d := range c.cfg.Denylist {
+		for _, d := range cfg.Denylist {
 			if r.Namespace == d {
 				denied = true
 				break
@@ -512,7 +546,9 @@ func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalies []models.A
 
 	if err := c.store.SaveAuditRecord(record); err != nil {
 		log.Printf("remediator: failed to save audit record: %v", err)
+		return
 	}
+	c.emitAuditNotification(record)
 }
 
 func shortID() string {
@@ -530,8 +566,8 @@ func shortID() string {
 	return fmt.Sprintf("%x-%s", now, string(b))
 }
 
-func (c *Correlator) anomalyFetchLimit() int {
-	limit := c.cfg.RateLimit * 5
+func (c *Correlator) anomalyFetchLimit(cfg RemediationConfig) int {
+	limit := cfg.RateLimit * 5
 	if limit < 20 {
 		limit = 20
 	}
