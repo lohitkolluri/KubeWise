@@ -20,6 +20,8 @@ const (
 var (
 	installYes            bool
 	installLocal          bool
+	installHelm           bool
+	installChartPath      string
 	installRef            string
 	installOverlay        string
 	installManifestsDir   string
@@ -40,6 +42,7 @@ Examples:
   kwctl install                          # apply remote manifests, detect Prometheus
   kwctl install --yes                    # non-interactive
   kwctl install --local                  # kind + build images (dev laptop)
+  kwctl install --helm                   # install via Helm chart (recommended)
   OPENROUTER_API_KEY=sk-... kwctl install   # optional LLM key
 
 After install, port-forward and open the UI:
@@ -51,7 +54,9 @@ After install, port-forward and open the UI:
 func init() {
 	installCmd.Flags().BoolVar(&installYes, "yes", false, "non-interactive; accept defaults")
 	installCmd.Flags().BoolVar(&installLocal, "local", false, "dev mode: kind cluster + build local images")
-	installCmd.Flags().StringVar(&installRef, "ref", defaultInstallRef, "git ref for remote kustomize overlay")
+	installCmd.Flags().BoolVar(&installHelm, "helm", false, "install via Helm chart instead of kustomize manifests")
+	installCmd.Flags().StringVar(&installChartPath, "chart", "", "Helm chart path or URL (default: GitHub chart at --ref)")
+	installCmd.Flags().StringVar(&installRef, "ref", defaultInstallRef, "git ref for remote kustomize overlay or Helm chart")
 	installCmd.Flags().StringVar(&installOverlay, "overlay", defaultInstallOverlay, "kustomize overlay name (install, dev, prod)")
 	installCmd.Flags().StringVar(&installManifestsDir, "manifests-dir", "", "local manifests path (skips remote kustomize)")
 	installCmd.Flags().StringVar(&installOpenRouterKey, "openrouter-key", "", "OpenRouter API key (or set OPENROUTER_API_KEY)")
@@ -83,25 +88,40 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintln(out, "✓ Kubernetes cluster reachable")
 
-	if err := applyInstallManifests(out); err != nil {
-		return err
-	}
-	fmt.Fprintln(out, "✓ Manifests applied")
-
-	if err := applyInstallSecret(); err != nil {
-		return err
-	}
-
-	if !installSkipPrometheus {
-		if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
-			if err := kc.PatchConfigMapPrometheus(ctx, agentNS, url); err != nil {
-				fmt.Fprintf(out, "warning: could not patch Prometheus URL: %v\n", err)
-			} else {
-				fmt.Fprintf(out, "✓ Prometheus detected: %s\n", url)
+	if installHelm {
+		promURL := ""
+		if !installSkipPrometheus {
+			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
+				promURL = url
+			} else if !installYes {
+				fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — set agent.prometheusAddress after install\n", installPrometheusNS)
 			}
-		} else if !installYes {
-			fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — metrics collection may fail until configured\n", installPrometheusNS)
-			fmt.Fprintln(out, "  install Prometheus or run: kwctl config set prometheus_address http://...")
+		}
+		if err := applyHelmInstall(out, promURL); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "✓ Helm release installed")
+	} else {
+		if err := applyInstallManifests(out); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "✓ Manifests applied")
+
+		if err := applyInstallSecret(); err != nil {
+			return err
+		}
+
+		if !installSkipPrometheus {
+			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
+				if err := kc.PatchConfigMapPrometheus(ctx, agentNS, url); err != nil {
+					fmt.Fprintf(out, "warning: could not patch Prometheus URL: %v\n", err)
+				} else {
+					fmt.Fprintf(out, "✓ Prometheus detected: %s\n", url)
+				}
+			} else if !installYes {
+				fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — metrics collection may fail until configured\n", installPrometheusNS)
+				fmt.Fprintln(out, "  install Prometheus or run: kwctl config set prometheus_address http://...")
+			}
 		}
 	}
 
@@ -159,6 +179,74 @@ func requireKubectl() error {
 		return fmt.Errorf("kubectl not found in PATH — install kubectl first")
 	}
 	return nil
+}
+
+func requireHelm() error {
+	if _, err := exec.LookPath("helm"); err != nil {
+		return fmt.Errorf("helm not found in PATH — install Helm or use kwctl install without --helm")
+	}
+	return nil
+}
+
+func applyHelmInstall(out io.Writer, prometheusURL string) error {
+	if err := requireHelm(); err != nil {
+		return err
+	}
+	chart := installChartPath
+	if chart == "" {
+		if local := findHelmChartDir(); local != "" {
+			chart = local
+		} else {
+			chart = fmt.Sprintf("https://github.com/lohitkolluri/KubeWise/charts/kubewise?ref=%s", installRef)
+		}
+	}
+	fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
+
+	args := []string{
+		"upgrade", "--install", "kubewise", chart,
+		"-n", agentNS, "--create-namespace",
+		"--wait", "--timeout", installWaitTimeout.String(),
+	}
+	if prometheusURL != "" {
+		args = append(args, "--set", "agent.prometheusAddress="+prometheusURL)
+		fmt.Fprintf(out, "✓ Prometheus detected: %s\n", prometheusURL)
+	}
+	key := installOpenRouterKey
+	if key == "" {
+		key = os.Getenv("OPENROUTER_API_KEY")
+	}
+	if key != "" {
+		args = append(args, "--set", "secrets.openrouterApiKey="+key)
+	} else if !installYes {
+		fmt.Fprintln(out, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
+	}
+	if tok := os.Getenv("KUBEWISE_API_TOKEN"); tok != "" {
+		args = append(args, "--set", "secrets.apiToken="+tok)
+	}
+	if os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" {
+		args = append(args, "--set", "security.requireApiToken=true")
+	}
+
+	c := exec.Command("helm", args...)
+	c.Stdout = out
+	c.Stderr = os.Stderr
+	return c.Run()
+}
+
+func findHelmChartDir() string {
+	candidates := []string{}
+	if repo := os.Getenv("KUBEWISE_REPO"); repo != "" {
+		candidates = append(candidates, repo+"/charts/kubewise")
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, wd+"/charts/kubewise")
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p + "/Chart.yaml"); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 func applyInstallManifests(out io.Writer) error {

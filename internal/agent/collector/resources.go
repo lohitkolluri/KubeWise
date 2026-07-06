@@ -13,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+
+	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
 
 // PodState represents a snapshot of a pod's current state.
@@ -43,7 +45,8 @@ type DeploymentState struct {
 
 // ResourcesCollector uses K8s informers to track live resource state.
 type ResourcesCollector struct {
-	clientset kubernetes.Interface
+	clientset       kubernetes.Interface
+	watchNamespaces []string
 
 	mu    sync.RWMutex
 	pods  map[string]PodState
@@ -59,13 +62,14 @@ type ResourcesCollector struct {
 }
 
 // NewResourcesCollector creates and starts resource informers.
-func NewResourcesCollector(clientset kubernetes.Interface) *ResourcesCollector {
+func NewResourcesCollector(clientset kubernetes.Interface, watchNamespaces []string) *ResourcesCollector {
 	rc := &ResourcesCollector{
-		clientset:   clientset,
-		pods:        make(map[string]PodState),
-		nodes:       make(map[string]NodeState),
-		deps:        make(map[string]DeploymentState),
-		syncTimeout: 30 * time.Second,
+		clientset:       clientset,
+		watchNamespaces: watchNamespaces,
+		pods:            make(map[string]PodState),
+		nodes:           make(map[string]NodeState),
+		deps:            make(map[string]DeploymentState),
+		syncTimeout:     30 * time.Second,
 	}
 	rc.startInformers()
 	return rc
@@ -167,6 +171,9 @@ func (rc *ResourcesCollector) Snapshot() (failing []PodState, unhealthy []string
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	for _, p := range rc.pods {
+		if !nsutil.InScope(p.Namespace, rc.watchNamespaces) {
+			continue
+		}
 		if p.Phase == string(corev1.PodSucceeded) {
 			continue
 		}

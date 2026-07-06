@@ -34,6 +34,7 @@ npm install -g kubewise-cli
 
 kwctl version
 kwctl install --yes
+# production: kwctl install --helm --yes
 ```
 
 Same binary either way. Node 16+.

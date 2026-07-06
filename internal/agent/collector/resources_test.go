@@ -95,7 +95,7 @@ func TestGetFailingPods(t *testing.T) {
 
 	_ = cs // Informers need a real watch which fake doesn't fully support without extra setup
 	// Testing state conversion directly instead
-	rc := NewResourcesCollector(cs)
+	rc := NewResourcesCollector(cs, nil)
 	if rc == nil {
 		t.Fatal("expected non-nil ResourcesCollector")
 	}
@@ -128,7 +128,7 @@ func TestGetFailingPods(t *testing.T) {
 }
 
 func TestGetUnhealthyNodes(t *testing.T) {
-	rc := NewResourcesCollector(fake.NewSimpleClientset())
+	rc := NewResourcesCollector(fake.NewSimpleClientset(), nil)
 	rc.mu.Lock()
 	rc.nodes["healthy"] = NodeState{Name: "healthy", Ready: true}
 	rc.nodes["sick"] = NodeState{Name: "sick", Ready: false}

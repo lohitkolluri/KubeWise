@@ -243,6 +243,40 @@ func (s *Store) ListAuditRecordsByStatus(status models.AuditStatus, limit int) (
 	return out, nil
 }
 
+// RebuildAuditIndexes rebuilds audit indexes from the audit_log bucket (migration helper).
+func (s *Store) RebuildAuditIndexes() error {
+	records, err := s.listAllAuditRecords()
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		idx, err := tx.CreateBucket(bucketAuditIndex)
+		if err != nil {
+			return err
+		}
+		st, err := tx.CreateBucket(bucketAuditStatus)
+		if err != nil {
+			return err
+		}
+		for i := range records {
+			r := records[i]
+			if err := idx.Put(auditTimeIndexKey(r.CreatedAt, r.ID), []byte(r.ID)); err != nil {
+				return err
+			}
+			if err := st.Put(auditStatusIndexKey(r.Status, r.CreatedAt, r.ID), []byte(r.ID)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) listAuditByStatusLegacy(status models.AuditStatus, limit int) ([]models.AuditRecord, error) {
 	records, err := s.listAllAuditRecords()
 	if err != nil {
