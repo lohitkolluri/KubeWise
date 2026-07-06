@@ -41,7 +41,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: build/agent/Dockerfile
+          file: docker/agent/Dockerfile
           push: false
           platforms: linux/amd64
           tags: kubewise/agent:ci
