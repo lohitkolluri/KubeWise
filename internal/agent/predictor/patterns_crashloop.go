@@ -14,36 +14,18 @@ func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.Anomaly
 		return nil
 	}
 
-	hasCrashLoopEvent := false
-	crashPods := make(map[string]string)
-	for _, ev := range events {
-		if ev.Pattern == "CrashLoopBackOff" {
-			hasCrashLoopEvent = true
-			crashPods[ev.Entity] = ev.Namespace
-		}
-	}
-
 	restartByEntity := groupByEntity(restartResult.Values)
 	var matches []PatternMatch
 
-	for entity, pts := range restartByEntity {
+	for entityKey, pts := range restartByEntity {
 		if len(pts) < 2 {
 			continue
 		}
 
+		namespace := namespaceFromKey(entityKey)
+		entity := entityNameFromKey(entityKey)
 		trend := estimateTrend(pts)
 		latestRate := pts[len(pts)-1].Value
-		namespace := ""
-		for _, p := range pts {
-			if ns, ok := p.Labels["namespace"]; ok {
-				namespace = ns
-				break
-			}
-		}
-
-		if latestRate < 0.01 && trend < 0.1 && !hasCrashLoopEvent {
-			continue
-		}
 
 		confidence := 0.4
 		if latestRate > 0.1 {
@@ -52,10 +34,31 @@ func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.Anomaly
 		if trend > 0.2 {
 			confidence += 0.15
 		}
-		if _, isCrashing := crashPods[entity]; isCrashing {
-			confidence += 0.25
+		if len(pts) >= 3 {
+			acceleration := pts[len(pts)-1].Value - pts[len(pts)-2].Value
+			if acceleration > 0.05 {
+				confidence += 0.15
+			}
 		}
-		if contains(resources.FailingPods, entity) {
+		highRateCount := 0
+		for _, p := range pts {
+			if p.Value > 0.1 {
+				highRateCount++
+			}
+		}
+		if float64(highRateCount) >= float64(len(pts))*0.6 {
+			confidence += 0.15
+		}
+		if len(pts) >= 5 {
+			recentSpike := pts[len(pts)-1].Value - pts[len(pts)-5].Value
+			if recentSpike > 0.5 {
+				confidence += 0.2
+			}
+		}
+		if hasEvent(events, entity, "CrashLoopBackOff") {
+			confidence += 0.1
+		}
+		if contains(resources.FailingPods, entity) || contains(resources.FailingPods, entityKey) {
 			confidence += 0.1
 		}
 		if confidence > 0.95 {
@@ -63,24 +66,15 @@ func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.Anomaly
 		}
 
 		if confidence >= 0.5 {
-			action := "Check container logs and fix startup errors"
 			matches = append(matches, PatternMatch{
 				Pattern:         "CrashLoopRisk",
 				Confidence:      confidence,
-				SuggestedAction: action,
+				SuggestedAction: "Check container logs and fix startup errors",
 				Entity:          entity,
 				Namespace:       namespace,
+				TimeToFailure:   estimateCrashLoopTimeToFailure(pts, latestRate),
 			})
 		}
 	}
 	return matches
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

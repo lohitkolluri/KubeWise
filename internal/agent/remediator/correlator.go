@@ -24,15 +24,18 @@ type Correlator struct {
 
 // RemediationConfig controls correlator behavior.
 type RemediationConfig struct {
-	Mode            string   // "dry-run", "auto", "off"
-	DryRun          bool     // when true, log actions but don't execute
-	Allowlist       []string // allowed action types (empty = all)
-	Denylist        []string // denied namespaces
-	MinConfidence   float64  // minimum LLM confidence to execute
+	Mode          string   // "dry-run", "auto", "off"
+	DryRun        bool     // when true, log actions but don't execute
+	Allowlist     []string // allowed action types (empty = all)
+	Denylist      []string // denied namespaces
+	MinConfidence float64  // minimum LLM confidence to execute
 }
 
 // NewCorrelator creates the remediation pipeline.
 func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig) *Correlator {
+	if cfg.MinConfidence <= 0 {
+		cfg.MinConfidence = 0.7
+	}
 	return &Correlator{
 		llmClient:    llmClient,
 		tierAssigner: NewTierAssigner(5 * time.Minute),
@@ -48,14 +51,13 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	// 1. Fetch recent un-remediated anomalies
-	anomalies, err := c.store.ListAnomalies(10)
+	anomalies, err := c.store.ListAnomalies(20)
 	if err != nil {
 		return fmt.Errorf("list anomalies: %w", err)
 	}
 
 	if len(anomalies) == 0 {
-		return nil // nothing to do
+		return nil
 	}
 
 	correlatable := c.filterNewAnomalies(anomalies)
@@ -65,76 +67,70 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
 
-	// 2. Build the LLM prompt
 	userPrompt := llm.BuildUserPrompt(correlatable, "")
 	systemPrompt := llm.SystemPrompt()
 	schema := llm.RemediationSchema()
 
-	// 3. Call LLM
 	var plan models.RemediationPlan
 	if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
 		return fmt.Errorf("llm correlation: %w", err)
 	}
 
-	// 4. Validate the plan
+	// Mark anomalies as correlated so they are not re-sent to the LLM.
+	c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
+
 	if err := c.validatePlan(plan); err != nil {
-		c.logAudit(&plan, "", models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
+		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
 		return fmt.Errorf("plan validation: %w", err)
 	}
 
-	// 5. Assign risk tier
 	tier := c.tierAssigner.AssignTier(plan)
 	log.Printf("remediator: plan action=%s target=%s/%s tier=%s confidence=%.2f",
 		plan.Action.Type, plan.Action.Namespace, plan.Action.Target, tier, plan.Diagnosis.Confidence)
 
-	// 6. Gate by risk tier
 	reason := c.gateByTier(tier, plan)
 	if reason != "" {
-		c.logAudit(&plan, "", tier, models.AuditRejected, reason, userPrompt, "")
+		c.logAudit(&plan, correlatable, tier, models.AuditRejected, reason, userPrompt, "")
 		log.Printf("remediator: rejected - %s", reason)
-		return nil // rejected isn't a pipeline error
+		return nil
 	}
 
-	// 7. Execute
-	anomalyID := ""
-	if len(correlatable) > 0 {
-		anomalyID = correlatable[0].ID
-	}
-
-	status := models.AuditApproved
 	if c.cfg.DryRun {
-		status = models.AuditDryRun
 		log.Printf("remediator: [dry-run] would execute %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
-		c.logAudit(&plan, anomalyID, tier, status, "dry-run mode", userPrompt, "")
+		c.logAudit(&plan, correlatable, tier, models.AuditDryRun, "dry-run mode", userPrompt, "")
+		return nil
+	}
+
+	if c.executor == nil {
+		c.logAudit(&plan, correlatable, tier, models.AuditRejected, "k8s executor unavailable", userPrompt, "")
+		log.Printf("remediator: rejected - k8s executor unavailable")
 		return nil
 	}
 
 	result, err := c.executor.Execute(ctx, plan)
 	if err != nil {
-		status = models.AuditFailed
-		c.logAudit(&plan, anomalyID, tier, status, err.Error(), userPrompt, result)
+		c.logAudit(&plan, correlatable, tier, models.AuditFailed, err.Error(), userPrompt, result)
 		return fmt.Errorf("execute %s: %w", plan.Action.Type, err)
 	}
 
-	// 8. Set cooldown for T2 actions
 	if tier == models.RiskTier2 {
 		c.tierAssigner.SetCooldown(plan.Action.Namespace, plan.Action.Type)
 	}
 
-	status = models.AuditExecuted
-	c.logAudit(&plan, anomalyID, tier, status, reason, userPrompt, result)
+	now := time.Now()
+	c.markAnomalyStatus(correlatable, models.AnomalyStatusRemediated, &now)
+	c.logAudit(&plan, correlatable, tier, models.AuditExecuted, reason, userPrompt, result)
 	log.Printf("remediator: executed %s %s/%s: %s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target, result)
 	return nil
 }
 
-// filterNewAnomalies returns anomalies that haven't been remediated yet.
 func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord) []models.AnomalyRecord {
 	var filtered []models.AnomalyRecord
 	for _, r := range records {
-		if r.Status == "remediated" || r.Status == "resolved" {
+		switch r.Status {
+		case models.AnomalyStatusCorrelated, models.AnomalyStatusRemediated, models.AnomalyStatusResolved:
 			continue
 		}
-		// Skip denied namespaces
 		denied := false
 		for _, d := range c.cfg.Denylist {
 			if r.Namespace == d {
@@ -150,7 +146,18 @@ func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord) []models
 	return filtered
 }
 
-// validatePlan checks the LLM's plan against basic constraints.
+func (c *Correlator) markAnomalyStatus(records []models.AnomalyRecord, status string, remediatedAt *time.Time) {
+	for i := range records {
+		records[i].Status = status
+		if remediatedAt != nil {
+			records[i].RemediatedAt = remediatedAt
+		}
+		if err := c.store.UpdateAnomaly(&records[i]); err != nil {
+			log.Printf("remediator: update anomaly %s status=%s: %v", records[i].ID, status, err)
+		}
+	}
+}
+
 func (c *Correlator) validatePlan(plan models.RemediationPlan) error {
 	if plan.Action.Type == "" {
 		return fmt.Errorf("action type is empty")
@@ -164,23 +171,36 @@ func (c *Correlator) validatePlan(plan models.RemediationPlan) error {
 	if plan.Diagnosis.Confidence < 0 || plan.Diagnosis.Confidence > 1 {
 		return fmt.Errorf("confidence out of range: %f", plan.Diagnosis.Confidence)
 	}
+	if plan.Diagnosis.Confidence < c.cfg.MinConfidence {
+		return fmt.Errorf("confidence %.2f below minimum %.2f", plan.Diagnosis.Confidence, c.cfg.MinConfidence)
+	}
+	if len(c.cfg.Allowlist) > 0 {
+		allowed := false
+		for _, a := range c.cfg.Allowlist {
+			if a == plan.Action.Type {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("action type %q not in allowlist", plan.Action.Type)
+		}
+	}
 	if plan.Action.Rationale == "" {
 		return fmt.Errorf("rationale is empty")
 	}
 	return nil
 }
 
-// gateByTier returns a rejection reason if the plan should not be executed.
-// Empty string means approved.
 func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPlan) string {
 	switch tier {
 	case models.RiskTier1:
-		return "" // auto-execute
+		return ""
 	case models.RiskTier2:
 		if !c.tierAssigner.CheckCooldown(plan.Action.Namespace, plan.Action.Type) {
 			return fmt.Sprintf("cooldown active for %s/%s", plan.Action.Namespace, plan.Action.Type)
 		}
-		return "" // execute after cooldown check
+		return ""
 	case models.RiskTier3:
 		return fmt.Sprintf("T3 action requires human approval: %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
 	case models.RiskTier4:
@@ -190,9 +210,12 @@ func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPla
 	}
 }
 
-// logAudit records a remediation decision to the store.
-func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalyID string, tier models.RiskTier, status models.AuditStatus, reason, prompt, k8sResult string) {
+func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalies []models.AnomalyRecord, tier models.RiskTier, status models.AuditStatus, reason, prompt, k8sResult string) {
 	now := time.Now()
+	anomalyID := ""
+	if len(anomalies) > 0 {
+		anomalyID = anomalies[0].ID
+	}
 	record := &models.AuditRecord{
 		ID:          shortID(),
 		AnomalyID:   anomalyID,
@@ -215,7 +238,6 @@ func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalyID string, ti
 	}
 }
 
-// shortID generates a short unique identifier for audit records.
 func shortID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 12)

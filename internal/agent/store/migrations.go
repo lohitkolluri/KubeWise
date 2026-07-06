@@ -6,10 +6,11 @@ import (
 
 // Bucket names used by the store.
 var (
-	bucketMetrics     = []byte("metrics")
-	bucketAnomalies   = []byte("anomalies")
+	bucketMetrics      = []byte("metrics")
+	bucketAnomalies    = []byte("anomalies")
 	bucketRemediations = []byte("remediations")
-	bucketConfig      = []byte("config")
+	bucketAuditLog     = []byte("audit_log")
+	bucketConfig       = []byte("config")
 )
 
 // Init ensures all required buckets exist.
@@ -19,6 +20,7 @@ func (s *Store) Init() error {
 			bucketMetrics,
 			bucketAnomalies,
 			bucketRemediations,
+			bucketAuditLog,
 			bucketConfig,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {

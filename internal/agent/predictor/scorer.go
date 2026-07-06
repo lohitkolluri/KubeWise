@@ -55,6 +55,9 @@ func NewScorer(config ScorerConfig) *Scorer {
 	if cfg.MinWarmup <= 0 {
 		cfg.MinWarmup = MinimumWarmupPoints
 	}
+	if cfg.ROCBoostWeight <= 0 {
+		cfg.ROCBoostWeight = 0.3
+	}
 	return &Scorer{config: cfg}
 }
 

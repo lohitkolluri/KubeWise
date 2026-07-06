@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -15,12 +16,13 @@ import (
 
 // PodState represents a snapshot of a pod's current state.
 type PodState struct {
-	Name         string   `json:"name"`
-	Namespace    string   `json:"namespace"`
-	Phase        string   `json:"phase"`
-	Ready        bool     `json:"ready"`
-	RestartCount int32    `json:"restart_count"`
-	Conditions   []string `json:"conditions,omitempty"`
+	Name          string   `json:"name"`
+	Namespace     string   `json:"namespace"`
+	Phase         string   `json:"phase"`
+	Ready         bool     `json:"ready"`
+	RestartCount  int32    `json:"restart_count"`
+	MemLimitBytes float64  `json:"mem_limit_bytes"`
+	Conditions    []string `json:"conditions,omitempty"`
 }
 
 // NodeState represents a snapshot of a node's current state.
@@ -114,7 +116,7 @@ func (rc *ResourcesCollector) startInformers() {
 	)
 	_, rc.depInformer = cache.NewInformer(
 		depListWatch,
-		&corev1.Pod{},
+		&appsv1.Deployment{},
 		time.Minute,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc:    rc.handleDepAdd,
@@ -213,6 +215,17 @@ func (rc *ResourcesCollector) GetAllDeployments() []DeploymentState {
 	return deps
 }
 
+// GetPodResources returns memory limits for all tracked pods.
+func (rc *ResourcesCollector) GetPodResources() []PodState {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	pods := make([]PodState, 0, len(rc.pods))
+	for _, p := range rc.pods {
+		pods = append(pods, p)
+	}
+	return pods
+}
+
 // --- Pod handlers ---
 
 func podKey(p *corev1.Pod) string {
@@ -255,6 +268,13 @@ func podToState(pod *corev1.Pod) PodState {
 	for _, cs := range pod.Status.ContainerStatuses {
 		s.RestartCount += cs.RestartCount
 	}
+	for _, c := range pod.Spec.Containers {
+		if c.Resources.Limits != nil {
+			if mem, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+				s.MemLimitBytes += float64(mem.Value())
+			}
+		}
+	}
 	return s
 }
 
@@ -294,33 +314,36 @@ func nodeToState(node *corev1.Node) NodeState {
 
 // --- Deployment handlers ---
 
-func depKey(d *corev1.Pod) string {
+func depKey(d *appsv1.Deployment) string {
 	return fmt.Sprintf("%s/%s", d.Namespace, d.Name)
 }
 
 func (rc *ResourcesCollector) handleDepAdd(obj interface{}) {
-	p := obj.(*corev1.Pod)
+	dep := obj.(*appsv1.Deployment)
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	rc.deps[depKey(p)] = DeploymentState{
-		Name:      p.Name,
-		Namespace: p.Namespace,
-	}
+	rc.deps[depKey(dep)] = deploymentToState(dep)
 }
 
 func (rc *ResourcesCollector) handleDepUpdate(oldObj, newObj interface{}) {
-	p := newObj.(*corev1.Pod)
+	dep := newObj.(*appsv1.Deployment)
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	rc.deps[depKey(p)] = DeploymentState{
-		Name:      p.Name,
-		Namespace: p.Namespace,
-	}
+	rc.deps[depKey(dep)] = deploymentToState(dep)
 }
 
 func (rc *ResourcesCollector) handleDepDelete(obj interface{}) {
-	p := obj.(*corev1.Pod)
+	dep := obj.(*appsv1.Deployment)
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	delete(rc.deps, depKey(p))
+	delete(rc.deps, depKey(dep))
+}
+
+func deploymentToState(dep *appsv1.Deployment) DeploymentState {
+	return DeploymentState{
+		Name:              dep.Name,
+		Namespace:         dep.Namespace,
+		AvailableReplicas: dep.Status.AvailableReplicas,
+		Replicas:          dep.Status.Replicas,
+	}
 }

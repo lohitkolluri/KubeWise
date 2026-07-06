@@ -14,7 +14,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 // failureReasons lists K8s event reasons that indicate potential failures.
@@ -138,23 +137,7 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 				LastTimestamp:  k8sEvent.LastTimestamp.Time,
 			}
 
-			// Store as anomaly record in bbolt
-			now := time.Now()
-			anomaly := &models.AnomalyRecord{
-				ID:         fmt.Sprintf("event-%s-%s-%d", k8sEvent.Namespace, k8sEvent.InvolvedObject.Name, now.UnixNano()),
-				Entity:     record.InvolvedObject,
-				Namespace:  record.Namespace,
-				MetricName: "k8s_event",
-				Score:      1.0,
-				Pattern:    record.Reason,
-				DetectedAt: &now,
-				Status:     "active",
-			}
-			if err := ec.store.SaveAnomaly(anomaly); err != nil {
-				fmt.Printf("events: store anomaly failed: %v\n", err)
-			}
-
-			// Try to send on channel, non-blocking
+			// Emit on channel for the agent to gate and persist.
 			select {
 			case ch <- record:
 			default:
