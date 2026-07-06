@@ -1,0 +1,63 @@
+version: 2
+
+project_name: kubewise
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./... -count=1
+
+builds:
+  - id: kwctl
+    main: ./cmd/kwctl
+    binary: kwctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  - id: agent
+    main: ./cmd/agent
+    binary: agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+    # Omit from release archives — ship agent as a container image.
+    skip: true
+
+archives:
+  - id: kwctl
+    ids: [kwctl]
+    format: tar.gz
+    name_template: 'kwctl_{{ .Os }}_{{ .Arch }}'
+    files:
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore:'
+
+release:
+  github:
+    owner: lohitkolluri
+    name: KubeWise
+  draft: false
+  prerelease: auto

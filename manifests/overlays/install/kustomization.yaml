@@ -1,0 +1,18 @@
+# Remote one-click install overlay (public container images).
+#   kubectl apply -k github.com/lohitkolluri/KubeWise/manifests/overlays/install?ref=v2
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: kubewise/agent
+    newName: ghcr.io/lohitkolluri/kubewise-agent
+    newTag: v0.2.0
+  - name: kubewise/forecaster
+    newName: ghcr.io/lohitkolluri/kubewise-forecaster
+    newTag: v0.2.0
+
+patches:
+  - path: config-patch.yaml

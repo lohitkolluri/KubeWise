@@ -10,6 +10,8 @@ import logging
 import os
 import warnings
 from concurrent import futures
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
 
 import grpc
 import numpy as np
@@ -27,8 +29,31 @@ import forecaster_pb2 as pb2
 import forecaster_pb2_grpc as pb2_grpc
 
 _PORT = int(os.environ.get("FORECASTER_PORT", "50051"))
+_HEALTH_PORT = int(os.environ.get("FORECASTER_HEALTH_PORT", "8081"))
 _MAX_WORKERS = int(os.environ.get("FORECASTER_WORKERS", "4"))
 _MIN_SAMPLES = 10  # minimum points to attempt a forecast
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path in ("/health", "/healthz", "/readyz"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args) -> None:
+        return  # quiet
+
+
+def _start_health_server(port: int) -> None:
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = Thread(target=server.serve_forever, daemon=True, name="health")
+    thread.start()
+    logging.info("health server listening on :%d", port)
 
 
 def _fit_ets(series: pd.Series, seasonal_periods: int | None):
@@ -157,6 +182,8 @@ async def serve() -> None:
         level=logging.INFO,
         format="%(asctime)s forecaster %(levelname)s %(message)s",
     )
+
+    _start_health_server(_HEALTH_PORT)
 
     server = grpc.aio.server(
         futures.ThreadPoolExecutor(max_workers=_MAX_WORKERS),

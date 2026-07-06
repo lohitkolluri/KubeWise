@@ -1,39 +1,28 @@
 #!/usr/bin/env bash
+# Build images, load into kind, apply manifests, and rollout the agent.
 set -euo pipefail
 
-BIN_DIR="${BIN_DIR:-bin}"
-IMAGE_TAG="${IMAGE_TAG:-kubewise/agent:dev}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/lib.sh
+source "${SCRIPT_DIR}/../scripts/lib.sh"
+
+BIN_DIR="${BIN_DIR:-${ROOT_DIR}/bin}"
+AGENT_IMAGE="${AGENT_IMAGE:-kubewise/agent:dev}"
+FCST_IMAGE="${FCST_IMAGE:-kubewise/forecaster:dev}"
 KIND_CLUSTER="${KIND_CLUSTER:-kubewise}"
+OVERLAY="${OVERLAY:-dev}"
+
+require_cmd docker kubectl
 
 mkdir -p "${BIN_DIR}"
 
-echo "=== Building agent binary ==="
-GOOS=linux GOARCH=arm64 go build -o "${BIN_DIR}/agent" ./cmd/agent/
+docker_build_agent "${AGENT_IMAGE}"
+go_build_kwctl "${BIN_DIR}/kwctl"
+docker_build_forecaster "${FCST_IMAGE}"
 
-echo "=== Building kwctl CLI ==="
-go build -o "${BIN_DIR}/kwctl" ./cmd/kwctl/
+kind_load_images "${AGENT_IMAGE}" "${FCST_IMAGE}"
+kubectl_apply_manifests "${OVERLAY}"
+rollout_agent
 
-echo "=== Building Docker image ==="
-docker build -t "${IMAGE_TAG}" -f - . <<'DOCKERFILE'
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY bin/agent /agent
-USER 65532:65532
-ENTRYPOINT ["/agent"]
-DOCKERFILE
-
-echo "=== Loading image into kind ==="
-kind load docker-image "${IMAGE_TAG}" --name "${KIND_CLUSTER}"
-
-echo "=== Building forecaster sidecar image ==="
-docker build -t kubewise/forecaster:dev forecaster-sidecar/
-kind load docker-image kubewise/forecaster:dev --name "${KIND_CLUSTER}"
-
-echo "=== Applying manifests ==="
-kubectl apply -f manifests/
-
-echo "=== Restarting agent to pick up new image ==="
-kubectl -n kubewise rollout restart deployment/kubewise-agent
-kubectl -n kubewise rollout status deployment/kubewise-agent --timeout=120s
-
-echo "=== Done ==="
-echo "CLI: bin/kwctl status"
+log "done — try: ${BIN_DIR}/kwctl status (after port-forward)"
+log "port-forward: kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080"

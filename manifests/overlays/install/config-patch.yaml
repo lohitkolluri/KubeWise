@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubewise-agent-config
+  namespace: kubewise
+data:
+  config.yaml: |
+    scrape_interval: 30s
+    # Patched at install time when Prometheus is detected; override via kwctl config.
+    prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+    llm_provider: openrouter
+    llm_model: meta-llama/llama-3.1-8b-instruct
+    remediation:
+      mode: dry-run
+      dry_run: true
+      rate_limit: 10
+      namespace_denylist:
+        - kube-system
+        - kubewise
+      allowlist: []

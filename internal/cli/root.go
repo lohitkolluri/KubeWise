@@ -27,6 +27,7 @@ predict failures, review anomalies, manage config, and tail logs.
 
 Quick start:
   kwctl ui                   # full interactive control center (recommended)
+  kwctl install              # install agent into current cluster
   kwctl connect              # verify agent connectivity
   kwctl logs -f              # stream agent pod logs
 
