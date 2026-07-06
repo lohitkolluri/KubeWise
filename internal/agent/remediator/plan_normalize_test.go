@@ -37,9 +37,9 @@ func TestNormalizePlan_GenericPodTarget(t *testing.T) {
 
 func TestNormalizePlan_ActionTypeAlias(t *testing.T) {
 	plan := models.RemediationPlan{
-		Action: models.Action{Type: "restart", Namespace: "kw-test", Target: "crashloop-demo", Rationale: "fix"},
+		Action:    models.Action{Type: "restart", Namespace: "kw-test", Target: "crashloop-demo", Rationale: "fix"},
 		Diagnosis: models.Diagnosis{Confidence: 0.85},
-		Risk:   models.Risk{BlastRadius: "single pod", EstimatedTimeToResolve: "1m"},
+		Risk:      models.Risk{BlastRadius: "single pod", EstimatedTimeToResolve: "1m"},
 	}
 	normalizePlan(&plan, kwTestAnomalies())
 	if plan.Action.Type != "restart_pod" {

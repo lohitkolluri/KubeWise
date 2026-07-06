@@ -22,8 +22,8 @@ type CLIProfile struct {
 }
 
 type profileFile struct {
-	Current  string                 `yaml:"current_profile"`
-	Profiles map[string]CLIProfile  `yaml:"profiles"`
+	Current  string                `yaml:"current_profile"`
+	Profiles map[string]CLIProfile `yaml:"profiles"`
 }
 
 func profilePath() (string, error) {

@@ -6,33 +6,33 @@ import (
 
 // uiKeyMap centralizes bindings (Charm best practice: key.Matches + help.KeyMap).
 type uiKeyMap struct {
-	TabPrev   key.Binding
-	TabNext   key.Binding
-	Tab1      key.Binding
-	Tab2      key.Binding
-	Tab3      key.Binding
-	Tab4      key.Binding
-	Tab5      key.Binding
-	Tab6      key.Binding
-	Tab7      key.Binding
-	Up        key.Binding
-	Down      key.Binding
-	Top       key.Binding
-	Bottom    key.Binding
-	Detail    key.Binding
-	Back      key.Binding
-	Refresh   key.Binding
-	Palette   key.Binding
-	Help      key.Binding
-	Quit      key.Binding
-	DryRun    key.Binding
-	Mode      key.Binding
-	Restart   key.Binding
-	Approve   key.Binding
-	Reject    key.Binding
+	TabPrev    key.Binding
+	TabNext    key.Binding
+	Tab1       key.Binding
+	Tab2       key.Binding
+	Tab3       key.Binding
+	Tab4       key.Binding
+	Tab5       key.Binding
+	Tab6       key.Binding
+	Tab7       key.Binding
+	Up         key.Binding
+	Down       key.Binding
+	Top        key.Binding
+	Bottom     key.Binding
+	Detail     key.Binding
+	Back       key.Binding
+	Refresh    key.Binding
+	Palette    key.Binding
+	Help       key.Binding
+	Quit       key.Binding
+	DryRun     key.Binding
+	Mode       key.Binding
+	Restart    key.Binding
+	Approve    key.Binding
+	Reject     key.Binding
 	ToggleLive key.Binding
-	Confirm   key.Binding
-	Cancel    key.Binding
+	Confirm    key.Binding
+	Cancel     key.Binding
 }
 
 func defaultUIKeys() uiKeyMap {
@@ -49,7 +49,7 @@ func defaultUIKeys() uiKeyMap {
 		Tab2: key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "predict")),
 		Tab3: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "anomalies")),
 		Tab4: key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "audit")),
-	Tab5: key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "approve")),
+		Tab5: key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "approve")),
 		Tab6: key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "config")),
 		Tab7: key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "logs")),
 		Up: key.NewBinding(

@@ -40,10 +40,10 @@ type ForecastRequest struct {
 
 // ForecastPoint is a single predicted data point.
 type ForecastPoint struct {
-	Timestamp   float64
-	Value       float64
-	LowerBound  float64
-	UpperBound  float64
+	Timestamp  float64
+	Value      float64
+	LowerBound float64
+	UpperBound float64
 }
 
 // ForecastResponse contains the sidecar's prediction output.
