@@ -21,6 +21,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/api"
 	k8sclient "github.com/lohitkolluri/KubeWise/pkg/k8s"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
+	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
 
 const remediationTimeout = 2 * time.Minute
@@ -64,7 +65,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		log.Printf("agent: warning: remediation mode=auto with dry_run=true — actions will not execute")
 	}
 
-	col, err := collector.NewPrometheusCollector(cfg.PrometheusAddress, s)
+	col, err := collector.NewPrometheusCollector(cfg.PrometheusAddress, s, cfg.WatchNamespaces)
 	if err != nil {
 		return nil, fmt.Errorf("create collector: %w", err)
 	}
@@ -138,8 +139,8 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 
 	if k8s, kerr := k8sclient.NewInCluster(); kerr == nil {
 		cs := k8s.Clientset()
-		a.resourcesCollector = collector.NewResourcesCollector(cs)
-		a.eventsCollector = collector.NewEventsCollector(cs, "")
+		a.resourcesCollector = collector.NewResourcesCollector(cs, cfg.WatchNamespaces)
+		a.eventsCollector = collector.NewEventsCollector(cs, "", cfg.WatchNamespaces)
 
 		k8sCtx, k8sCancel := context.WithCancel(context.Background())
 		a.k8sCancel = k8sCancel
@@ -282,7 +283,7 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 	if ns == "" {
 		ns, _ = models.ParseEntity(entity)
 	}
-	if !namespaceInScope(ns, a.cfg.WatchNamespaces) {
+	if !nsutil.InScope(ns, a.cfg.WatchNamespaces) {
 		return
 	}
 
@@ -496,18 +497,6 @@ func toPredictorMetrics(metrics []collector.MetricResult) []predictor.MetricResu
 		})
 	}
 	return result
-}
-
-func namespaceInScope(ns string, watch []string) bool {
-	if len(watch) == 0 {
-		return true
-	}
-	for _, w := range watch {
-		if w == ns {
-			return true
-		}
-	}
-	return false
 }
 
 // benignForecastError reports whether a forecaster failure is expected for short/young series.

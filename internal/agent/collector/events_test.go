@@ -12,7 +12,7 @@ import (
 
 func TestNewEventsCollector(t *testing.T) {
 	cs := fake.NewSimpleClientset()
-	ec := NewEventsCollector(cs, "")
+	ec := NewEventsCollector(cs, "", nil)
 	if ec == nil {
 		t.Fatal("expected non-nil EventsCollector")
 	}
@@ -51,7 +51,7 @@ func TestListRecentEvents(t *testing.T) {
 		},
 	)
 
-	ec := NewEventsCollector(cs, "")
+	ec := NewEventsCollector(cs, "", nil)
 	records, err := ec.ListRecentEvents(context.Background(), 1*time.Hour)
 	if err != nil {
 		t.Fatalf("ListRecentEvents: %v", err)
@@ -82,7 +82,7 @@ func TestListRecentEvents_FiltersOldEvents(t *testing.T) {
 		},
 	)
 
-	ec := NewEventsCollector(cs, "")
+	ec := NewEventsCollector(cs, "", nil)
 	records, err := ec.ListRecentEvents(context.Background(), 1*time.Hour)
 	if err != nil {
 		t.Fatalf("ListRecentEvents: %v", err)

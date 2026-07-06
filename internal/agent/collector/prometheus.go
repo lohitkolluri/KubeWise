@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/common/model"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
+	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
 
 // MetricResult represents a single metric query result.
@@ -29,13 +30,15 @@ type MetricPoint struct {
 
 // PrometheusCollector collects metrics from a Prometheus server.
 type PrometheusCollector struct {
-	addr  string
-	api   v1.API
-	store *store.Store
+	addr            string
+	api             v1.API
+	store           *store.Store
+	watchNamespaces []string
 }
 
 // NewPrometheusCollector creates a new collector connecting to the given Prometheus address.
-func NewPrometheusCollector(addr string, s *store.Store) (*PrometheusCollector, error) {
+// watchNamespaces limits metric points with a namespace label; empty means all namespaces.
+func NewPrometheusCollector(addr string, s *store.Store, watchNamespaces []string) (*PrometheusCollector, error) {
 	client, err := api.NewClient(api.Config{
 		Address: addr,
 	})
@@ -43,9 +46,10 @@ func NewPrometheusCollector(addr string, s *store.Store) (*PrometheusCollector, 
 		return nil, fmt.Errorf("create prometheus client: %w", err)
 	}
 	return &PrometheusCollector{
-		addr:  addr,
-		api:   v1.NewAPI(client),
-		store: s,
+		addr:            addr,
+		api:             v1.NewAPI(client),
+		store:           s,
+		watchNamespaces: watchNamespaces,
 	}, nil
 }
 
@@ -113,10 +117,11 @@ func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResul
 			log.Printf("prometheus: query %q failed: %v", o.name, o.err)
 			continue
 		}
-		results = append(results, o.result)
-		for _, pt := range o.result.Values {
-			if err := c.store.AppendMetricSeries(o.result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
-				log.Printf("store: append metric %q failed: %v", o.result.Name, err)
+		filtered := c.filterResult(o.result)
+		results = append(results, filtered)
+		for _, pt := range filtered.Values {
+			if err := c.store.AppendMetricSeries(filtered.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
+				log.Printf("store: append metric %q failed: %v", filtered.Name, err)
 			}
 		}
 	}
@@ -138,12 +143,27 @@ func (c *PrometheusCollector) CollectQuery(ctx context.Context, name, query stri
 	if err != nil {
 		return nil, err
 	}
-	for _, pt := range result.Values {
-		if err := c.store.AppendMetricSeries(result.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
+	filtered := c.filterResult(result)
+	for _, pt := range filtered.Values {
+		if err := c.store.AppendMetricSeries(filtered.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
 			return nil, fmt.Errorf("store append: %w", err)
 		}
 	}
-	return &result, nil
+	return &filtered, nil
+}
+
+func (c *PrometheusCollector) filterResult(r MetricResult) MetricResult {
+	if len(c.watchNamespaces) == 0 {
+		return r
+	}
+	out := MetricResult{Name: r.Name}
+	for _, pt := range r.Values {
+		if ns := pt.Labels["namespace"]; ns != "" && !nsutil.InScope(ns, c.watchNamespaces) {
+			continue
+		}
+		out.Values = append(out.Values, pt)
+	}
+	return out
 }
 
 func (c *PrometheusCollector) execQuery(ctx context.Context, name, query string) (MetricResult, error) {

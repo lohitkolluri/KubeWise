@@ -17,8 +17,11 @@ Recently shipped based on this research:
 | Slack + generic webhook notifications         | **Done**            | Robusta / Botkube ChatOps    |
 | Prediction outcome tracking + `/api/v1/stats` | **Done**            | KubeWise ROI differentiation |
 | Dry-run remediation + tiered approvals        | **Already shipped** | r/sre trust model            |
-| MCP server mode                               | Planned (P1)        | K8sGPT MCP                   |
-| Helm chart                                    | Planned (P0)        | Enterprise install           |
+| Helm chart + `kwctl install --helm`           | **Done**            | Enterprise install           |
+| Namespace-scoped RBAC + watchNamespaces       | **Done**            | Least-privilege deploy       |
+| BoltDB indexes (anomalies + audit)            | **Done**            | API hot-path performance     |
+| Fail-closed API auth (`KUBEWISE_REQUIRE_API_TOKEN`) | **Done**        | Enterprise security          |
+| MCP server mode                               | Deferred            | K8sGPT MCP                   |
 | ReAct investigation loop                      | Planned (P1)        | HolmesGPT                    |
 
 ---
@@ -309,9 +312,8 @@ For gap-analysis reference — what ships today.
 
 **Not yet built**
 
-- Slack / PagerDuty / incident.io integrations
+- PagerDuty / incident.io integrations (Slack/webhook notifications shipped)
 - MCP server
-- Helm chart (manifests only)
 - Multi-cluster
 - eBPF / OTel correlation
 - HA (leader election RBAC exists, not implemented)

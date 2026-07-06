@@ -14,6 +14,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/notify"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
+	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
 
 var protectedNamespaces = map[string]bool{
@@ -330,7 +331,7 @@ func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord, cfg Reme
 		if denied {
 			continue
 		}
-		if !namespaceAllowed(r.Namespace, cfg.WatchNamespaces) {
+		if !nsutil.InScope(r.Namespace, cfg.WatchNamespaces) {
 			continue
 		}
 		filtered = append(filtered, r)
@@ -579,16 +580,4 @@ func (c *Correlator) anomalyFetchLimit(cfg RemediationConfig) int {
 		limit = 100
 	}
 	return limit
-}
-
-func namespaceAllowed(ns string, watch []string) bool {
-	if len(watch) == 0 {
-		return true
-	}
-	for _, w := range watch {
-		if w == ns {
-			return true
-		}
-	}
-	return false
 }

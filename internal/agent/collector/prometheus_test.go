@@ -36,7 +36,7 @@ func TestNewPrometheusCollector(t *testing.T) {
 	}
 	defer s.Close()
 
-	collector, err := NewPrometheusCollector("http://localhost:9090", s)
+	collector, err := NewPrometheusCollector("http://localhost:9090", s, nil)
 	if err != nil {
 		t.Fatalf("NewPrometheusCollector: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestCollectMetrics_ValidResponse(t *testing.T) {
 	}
 	defer s.Close()
 
-	collector, err := NewPrometheusCollector(server.URL, s)
+	collector, err := NewPrometheusCollector(server.URL, s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestCollectMetrics_ServerError(t *testing.T) {
 	}
 	defer s.Close()
 
-	collector, err := NewPrometheusCollector(server.URL, s)
+	collector, err := NewPrometheusCollector(server.URL, s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestCollectQuery(t *testing.T) {
 	}
 	defer s.Close()
 
-	collector, err := NewPrometheusCollector(server.URL, s)
+	collector, err := NewPrometheusCollector(server.URL, s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,5 +175,20 @@ func TestCollectQuery(t *testing.T) {
 	}
 	if result.Values[0].Value != 0.95 {
 		t.Fatalf("expected value 0.95, got %f", result.Values[0].Value)
+	}
+}
+
+func TestPrometheusCollector_FilterWatchNamespaces(t *testing.T) {
+	col := &PrometheusCollector{watchNamespaces: []string{"demo"}}
+	filtered := col.filterResult(MetricResult{
+		Name: "pod_cpu",
+		Values: []MetricPoint{
+			{Labels: map[string]string{"namespace": "demo", "pod": "a"}},
+			{Labels: map[string]string{"namespace": "prod", "pod": "b"}},
+			{Labels: map[string]string{"node": "n1"}},
+		},
+	})
+	if len(filtered.Values) != 2 {
+		t.Fatalf("expected 2 values (demo + node-level), got %d", len(filtered.Values))
 	}
 }

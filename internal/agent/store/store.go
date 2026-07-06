@@ -26,7 +26,27 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("rebuild anomaly indexes: %w", err)
 	}
+	if err := s.ensureAuditIndexes(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("rebuild audit indexes: %w", err)
+	}
 	return s, nil
+}
+
+func (s *Store) ensureAuditIndexes() error {
+	need := false
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		main := tx.Bucket(bucketAuditLog)
+		idx := tx.Bucket(bucketAuditIndex)
+		if main != nil && main.Stats().KeyN > 0 && (idx == nil || idx.Stats().KeyN == 0) {
+			need = true
+		}
+		return nil
+	})
+	if need {
+		return s.RebuildAuditIndexes()
+	}
+	return nil
 }
 
 func (s *Store) ensureAnomalyIndexes() error {

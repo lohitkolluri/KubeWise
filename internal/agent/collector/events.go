@@ -12,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+
+	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
 
 // failureReasons lists K8s event reasons that indicate potential failures.
@@ -49,15 +51,17 @@ type EventRecord struct {
 
 // EventsCollector watches K8s events and emits failure-related records.
 type EventsCollector struct {
-	clientset kubernetes.Interface
-	namespace string
+	clientset       kubernetes.Interface
+	namespace       string
+	watchNamespaces []string
 }
 
 // NewEventsCollector creates a new events collector.
-func NewEventsCollector(clientset kubernetes.Interface, namespace string) *EventsCollector {
+func NewEventsCollector(clientset kubernetes.Interface, namespace string, watchNamespaces []string) *EventsCollector {
 	return &EventsCollector{
-		clientset: clientset,
-		namespace: namespace,
+		clientset:       clientset,
+		namespace:       namespace,
+		watchNamespaces: watchNamespaces,
 	}
 }
 
@@ -119,6 +123,9 @@ func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord)
 			}
 
 			if !failureReasons[k8sEvent.Reason] {
+				continue
+			}
+			if !nsutil.InScope(k8sEvent.Namespace, ec.watchNamespaces) {
 				continue
 			}
 
