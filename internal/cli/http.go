@@ -1,20 +1,23 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 const defaultAgentURL = "http://localhost:8080"
 
-var agentURL string
-
-func init() {
-	rootCmd.PersistentFlags().StringVar(&agentURL, "agent-url", "", "agent base URL (overrides KUBEWISE_AGENT_URL)")
-}
+var (
+	agentURL    string
+	apiToken    string
+	httpTimeout int
+)
 
 func resolveAgentURL() string {
 	if agentURL != "" {
@@ -27,15 +30,34 @@ func resolveAgentURL() string {
 }
 
 func agentHTTPClient() *http.Client {
-	return &http.Client{Timeout: 15 * time.Second}
+	timeout := httpTimeout
+	if timeout <= 0 {
+		timeout = 15
+	}
+	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
 }
 
-func agentGet(path string) ([]byte, int, error) {
-	req, err := http.NewRequest(http.MethodGet, resolveAgentURL()+path, nil)
+func agentRequest(method, path string, body any) ([]byte, int, error) {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("marshal body: %w", err)
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(method, resolveAgentURL()+path, reader)
 	if err != nil {
 		return nil, 0, fmt.Errorf("building request: %w", err)
 	}
-	if token := os.Getenv("KUBEWISE_API_TOKEN"); token != "" {
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	token := apiToken
+	if token == "" {
+		token = os.Getenv("KUBEWISE_API_TOKEN")
+	}
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := agentHTTPClient().Do(req)
@@ -43,21 +65,48 @@ func agentGet(path string) ([]byte, int, error) {
 		return nil, 0, fmt.Errorf("connecting to agent: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("reading response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return body, resp.StatusCode, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+		msg := string(respBody)
+		if resp.StatusCode == http.StatusMethodNotAllowed {
+			return respBody, resp.StatusCode, fmt.Errorf("agent returned 405 method not allowed — rebuild and redeploy the agent, or check the API path: %s", msg)
+		}
+		return respBody, resp.StatusCode, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, msg)
 	}
-	return body, resp.StatusCode, nil
+	return respBody, resp.StatusCode, nil
 }
 
-func validateOutputFormat() error {
-	switch outputFormat {
-	case "table", "json", "yaml":
-		return nil
-	default:
-		return fmt.Errorf("invalid output format %q: use table, json, or yaml", outputFormat)
+func agentGet(path string) ([]byte, int, error) {
+	return agentRequest(http.MethodGet, path, nil)
+}
+
+// agentWrite tries common write methods; returns a deploy hint when the agent is too old.
+func agentWrite(path string, body any) ([]byte, int, error) {
+	var lastBody []byte
+	var lastCode int
+	var lastErr error
+	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodPatch} {
+		lastBody, lastCode, lastErr = agentRequest(method, path, body)
+		if lastErr == nil {
+			return lastBody, lastCode, nil
+		}
+		if lastCode != http.StatusMethodNotAllowed && lastCode != http.StatusNotFound {
+			return lastBody, lastCode, lastErr
+		}
 	}
+	if lastCode == http.StatusMethodNotAllowed || lastCode == http.StatusNotFound {
+		hint := strings.TrimSpace(string(lastBody))
+		if hint == "" {
+			hint = "endpoint missing on running agent"
+		}
+		return lastBody, lastCode, fmt.Errorf("agent returned %d on %s — redeploy with: bash hack/deploy-dev.sh (%s)", lastCode, path, hint)
+	}
+	return lastBody, lastCode, lastErr
+}
+
+func agentPut(path string, body any) ([]byte, int, error) {
+	return agentWrite(path, body)
 }

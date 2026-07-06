@@ -18,3 +18,10 @@ type RemediationConfig struct {
 	Allowlist         []string `json:"allowlist,omitempty" yaml:"allowlist,omitempty"`
 	MinConfidence     float64  `json:"min_confidence,omitempty" yaml:"min_confidence,omitempty"`
 }
+
+// RemediationModeView is the runtime remediation mode exposed via the agent API.
+type RemediationModeView struct {
+	Mode   string `json:"mode"`
+	DryRun bool   `json:"dry_run"`
+	Live   bool   `json:"live"`
+}

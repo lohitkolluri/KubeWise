@@ -15,12 +15,14 @@ import (
 type Store interface {
 	ListAnomalies(limit int) ([]models.AnomalyRecord, error)
 	LoadConfig() (*models.AgentConfig, error)
+	SaveConfig(cfg *models.AgentConfig) error
 	ListAuditRecords(limit int) ([]models.AuditRecord, error)
 	GetLatestPredictions() ([]models.PredictionResult, error)
 }
 
 type Server struct {
 	store      Store
+	remediator Remediator
 	server     *http.Server
 	startAt    time.Time
 	scrapes    atomic.Int64
@@ -46,6 +48,11 @@ func NewServer(store Store, addr string) *Server {
 		IdleTimeout:       60 * time.Second,
 	}
 	return s
+}
+
+// SetRemediator wires the live remediation controller (approvals, mode toggle).
+func (s *Server) SetRemediator(r Remediator) {
+	s.remediator = r
 }
 
 func (s *Server) SetGateStats(stats gate.Stats) {

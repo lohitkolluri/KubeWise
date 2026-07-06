@@ -47,7 +47,16 @@ func (e *K8sExecutor) SetDryRun(dryRun bool) {
 
 // Execute runs the given action and returns a result string.
 func (e *K8sExecutor) Execute(ctx context.Context, plan models.RemediationPlan) (string, error) {
-	if e.dryRun {
+	return e.execute(ctx, plan, e.dryRun)
+}
+
+// ExecuteForce runs the action even when dry-run is enabled (operator-approved).
+func (e *K8sExecutor) ExecuteForce(ctx context.Context, plan models.RemediationPlan) (string, error) {
+	return e.execute(ctx, plan, false)
+}
+
+func (e *K8sExecutor) execute(ctx context.Context, plan models.RemediationPlan, dryRun bool) (string, error) {
+	if dryRun {
 		return fmt.Sprintf("[dry-run] would %s %s/%s with params=%v",
 			plan.Action.Type, plan.Action.Namespace, plan.Action.Target, plan.Action.Parameters), nil
 	}

@@ -49,6 +49,12 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+func decodeJSON(r *http.Request, dst any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst)
+}
+
 func parseLimit(r *http.Request, defaultLimit, maxLimit int) (int, error) {
 	l := r.URL.Query().Get("limit")
 	if l == "" {

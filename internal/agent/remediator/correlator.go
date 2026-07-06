@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
@@ -39,6 +40,7 @@ type Correlator struct {
 	executor     *K8sExecutor
 	store        *store.Store
 	cfg          RemediationConfig
+	mu           sync.RWMutex
 }
 
 // RemediationConfig controls correlator behavior.
@@ -124,6 +126,20 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if reason != "" {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, reason, userPrompt, "")
 		log.Printf("remediator: rejected - %s", reason)
+		return nil
+	}
+
+	if tier == models.RiskTier3 {
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		msg := "awaiting human approval (T3)"
+		if c.cfg.DryRun {
+			msg = "dry-run: would require human approval (T3)"
+			log.Printf("remediator: [dry-run] T3 %s %s/%s — needs approval when live", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+			c.logAudit(&plan, matched, tier, models.AuditDryRun, msg, userPrompt, "")
+			return nil
+		}
+		c.logAudit(&plan, matched, tier, models.AuditPending, msg, userPrompt, "")
+		log.Printf("remediator: pending approval T3 %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
 		return nil
 	}
 
@@ -329,7 +345,7 @@ func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPla
 		if plan.Action.Type == "escalate" {
 			return ""
 		}
-		return fmt.Sprintf("T3 action requires human approval: %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+		return "" // queued for human approval after tier gate
 	case models.RiskTier4:
 		return fmt.Sprintf("T4 action rejected: %s %s/%s (blast radius: %s)", plan.Action.Type, plan.Action.Namespace, plan.Action.Target, plan.Risk.BlastRadius)
 	default:

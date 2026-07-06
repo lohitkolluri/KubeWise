@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -88,4 +89,61 @@ func (s *Store) ListAuditRecordsSince(since time.Time, limit int) ([]models.Audi
 		}
 	}
 	return filtered, nil
+}
+
+// GetAuditRecord returns a single audit record by ID (prefix match supported).
+func (s *Store) GetAuditRecord(id string) (*models.AuditRecord, error) {
+	records, err := s.listAllAuditRecords()
+	if err != nil {
+		return nil, err
+	}
+	for i := range records {
+		if records[i].ID == id || strings.HasPrefix(records[i].ID, id) {
+			r := records[i]
+			return &r, nil
+		}
+	}
+	return nil, fmt.Errorf("audit record %q not found", id)
+}
+
+// UpdateAuditRecord overwrites an existing audit record.
+func (s *Store) UpdateAuditRecord(r *models.AuditRecord) error {
+	if r == nil || r.ID == "" {
+		return fmt.Errorf("audit record ID must not be empty")
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("marshal audit record: %w", err)
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAuditLog)
+		if b == nil {
+			return fmt.Errorf("audit bucket missing")
+		}
+		if b.Get([]byte(r.ID)) == nil {
+			return fmt.Errorf("audit record %q not found", r.ID)
+		}
+		return b.Put([]byte(r.ID), data)
+	})
+}
+
+// ListAuditRecordsByStatus returns records matching status up to limit.
+func (s *Store) ListAuditRecordsByStatus(status models.AuditStatus, limit int) ([]models.AuditRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	records, err := s.listAllAuditRecords()
+	if err != nil {
+		return nil, err
+	}
+	var out []models.AuditRecord
+	for _, r := range records {
+		if r.Status == status {
+			out = append(out, r)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }

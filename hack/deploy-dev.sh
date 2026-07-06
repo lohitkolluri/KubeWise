@@ -8,7 +8,7 @@ KIND_CLUSTER="${KIND_CLUSTER:-kubewise}"
 mkdir -p "${BIN_DIR}"
 
 echo "=== Building agent binary ==="
-go build -o "${BIN_DIR}/agent" ./cmd/agent/
+GOOS=linux GOARCH=arm64 go build -o "${BIN_DIR}/agent" ./cmd/agent/
 
 echo "=== Building kwctl CLI ==="
 go build -o "${BIN_DIR}/kwctl" ./cmd/kwctl/
@@ -23,6 +23,10 @@ DOCKERFILE
 
 echo "=== Loading image into kind ==="
 kind load docker-image "${IMAGE_TAG}" --name "${KIND_CLUSTER}"
+
+echo "=== Building forecaster sidecar image ==="
+docker build -t kubewise/forecaster:dev forecaster-sidecar/
+kind load docker-image kubewise/forecaster:dev --name "${KIND_CLUSTER}"
 
 echo "=== Applying manifests ==="
 kubectl apply -f manifests/

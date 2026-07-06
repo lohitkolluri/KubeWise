@@ -31,6 +31,18 @@ _MAX_WORKERS = int(os.environ.get("FORECASTER_WORKERS", "4"))
 _MIN_SAMPLES = 10  # minimum points to attempt a forecast
 
 
+def _fit_ets(series: pd.Series, seasonal_periods: int | None):
+    """Fit an ETS model; seasonal_periods=None uses trend-only."""
+    model = ETSModel(
+        series,
+        error="add",
+        trend="add",
+        seasonal="add" if seasonal_periods else None,
+        seasonal_periods=seasonal_periods,
+    )
+    return model.fit(maxiter=500, disp=False)
+
+
 def _ets_forecast(
     values: list[float],
     horizon: int,
@@ -46,18 +58,20 @@ def _ets_forecast(
         return [], [], [], [], f"need >= {_MIN_SAMPLES} points, got {n}"
 
     series = pd.Series(values)
+    seasonal_periods = _infer_seasonal_period(n)
     try:
-        # Infer a reasonable seasonal period from the data length.
-        seasonal_periods = _infer_seasonal_period(n)
+        fit = _fit_ets(series, seasonal_periods)
+    except Exception as exc:
+        # Short series often cannot support seasonality — retry trend-only.
+        if seasonal_periods is not None:
+            try:
+                fit = _fit_ets(series, None)
+            except Exception as retry_exc:
+                return [], [], [], [], f"ETS model failed: {retry_exc}"
+        else:
+            return [], [], [], [], f"ETS model failed: {exc}"
 
-        model = ETSModel(
-            series,
-            error="add",
-            trend="add",
-            seasonal="add" if seasonal_periods else None,
-            seasonal_periods=seasonal_periods,
-        )
-        fit = model.fit(maxiter=500, disp=False)
+    try:
         forecast_result = fit.get_prediction(start=n, end=n + horizon - 1)
         pred_mean = forecast_result.predicted_mean.tolist()
         # 95% prediction interval
@@ -87,12 +101,11 @@ def _ets_forecast(
 
 
 def _infer_seasonal_period(n: int) -> int | None:
-    """Pick a seasonal period based on series length."""
-    if n >= 24 * 2 and n % 24 == 0:
-        return 24  # hourly pattern
-    if n >= 12:
-        return 12
-    return None  # too short or no clear period
+    """Pick a seasonal period; statsmodels ETS needs >= 2 full cycles."""
+    for period in (24, 12):
+        if n >= 2 * period:
+            return period
+    return None
 
 
 class ForecasterServicer(pb2_grpc.ForecasterServicer):
