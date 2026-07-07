@@ -155,7 +155,14 @@ func runLocalInstall(out io.Writer) error {
 	c.Stdout = out
 	c.Stderr = os.Stderr
 	c.Env = os.Environ()
-	return c.Run()
+	if err := c.Run(); err != nil {
+		return err
+	}
+	if err := saveInstallProfile(); err != nil {
+		fmt.Fprintf(out, "warning: could not save kwctl profile: %v\n", err)
+	}
+	printInstallNextSteps(out)
+	return nil
 }
 
 func findBootstrapScript() string {
@@ -342,11 +349,11 @@ func printInstallNextSteps(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "KubeWise is installed.")
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "  1. Port-forward the agent API:")
-	fmt.Fprintf(out, "     kubectl -n %s port-forward svc/%s 8080:8080\n", agentNS, agentSvc)
+	fmt.Fprintln(out, "  1. Connect to the agent:")
+	fmt.Fprintln(out, "     kwctl up")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "  2. Open the control center:")
 	fmt.Fprintln(out, "     kwctl ui")
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "  Optional: set LLM key later with OPENROUTER_API_KEY or kwctl config")
+	fmt.Fprintln(out, "  Or: kwctl connect")
 }

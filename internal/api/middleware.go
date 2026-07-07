@@ -12,9 +12,19 @@ import (
 
 const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
+// publicPaths are reachable without API token auth (probes + observability).
+func publicPath(path string) bool {
+	switch path {
+	case "/health", "/readyz", "/metrics":
+		return true
+	default:
+		return false
+	}
+}
+
 func withMiddleware(next http.Handler, apiToken string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if apiToken != "" && r.URL.Path != "/health" {
+		if apiToken != "" && !publicPath(r.URL.Path) {
 			auth := r.Header.Get("Authorization")
 			if !strings.HasPrefix(auth, "Bearer ") || !secureCompare(strings.TrimPrefix(auth, "Bearer "), apiToken) {
 				writeError(w, http.StatusUnauthorized, "unauthorized")

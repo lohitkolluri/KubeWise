@@ -4,6 +4,9 @@ kind: Kustomization
 resources:
   - ../../base
 
+patches:
+  - path: config-patch.yaml
+
 images:
   - name: kubewise/agent
     newTag: dev

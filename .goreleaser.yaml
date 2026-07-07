@@ -20,7 +20,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/lohitkolluri/KubeWise/internal/version.Version={{.Version}} -X github.com/lohitkolluri/KubeWise/internal/version.Commit={{.ShortCommit}}
 
   - id: agent
     main: ./cmd/agent
@@ -33,7 +33,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/lohitkolluri/KubeWise/internal/version.Version={{.Version}} -X github.com/lohitkolluri/KubeWise/internal/version.Commit={{.ShortCommit}}
     # Omit from release archives — ship agent as a container image.
     skip: true
 

@@ -9,10 +9,10 @@ resources:
 images:
   - name: kubewise/agent
     newName: ghcr.io/lohitkolluri/kubewise-agent
-    newTag: v0.2.0
+    newTag: v0.3.0
   - name: kubewise/forecaster
     newName: ghcr.io/lohitkolluri/kubewise-forecaster
-    newTag: v0.2.0
+    newTag: v0.3.0
 
 patches:
   - path: config-patch.yaml

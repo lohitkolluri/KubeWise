@@ -19,7 +19,7 @@ RUN groupadd -r forecaster && useradd -r -g forecaster -u 10001 forecaster \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /install /usr/local
-COPY forecaster_pb2.py forecaster_pb2_grpc.py server.py ./
+COPY forecaster_pb2.py forecaster_pb2_grpc.py server.py test_server.py ./
 
 ENV FORECASTER_PORT=50051 \
     FORECASTER_HEALTH_PORT=8081 \

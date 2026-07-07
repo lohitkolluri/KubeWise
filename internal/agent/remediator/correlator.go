@@ -166,9 +166,34 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	plan.Investigation = models.InvestigationContext{Summary: investigation}
 
 	if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
-		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditRejected, fmt.Sprintf("validation failed: %v", err), userPrompt, "")
-		c.markAnomalyStatus(correlatable, models.AnomalyStatusRejected, nil)
-		return fmt.Errorf("plan validation: %w", err)
+		// One-shot repair attempt for common structural issues where the model
+		// picked a valid action type but omitted required parameters.
+		if c.shouldRetryAfterValidation(err) {
+			var repaired models.RemediationPlan
+			repairSystem := systemPrompt + "\n\nREPAIR INSTRUCTIONS:\n" +
+				"- If you choose patch_resources, you MUST include at least one of cpu_request,cpu_limit,memory_request,memory_limit.\n" +
+				"- If you cannot supply required parameters, choose restart_pod for CrashLoop/BackOff, otherwise choose noop or escalate.\n" +
+				"- Never output empty parameters for patch_resources or scale_replicas.\n"
+			if rerr := c.llmClient.StructuredOutput(ctx, repairSystem, userPrompt, schema, &repaired); rerr == nil {
+				normalizePlan(&repaired, correlatable)
+				repaired.Investigation = models.InvestigationContext{Summary: investigation}
+				if verr := validateRunbookSteps(repaired, correlatable, cfg); verr == nil {
+					plan = repaired
+				} else {
+					err = verr
+				}
+			}
+		}
+
+		if err != nil {
+		// Validation failures are not operator actions; treat as an internal failure
+		// and keep anomalies in a correlatable state (so a future cycle can retry
+		// with new context / different plan).
+		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
+		c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
+		log.Printf("remediator: plan validation failed: %v", err)
+		return nil
+		}
 	}
 
 	tier := c.tierAssigner.AssignTierPlan(plan)
@@ -375,8 +400,12 @@ func (c *Correlator) validatePlan(plan models.RemediationPlan, anomalies []model
 	if plan.Diagnosis.Confidence < 0 || plan.Diagnosis.Confidence > 1 {
 		return fmt.Errorf("confidence out of range: %f", plan.Diagnosis.Confidence)
 	}
-	if plan.Diagnosis.Confidence < c.cfg.MinConfidence {
-		return fmt.Errorf("confidence %.2f below minimum %.2f", plan.Diagnosis.Confidence, c.cfg.MinConfidence)
+	// Only enforce MinConfidence for actions that would actually change the cluster.
+	// Low-confidence outcomes should be able to return noop/escalate safely.
+	if plan.Action.Type != "noop" && plan.Action.Type != "escalate" {
+		if plan.Diagnosis.Confidence < c.cfg.MinConfidence {
+			return fmt.Errorf("confidence %.2f below minimum %.2f", plan.Diagnosis.Confidence, c.cfg.MinConfidence)
+		}
 	}
 	if plan.Action.Type != "noop" && plan.Action.Type != "escalate" {
 		if !validBlastRadii[plan.Risk.BlastRadius] {
@@ -503,7 +532,7 @@ func (c *Correlator) buildMetricsSummary(anomalies []models.AnomalyRecord) strin
 			ns = a.Namespace
 		}
 		labels := map[string]string{"namespace": ns, "pod": name}
-		pts, err := c.store.GetMetricSeries(a.MetricName, labels, 5)
+		pts, err := c.store.GetMetricSeries(a.MetricName, labels, 15)
 		if err != nil || len(pts) == 0 {
 			continue
 		}
@@ -569,6 +598,24 @@ func shortID() string {
 	}
 	now := time.Now().UnixMilli()
 	return fmt.Sprintf("%x-%s", now, string(b))
+}
+
+func (c *Correlator) shouldRetryAfterValidation(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Keep this conservative: only retry for clearly fixable structural omissions.
+	msg := strings.ToLower(err.Error())
+	for _, sub := range []string{
+		"patch_resources requires at least one resource parameter",
+		"scale_replicas requires replicas parameter",
+		"target is empty for action type",
+	} {
+		if strings.Contains(msg, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Correlator) anomalyFetchLimit(cfg RemediationConfig) int {

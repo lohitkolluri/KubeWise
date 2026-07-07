@@ -8,8 +8,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const cliVersion = "0.2.0"
-
 var (
 	kubeconfig   string
 	contextName  string

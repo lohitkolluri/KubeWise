@@ -56,6 +56,54 @@ def _start_health_server(port: int) -> None:
     logging.info("health server listening on :%d", port)
 
 
+def _prediction_intervals(
+    forecast_result,
+    alpha: float = 0.05,
+) -> tuple[list[float], list[float]]:
+    """Extract lower/upper prediction intervals from statsmodels results.
+
+    ETSModel.get_prediction returns an ETS-specific PredictionResults object
+    with pred_int/summary_frame — not the regression PredictionResults that
+    exposes se_mean. See docs/INTEGRATIONS.md (statsmodels ETS).
+    """
+    if hasattr(forecast_result, "summary_frame"):
+        frame = forecast_result.summary_frame(alpha=alpha)
+        if "pi_lower" in frame.columns and "pi_upper" in frame.columns:
+            return frame["pi_lower"].tolist(), frame["pi_upper"].tolist()
+        if "mean_ci_lower" in frame.columns and "mean_ci_upper" in frame.columns:
+            return frame["mean_ci_lower"].tolist(), frame["mean_ci_upper"].tolist()
+
+    if hasattr(forecast_result, "pred_int"):
+        pi = forecast_result.pred_int(alpha=alpha)
+        if isinstance(pi, pd.DataFrame):
+            lower_col = next(c for c in pi.columns if "lower" in c.lower())
+            upper_col = next(c for c in pi.columns if "upper" in c.lower())
+            return pi[lower_col].tolist(), pi[upper_col].tolist()
+        arr = np.asarray(pi)
+        return arr[:, 0].tolist(), arr[:, 1].tolist()
+
+    if hasattr(forecast_result, "conf_int"):
+        ci = forecast_result.conf_int(alpha=alpha)
+        arr = np.asarray(ci)
+        return arr[:, 0].tolist(), arr[:, 1].tolist()
+
+    # Legacy regression-style results (not used by ETS today).
+    if hasattr(forecast_result, "se_mean"):
+        se = np.asarray(forecast_result.se_mean)
+        z = 1.96  # 95% normal critical value
+        mean = np.asarray(forecast_result.predicted_mean)
+        return (mean - z * se).tolist(), (mean + z * se).tolist()
+
+    var = getattr(forecast_result, "var_pred_mean", None)
+    if var is not None:
+        se = np.sqrt(np.asarray(var))
+        z = 1.96
+        mean = np.asarray(forecast_result.predicted_mean)
+        return (mean - z * se).tolist(), (mean + z * se).tolist()
+
+    raise AttributeError("prediction result has no supported interval API")
+
+
 def _fit_ets(series: pd.Series, seasonal_periods: int | None):
     """Fit an ETS model; seasonal_periods=None uses trend-only."""
     model = ETSModel(
@@ -99,9 +147,7 @@ def _ets_forecast(
     try:
         forecast_result = fit.get_prediction(start=n, end=n + horizon - 1)
         pred_mean = forecast_result.predicted_mean.tolist()
-        # 95% prediction interval
-        pred_lower = forecast_result.se_mean.tolist()
-        pred_upper = forecast_result.se_mean.tolist()
+        pred_lower, pred_upper = _prediction_intervals(forecast_result, alpha=0.05)
 
         # Build timestamps from the last known time plus interval.
         if len(values) > 1:
@@ -113,13 +159,7 @@ def _ets_forecast(
         # Placeholder timestamps (caller can ignore and use their own clock).
         timestamps = [float(i + n) * ts_step for i in range(horizon)]
 
-        # Compute confidence intervals from standard error.
-        # 95% CI = ±1.96 * se
-        ci = 1.96
-        lower = [p - ci * s for p, s in zip(pred_mean, pred_lower)]
-        upper = [p + ci * s for p, s in zip(pred_mean, pred_upper)]
-
-        return timestamps, pred_mean, lower, upper, ""
+        return timestamps, pred_mean, pred_lower, pred_upper, ""
 
     except Exception as exc:
         return [], [], [], [], f"ETS model failed: {exc}"

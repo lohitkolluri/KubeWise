@@ -16,11 +16,14 @@ export ROOT_DIR BIN_DIR AGENT_IMAGE FCST_IMAGE KIND_CLUSTER KUBEWISE_NAMESPACE T
 bootstrap: ## One-click install script (curl | bash)
 	@./hack/bootstrap.sh --yes
 
+dev: ## Local kind cluster + build + deploy (set OPENROUTER_API_KEY for LLM)
+	@./hack/bootstrap.sh --local --yes
+
 install-cluster: ## kwctl install --yes (requires kubectl)
 	@go run ./cmd/kwctl install --yes
 
-.PHONY: help build build-agent build-kwctl test lint fmt vet \
-        docker-agent docker-forecaster docker-all bootstrap install-cluster \
+.PHONY: help build build-agent build-kwctl test test-forecaster e2e lint fmt vet golangci helm-lint \
+        docker-agent docker-forecaster docker-all bootstrap dev install-cluster \
         kind-up deploy-dev deploy apply-manifests rollout port-forward clean
 
 help: ## Show this help
@@ -38,6 +41,12 @@ build-kwctl: ## Build kwctl for host OS/arch
 test: ## Run all Go tests
 	go test ./... -count=1
 
+test-forecaster: docker-forecaster ## Run forecaster ETS unit tests in container
+	docker run --rm $(FCST_IMAGE) python -m unittest test_server.py -v
+
+e2e: ## Full local E2E verification (cluster + CLI + API + forecaster)
+	@./hack/e2e-verify.sh
+
 vet: ## Run go vet
 	go vet ./...
 
@@ -45,6 +54,13 @@ fmt: ## Check gofmt (fails if unformatted)
 	@test -z "$$(gofmt -l . | grep -v '^$$')" || (gofmt -l . && exit 1)
 
 lint: vet fmt ## Static checks (vet + fmt)
+
+golangci: ## Run golangci-lint (install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run ./...
+
+helm-lint: ## Validate Helm chart templates
+	@helm lint ./charts/kubewise
+	@helm template kubewise ./charts/kubewise >/dev/null
 
 docker-agent: ## Build agent container image
 	@source scripts/lib.sh && docker_build_agent "$(AGENT_IMAGE)"

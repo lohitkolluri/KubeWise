@@ -128,6 +128,10 @@ func activeProfile() CLIProfile {
 }
 
 func applyProfileDefaults() {
+	// Priority order:
+	// 1) explicit flags
+	// 2) explicit env vars
+	// 3) selected profile (or default)
 	if profileName != "" {
 		pf, err := loadProfileFile()
 		if err == nil {
@@ -178,10 +182,10 @@ func applyProfileDefaults() {
 			agentSvc = p.AgentService
 		}
 	}
-	if outputFormat == "" || outputFormat == "table" {
-		if p.Output != "" && outputFormat == "" {
-			outputFormat = p.Output
-		}
+	// The root flag default is "table". Allow profile to override only when the
+	// user didn't explicitly choose another output format.
+	if outputFormat == "table" && p.Output != "" {
+		outputFormat = p.Output
 	}
 	if kubeconfig == "" && p.Kubeconfig != "" {
 		kubeconfig = p.Kubeconfig

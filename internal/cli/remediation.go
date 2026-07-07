@@ -8,9 +8,15 @@ import (
 )
 
 var auditLimit int
+var auditStatus string
+var auditSince string
+var auditID string
 
 func init() {
 	remediationCmd.Flags().IntVarP(&auditLimit, "limit", "l", 20, "max records")
+	remediationCmd.Flags().StringVar(&auditStatus, "status", "", "filter by status (pending, executed, rejected, failed, dry-run, verified, verify_failed, escalated)")
+	remediationCmd.Flags().StringVar(&auditSince, "since", "", "filter by created_at since RFC3339 timestamp")
+	remediationCmd.Flags().StringVar(&auditID, "id", "", "fetch a single audit record by exact ID")
 	rootCmd.AddCommand(remediationCmd)
 }
 
@@ -23,7 +29,7 @@ var remediationCmd = &cobra.Command{
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}
-		records, err := fetchAudit(auditLimit)
+		records, err := fetchAuditFiltered(auditLimit, auditStatus, auditSince, auditID)
 		if err != nil {
 			return err
 		}

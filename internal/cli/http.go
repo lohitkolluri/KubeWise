@@ -50,6 +50,7 @@ func agentRequest(method, path string, body any) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("building request: %w", err)
 	}
+	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -70,7 +71,20 @@ func agentRequest(method, path string, body any) ([]byte, int, error) {
 		return nil, resp.StatusCode, fmt.Errorf("reading response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := string(respBody)
+		msg := strings.TrimSpace(string(respBody))
+		// Agent often returns structured JSON errors: {"error":"..."}.
+		// Prefer a clean message to avoid printing raw JSON blobs in CLI output.
+		var apiErr struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(respBody, &apiErr); err == nil {
+			if apiErr.Error != "" {
+				msg = apiErr.Error
+			} else if apiErr.Message != "" {
+				msg = apiErr.Message
+			}
+		}
 		if resp.StatusCode == http.StatusMethodNotAllowed {
 			return respBody, resp.StatusCode, fmt.Errorf("agent returned 405 method not allowed — rebuild and redeploy the agent, or check the API path: %s", msg)
 		}

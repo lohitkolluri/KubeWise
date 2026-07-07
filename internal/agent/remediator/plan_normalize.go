@@ -94,19 +94,26 @@ func normalizeRunbookSteps(plan *models.RemediationPlan, anomalies []models.Anom
 	if len(plan.Steps) == 0 {
 		return
 	}
+	out := make([]models.RunbookStep, 0, len(plan.Steps))
 	for i := range plan.Steps {
-		step := &plan.Steps[i]
+		step := plan.Steps[i]
 		if step.Order == 0 {
 			step.Order = i + 1
-		}
-		if step.Type == waitActionType {
-			continue
 		}
 		step.Type = normalizeActionType(step.Type, step.Target)
 		step.Target = cleanTargetName(step.Target)
 		step.Namespace = strings.TrimSpace(step.Namespace)
 		if step.Namespace == "" {
 			step.Namespace = plan.Action.Namespace
+		}
+		// Drop any structurally invalid steps instead of failing the whole plan.
+		// This prevents cases where the model emits an extra empty step.
+		if step.Type == "" {
+			continue
+		}
+		if step.Type == waitActionType {
+			out = append(out, step)
+			continue
 		}
 		if isGenericTarget(step.Target) {
 			if ns, name := inferTargetFromAnomalies(anomalies, step.Namespace); name != "" {
@@ -116,7 +123,13 @@ func normalizeRunbookSteps(plan *models.RemediationPlan, anomalies []models.Anom
 				step.Target = name
 			}
 		}
+		out = append(out, step)
 	}
+	// Re-number to keep sequential ordering after dropping steps.
+	for i := range out {
+		out[i].Order = i + 1
+	}
+	plan.Steps = out
 }
 
 func normalizeActionType(actionType, target string) string {

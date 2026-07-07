@@ -101,7 +101,11 @@ func TestPipeline_SustainedAnomalyReachesLLM(t *testing.T) {
 // TestPipeline_PatternBypassReachesLLM verifies predictive pattern matches
 // bypass sustainment and would reach the correlator immediately.
 func TestPipeline_PatternBypassReachesLLM(t *testing.T) {
-	pred := predictor.NewPredictor(predictor.DefaultScorerConfig())
+	cfg := predictor.DefaultScorerConfig()
+	// Unit test expects immediate pattern emission; disable debounce here.
+	cfg.PatternPersistence = 1
+	cfg.PatternCooldownScrapes = 0
+	pred := predictor.NewPredictor(cfg)
 	pred.AddPattern(&predictor.OOMPattern{})
 	ag := gate.NewGate(gate.DefaultConfig())
 

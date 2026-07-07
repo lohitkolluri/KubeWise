@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -137,6 +138,9 @@ func (m *controlModel) initPaletteItems() []list.Item {
 		{"Go to Logs", "Navigate · agent pod logs", "Navigate", "log tail 7", paletteGoTab(tabLogs)},
 
 		{"Refresh", "Action · fetch latest data from agent", "Action", "reload sync r", paletteRefresh()},
+		{"Audit filter: status", "Audit · set status filter (optional)", "Audit", "audit filter status pending rejected executed", paletteAuditStatusPrompt()},
+		{"Audit filter: since", "Audit · set since filter RFC3339 (optional)", "Audit", "audit filter since time", paletteAuditSincePrompt()},
+		{"Audit filter: clear", "Audit · clear all filters", "Audit", "audit filter clear reset", paletteAuditClear()},
 		{"Execution mode: " + execLabel, "Remediation · click to switch OBSERVE ↔ LIVE", "Remediation", "live observe dry run execute", paletteToggleExecution()},
 		{"Remediation mode: " + remMode, "Remediation · click to cycle dry-run → auto → semi → off", "Remediation", "mode safe autonomous disable partial", paletteCycleRemediationMode()},
 		{"Restart agent", "Agent · rolling restart deployment", "Agent", "rollout redeploy", paletteRestartAgent()},
@@ -145,7 +149,7 @@ func (m *controlModel) initPaletteItems() []list.Item {
 		{"Set scrape interval", "Config · e.g. 30s, 1m", "Config", "scrape interval", paletteConfigPrompt("scrape_interval", "Scrape interval", "30s", applyScrapeInterval)},
 		{"Set Prometheus URL", "Config · Prometheus server address", "Config", "prometheus metrics", paletteConfigPrompt("prometheus", "Prometheus URL", "http://prometheus:9090", applyPrometheusURL)},
 		{"Set LLM provider", "Config · openrouter, ollama, …", "Config", "llm provider", paletteConfigPrompt("llm_provider", "LLM provider", "openrouter", applyLLMProvider)},
-		{"Set LLM model", "Config · model identifier", "Config", "llm model", paletteConfigPrompt("llm_model", "LLM model", "meta-llama/llama-3.1-8b-instruct", applyLLMModel)},
+		{"Set LLM model", "Config · model identifier", "Config", "llm model", paletteConfigPrompt("llm_model", "LLM model", "openai/gpt-oss-120b", applyLLMModel)},
 		{"Set rate limit", "Config · max remediations per hour", "Config", "rate limit", paletteConfigPrompt("rate_limit", "Rate limit", "10", applyRateLimit)},
 
 		{"Set agent URL", "Profile · agent HTTP base URL", "Profile", "url localhost port-forward", paletteProfilePrompt("agent-url", "Agent URL", resolveAgentURL())},
@@ -263,6 +267,54 @@ func paletteHealthCheck() func(m *controlModel) paletteOutcome {
 			return paletteOutcome{err: err}
 		}
 		return paletteOutcome{msg: "health: " + h["status"]}
+	}
+}
+
+func paletteAuditStatusPrompt() func(m *controlModel) paletteOutcome {
+	return func(m *controlModel) paletteOutcome {
+		cur := m.auditStatus
+		return paletteOutcome{prompt: &palettePrompt{
+			title:       "Audit status filter",
+			placeholder: "e.g. pending (blank = none)",
+			value:       cur,
+			apply: func(m *controlModel, value string) (string, error) {
+				m.auditStatus = strings.TrimSpace(value)
+				if m.auditStatus == "" {
+					return "audit status filter cleared", nil
+				}
+				return "audit status filter = " + m.auditStatus, nil
+			},
+		}}
+	}
+}
+
+func paletteAuditSincePrompt() func(m *controlModel) paletteOutcome {
+	return func(m *controlModel) paletteOutcome {
+		cur := m.auditSince
+		return paletteOutcome{prompt: &palettePrompt{
+			title:       "Audit since filter (RFC3339)",
+			placeholder: "e.g. 2026-07-07T07:00:00Z (blank = none)",
+			value:       cur,
+			apply: func(m *controlModel, value string) (string, error) {
+				m.auditSince = strings.TrimSpace(value)
+				if m.auditSince == "" {
+					return "audit since filter cleared", nil
+				}
+				// Validate early for nicer UX.
+				if _, err := time.Parse(time.RFC3339, m.auditSince); err != nil {
+					return "", fmt.Errorf("invalid RFC3339 timestamp")
+				}
+				return "audit since filter = " + m.auditSince, nil
+			},
+		}}
+	}
+}
+
+func paletteAuditClear() func(m *controlModel) paletteOutcome {
+	return func(m *controlModel) paletteOutcome {
+		m.auditStatus = ""
+		m.auditSince = ""
+		return paletteOutcome{msg: "audit filters cleared"}
 	}
 }
 
@@ -405,6 +457,20 @@ func (m *controlModel) openPalette() tea.Cmd {
 	m.applyPaletteFilter("")
 	m.palette.phase = paletteBrowse
 	m.palette.input.Reset()
+	m.resizePalette()
+	return textinput.Blink
+}
+
+func (m *controlModel) openPrompt(p palettePrompt) tea.Cmd {
+	// Open directly into input mode (used for contextual prompts like approval reject reason).
+	m.palette.allItems = nil
+	m.palette.phase = paletteInput
+	m.paletteInputTitle = p.title
+	m.paletteInputApply = p.apply
+	m.palette.input.SetValue(p.value)
+	m.palette.input.Placeholder = p.placeholder
+	m.palette.input.Focus()
+	m.palette.search.Blur()
 	m.resizePalette()
 	return textinput.Blink
 }

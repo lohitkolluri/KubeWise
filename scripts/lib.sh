@@ -55,14 +55,14 @@ go_build_agent() {
   mkdir -p "$(dirname "${out}")"
   log "building agent (${goos}/${goarch}) -> ${out}"
   CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
-    go build -trimpath -ldflags="-s -w" -o "${out}" "${ROOT_DIR}/cmd/agent"
+    go build -trimpath -ldflags="-s -w -X github.com/lohitkolluri/KubeWise/internal/version.Version=dev" -o "${out}" "${ROOT_DIR}/cmd/agent"
 }
 
 go_build_kwctl() {
   local out="${1:-${ROOT_DIR}/bin/kwctl}"
   mkdir -p "$(dirname "${out}")"
   log "building kwctl ($(detect_os)/$(detect_arch)) -> ${out}"
-  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}" "${ROOT_DIR}/cmd/kwctl"
+  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/lohitkolluri/KubeWise/internal/version.Version=dev" -o "${out}" "${ROOT_DIR}/cmd/kwctl"
 }
 
 docker_build_agent() {
@@ -76,8 +76,10 @@ docker_build_agent() {
 
 docker_build_forecaster() {
   local tag="${1:-kubewise/forecaster:dev}"
-  log "building forecaster image ${tag}"
-  docker build -t "${tag}" "${ROOT_DIR}/forecaster-sidecar"
+  local platform
+  platform="$(detect_target_platform)"
+  log "building forecaster image ${tag} (${platform})"
+  docker build --platform "${platform}" -t "${tag}" "${ROOT_DIR}/forecaster-sidecar"
 }
 
 kind_load_images() {

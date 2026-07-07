@@ -23,6 +23,13 @@ type Predictor struct {
 	history        map[string][]MetricPoint
 	patternHistory map[string][]MetricPoint
 	datapoints     map[string]int
+	// streak counts consecutive scrapes above MinScore per metric key.
+	// This suppresses one-off spikes (reduces false positives).
+	streak         map[string]int
+	patternTick    int
+	patternStreak  map[string]int
+	patternLastSeen map[string]int
+	patternLastEmit map[string]int
 	patterns       []PatternMatcher
 }
 
@@ -37,6 +44,10 @@ func NewPredictor(config ScorerConfig) *Predictor {
 		history:        make(map[string][]MetricPoint),
 		patternHistory: make(map[string][]MetricPoint),
 		datapoints:     make(map[string]int),
+		streak:         make(map[string]int),
+		patternStreak:  make(map[string]int),
+		patternLastSeen: make(map[string]int),
+		patternLastEmit: make(map[string]int),
 	}
 }
 
@@ -125,10 +136,43 @@ func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyR
 	p.mu.RUnlock()
 
 	var results []models.PredictionResult
+	p.mu.Lock()
+	p.patternTick++
+	tick := p.patternTick
+	p.mu.Unlock()
+
+	required := p.config.PatternPersistence
+	if required <= 0 {
+		required = 1
+	}
+	cooldown := p.config.PatternCooldownScrapes
+	if cooldown < 0 {
+		cooldown = 0
+	}
+
 	for _, pat := range patterns {
 		matches := pat.Match(metrics, events, resources)
 		for _, m := range matches {
-			results = append(results, patternToResult(m))
+			// Debounce pattern predictions: require consecutive matches + cooldown.
+			key := m.Pattern + "/" + m.Namespace + "/" + m.Entity
+			emit := false
+			p.mu.Lock()
+			lastSeen := p.patternLastSeen[key]
+			if lastSeen != tick-1 {
+				p.patternStreak[key] = 0
+			}
+			p.patternStreak[key]++
+			p.patternLastSeen[key] = tick
+			if p.patternStreak[key] >= required {
+				if tick-p.patternLastEmit[key] >= cooldown {
+					p.patternLastEmit[key] = tick
+					emit = true
+				}
+			}
+			p.mu.Unlock()
+			if emit {
+				results = append(results, patternToResult(m))
+			}
 		}
 	}
 	return results
@@ -237,7 +281,25 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- final score --------------------------------------------------------
 			score := p.scorer.Score(primaryScore, rocBoost)
 
+			// Persistence: require >=N consecutive scrapes above threshold before emitting.
+			// This cuts false positives from single-sample spikes.
+			emit := false
+			required := p.config.Persistence
+			if required <= 0 {
+				required = 1
+			}
+			p.mu.Lock()
 			if score >= p.config.MinScore {
+				p.streak[key]++
+				if p.streak[key] >= required {
+					emit = true
+				}
+			} else {
+				p.streak[key] = 0
+			}
+			p.mu.Unlock()
+
+			if emit {
 				results = append(results, models.PredictionResult{
 					Type:       "statistical",
 					Entity:     entityName(mr.Name, pt.Labels),

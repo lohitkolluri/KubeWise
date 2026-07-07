@@ -71,12 +71,19 @@ curl -fsSL https://raw.githubusercontent.com/lohitkolluri/KubeWise/main/hack/ins
 kwctl install --yes
 ```
 
-### Local dev (kind)
+### Local dev (kind) — fastest path
+
+Requires **Docker Desktop** (running), kind, helm, kubectl.
 
 ```bash
 git clone https://github.com/lohitkolluri/KubeWise.git && cd KubeWise
-./hack/bootstrap.sh --local
+export OPENROUTER_API_KEY="sk-or-..."   # optional — enables LLM runbooks
+make dev                                # or: ./hack/bootstrap.sh --local --yes
+./bin/kwctl up
+./bin/kwctl ui
 ```
+
+Check setup: `./bin/kwctl doctor`
 
 ### LLM remediation (optional)
 
@@ -110,13 +117,10 @@ notifications:
 ## Use it
 
 ```bash
-# terminal 1
-kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080
-
-# terminal 2
+kwctl up          # port-forward + health check (or use manual kubectl port-forward)
 kwctl connect
 kwctl status
-kwctl          # opens the TUI
+kwctl             # opens the TUI
 ```
 
 Running `kwctl` with no arguments opens the dashboard: predictions, anomalies, audit trail, approvals, config, logs. `Ctrl+P` opens the command palette. `?` lists shortcuts.
@@ -157,6 +161,12 @@ make port-forward
 ```
 
 Go 1.26+, Docker. Local clusters: [kind](https://kind.sigs.k8s.io/) and Helm.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for repo layout, lint targets, and PR expectations.
+
+## Community
+
+[Code of Conduct](CODE_OF_CONDUCT.md) · [Governance](GOVERNANCE.md) · [Security](SECURITY.md)
 
 ### Releasing
 

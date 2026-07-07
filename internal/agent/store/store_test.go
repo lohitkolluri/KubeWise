@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -149,7 +150,7 @@ func TestConfigSaveLoad(t *testing.T) {
 		ScrapeInterval:    "30s",
 		PrometheusAddress: "http://prometheus:9090",
 		LLMProvider:       "openrouter",
-		LLMModel:          "meta-llama/llama-3.1-8b-instruct",
+		LLMModel:          llm.DefaultModel,
 		Remediation: models.RemediationConfig{
 			Mode:      "semi",
 			DryRun:    true,
@@ -164,7 +165,7 @@ func TestConfigSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if loaded.ScrapeInterval != "30s" || loaded.LLMModel != "meta-llama/llama-3.1-8b-instruct" {
+	if loaded.ScrapeInterval != "30s" || loaded.LLMModel != llm.DefaultModel {
 		t.Fatalf("unexpected config: %+v", loaded)
 	}
 }

@@ -28,18 +28,20 @@ func TestScorerDefaultConfig(t *testing.T) {
 }
 
 func TestScorerROCBoost(t *testing.T) {
-	s := NewScorer(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	s := NewScorer(cfg)
 
-	// Boost is capped at ROCBoostWeight (0.3 by default)
+	// Boost is capped at ROCBoostWeight
 	score := s.Score(0.0, 1.0)
-	if math.Abs(score-0.3) > 1e-6 {
-		t.Fatalf("expected 0.3 (boost capped), got %f", score)
+	if math.Abs(score-cfg.ROCBoostWeight) > 1e-6 {
+		t.Fatalf("expected %.3f (boost capped), got %f", cfg.ROCBoostWeight, score)
 	}
 
 	// Boost is additive: 0.2 + 0.25 = 0.45
 	score = s.Score(0.2, 0.25)
-	if math.Abs(score-0.45) > 1e-6 {
-		t.Fatalf("expected 0.45, got %f", score)
+	want := 0.2 + math.Min(0.25, cfg.ROCBoostWeight)
+	if math.Abs(score-want) > 1e-6 {
+		t.Fatalf("expected %0.3f, got %f", want, score)
 	}
 }
 

@@ -38,7 +38,14 @@ func TestPredictorWarmup(t *testing.T) {
 }
 
 func TestPredictorRisingMetric(t *testing.T) {
-	p := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	// Unit tests should validate the algorithm without the production persistence/thresholds.
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	p := NewPredictor(cfg)
 
 	// Simulate a memory metric rising 10% per cycle for 15 cycles
 	// (warmup is 10, then we need a few more to build a visible trend)
@@ -58,7 +65,7 @@ func TestPredictorRisingMetric(t *testing.T) {
 		}
 		results, _ := p.Run(metrics)
 		if cycle >= 12 && len(results) == 0 {
-			t.Logf("cycle %d: no prediction yet (score < 0.3)", cycle)
+			t.Logf("cycle %d: no prediction yet (score < %.2f)", cycle, cfg.MinScore)
 		}
 		val = val * 1.10
 	}
@@ -82,8 +89,8 @@ func TestPredictorRisingMetric(t *testing.T) {
 		t.Fatal("expected at least 1 prediction for rising metric after 15 cycles")
 	}
 	for _, r := range results {
-		if r.Score < 0.3 {
-			t.Fatalf("expected score >= 0.3 for rising metric, got %f", r.Score)
+		if r.Score < cfg.MinScore {
+			t.Fatalf("expected score >= %.2f for rising metric, got %f", cfg.MinScore, r.Score)
 		}
 		if r.Entity != "web-1" {
 			t.Fatalf("expected entity web-1, got %s", r.Entity)
@@ -371,7 +378,14 @@ func TestPredictorNoisySteadyWithinBound(t *testing.T) {
 }
 
 func TestPredictorLargeStep(t *testing.T) {
-	p := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	// Use a sensitive config for unit expectations.
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	p := NewPredictor(cfg)
 
 	// 12 cycles at value 100
 	for cycle := 0; cycle < 12; cycle++ {

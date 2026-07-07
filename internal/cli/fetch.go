@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -93,6 +94,42 @@ func fetchAudit(limit int) ([]models.AuditRecord, error) {
 	if limit > 0 {
 		path = fmt.Sprintf("/api/v1/audit?limit=%d", limit)
 	}
+	body, _, err := agentGet(path)
+	if err != nil {
+		return nil, err
+	}
+	var records []models.AuditRecord
+	if err := json.Unmarshal(body, &records); err != nil {
+		return nil, fmt.Errorf("parse audit: %w", err)
+	}
+	return records, nil
+}
+
+func fetchAuditFiltered(limit int, status, since, id string) ([]models.AuditRecord, error) {
+	status = strings.TrimSpace(status)
+	since = strings.TrimSpace(since)
+	id = strings.TrimSpace(id)
+
+	if id != "" {
+		body, _, err := agentGet("/api/v1/audit/" + url.PathEscape(id))
+		if err != nil {
+			return nil, err
+		}
+		var rec models.AuditRecord
+		if err := json.Unmarshal(body, &rec); err != nil {
+			return nil, fmt.Errorf("parse audit: %w", err)
+		}
+		return []models.AuditRecord{rec}, nil
+	}
+
+	q := url.Values{}
+	if status != "" {
+		q.Set("status", status)
+	}
+	if since != "" {
+		q.Set("since", since)
+	}
+	path := "/api/v1/audit" + buildLimitQuery(limit, q)
 	body, _, err := agentGet(path)
 	if err != nil {
 		return nil, err
