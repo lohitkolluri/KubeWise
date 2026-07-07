@@ -24,6 +24,16 @@ type Store interface {
 	GetLatestPredictions() ([]models.PredictionResult, error)
 	ComputeAgentStats() (models.AgentStats, error)
 	Ping() error
+
+	// Health scores.
+	GetLatestHealthScores() ([]models.HealthScore, error)
+	GetHealthScoresByNamespace(ns string) ([]models.HealthScore, error)
+	GetHealthScoreHistory(entity, namespace string, limit int) ([]models.HealthScore, error)
+	ComputeClusterSummary() (*models.ClusterHealthSummary, error)
+
+	// Accuracy snapshots.
+	GetLatestAccuracySnapshot() (*models.AccuracySnapshot, error)
+	GetAccuracyHistory(limit int) ([]models.AccuracySnapshot, error)
 }
 
 type Server struct {

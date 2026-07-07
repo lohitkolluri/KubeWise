@@ -67,6 +67,35 @@ func (m *mockStore) ComputeAgentStats() (models.AgentStats, error) {
 
 func (m *mockStore) Ping() error { return nil }
 
+func (m *mockStore) GetLatestHealthScores() ([]models.HealthScore, error) {
+	return []models.HealthScore{}, nil
+}
+
+func (m *mockStore) GetHealthScoresByNamespace(ns string) ([]models.HealthScore, error) {
+	return []models.HealthScore{}, nil
+}
+
+func (m *mockStore) GetHealthScoreHistory(entity, namespace string, limit int) ([]models.HealthScore, error) {
+	return []models.HealthScore{}, nil
+}
+
+func (m *mockStore) ComputeClusterSummary() (*models.ClusterHealthSummary, error) {
+	return &models.ClusterHealthSummary{}, nil
+}
+
+func (m *mockStore) GetLatestAccuracySnapshot() (*models.AccuracySnapshot, error) {
+	return &models.AccuracySnapshot{
+		ByPredictor:   map[string]models.AccuracyMetrics{},
+		ByNamespace:   map[string]models.AccuracyMetrics{},
+		ByMetric:      map[string]models.AccuracyMetrics{},
+		ByResourceKind: map[string]models.AccuracyMetrics{},
+	}, nil
+}
+
+func (m *mockStore) GetAccuracyHistory(limit int) ([]models.AccuracySnapshot, error) {
+	return []models.AccuracySnapshot{}, nil
+}
+
 func setupTestServer() *httptest.Server {
 	store := &mockStore{
 		anomalies: []models.AnomalyRecord{

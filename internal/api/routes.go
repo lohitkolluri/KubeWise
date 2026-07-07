@@ -25,6 +25,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/audit/{id}", s.handleAuditGet)
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
 	mux.HandleFunc("GET /", s.handleRoot)
+	mux.HandleFunc("GET /api/v1/health", s.handleHealthScores)
+	mux.HandleFunc("GET /api/v1/health/history", s.handleHealthScoreHistory)
+	mux.HandleFunc("GET /api/v1/health/summary", s.handleClusterHealthSummary)
+	mux.HandleFunc("GET /api/v1/accuracy", s.handleAccuracyLatest)
+	mux.HandleFunc("GET /api/v1/accuracy/history", s.handleAccuracyHistory)
 	s.registerMetrics(mux)
 }
 
