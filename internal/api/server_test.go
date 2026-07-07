@@ -140,7 +140,11 @@ func TestHealthContentType(t *testing.T) {
 	ts := setupTestServer()
 	defer ts.Close()
 
-	resp, _ := http.Get(ts.URL + "/health")
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("health check failed: %v", err)
+	}
+	defer resp.Body.Close()
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("expected application/json, got %s", ct)
 	}
@@ -361,7 +365,11 @@ func TestCORSHeaders(t *testing.T) {
 	ts := setupTestServer()
 	defer ts.Close()
 
-	resp, _ := http.Get(ts.URL + "/health")
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("health check failed: %v", err)
+	}
+	defer resp.Body.Close()
 	origin := resp.Header.Get("Access-Control-Allow-Origin")
 	if origin != "*" {
 		t.Fatalf("expected CORS header *, got %s", origin)

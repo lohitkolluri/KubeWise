@@ -250,10 +250,10 @@ func (s *Store) RebuildAuditIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
 			return err
 		}
-		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAuditIndex)

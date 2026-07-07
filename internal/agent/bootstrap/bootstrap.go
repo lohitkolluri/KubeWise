@@ -48,17 +48,17 @@ func Init() (*Runtime, error) {
 	if configPath != "" {
 		existing, err := s.LoadConfig()
 		if err != nil {
-			s.Close()
+			_ = s.Close()
 			return nil, fmt.Errorf("load config from store: %w", err)
 		}
 		if existing == nil {
 			cfg, err = loadConfigFile(configPath)
 			if err != nil {
-				s.Close()
+				_ = s.Close()
 				return nil, fmt.Errorf("seed config: %w", err)
 			}
 			if err := s.SaveConfig(cfg); err != nil {
-				s.Close()
+				_ = s.Close()
 				return nil, fmt.Errorf("save seeded config: %w", err)
 			}
 			log.Printf("seeded config from %s", configPath)
@@ -71,7 +71,7 @@ func Init() (*Runtime, error) {
 			cfg = existing
 		} else if err == nil && existing == nil {
 			if err := s.SaveConfig(cfg); err != nil {
-				s.Close()
+				_ = s.Close()
 				return nil, fmt.Errorf("save default config: %w", err)
 			}
 		}
@@ -89,7 +89,7 @@ func Init() (*Runtime, error) {
 	validateLLM(llmCfg)
 
 	if err := validateAPIAuth(); err != nil {
-		s.Close()
+		_ = s.Close()
 		return nil, err
 	}
 

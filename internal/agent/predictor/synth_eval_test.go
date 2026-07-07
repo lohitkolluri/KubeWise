@@ -255,9 +255,10 @@ func TestSyntheticTPFP_Complicated(t *testing.T) {
 	for i := 0; i < nFailing; i++ {
 		failStart := 25 + int(nextU01()*60) // between ~12.5m and ~42.5m
 		mode := "crashloop"
-		if i%3 == 1 {
+		switch i % 3 {
+		case 1:
 			mode = "oom"
-		} else if i%3 == 2 {
+		case 2:
 			mode = "notready"
 		}
 		pods = append(pods, podSpec{

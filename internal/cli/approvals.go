@@ -36,14 +36,14 @@ var approvalsCmd = &cobra.Command{
 		}
 		return writeOutput(cmd.OutOrStdout(), outputFormat, records, func() error {
 			if len(records) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No pending approvals.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No pending approvals.")
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-8s %-22s %s\n", "ID", "TIER", "ACTION", "REASON")
-			fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 90))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-8s %-22s %s\n", "ID", "TIER", "ACTION", "REASON")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 90))
 			for _, r := range records {
 				action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
-				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-8s %-22s %s\n",
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-8s %-22s %s\n",
 					trunc(r.ID, 28), string(r.RiskTier), trunc(action, 20), trunc(r.Reason, 40))
 			}
 			return nil
@@ -65,7 +65,7 @@ var approveCmd = &cobra.Command{
 		if err := approveRemediation(id); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Approved and executed: %s\n", id)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Approved and executed: %s\n", id)
 		return nil
 	},
 }
@@ -85,7 +85,7 @@ var rejectCmd = &cobra.Command{
 		if err := rejectRemediation(id, approvalReason); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Rejected: %s\n", id)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Rejected: %s\n", id)
 		return nil
 	},
 }

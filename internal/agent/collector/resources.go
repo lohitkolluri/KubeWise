@@ -139,9 +139,9 @@ func (rc *ResourcesCollector) Run(ctx context.Context) {
 
 	if !cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced) {
 		log.Printf("resources: informer cache sync timed out, retrying")
-		if err := wait.PollImmediate(2*time.Second, rc.syncTimeout, func() (bool, error) {
+		if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, rc.syncTimeout, true, func(ctx context.Context) (bool, error) {
 			return cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced), nil
-		}); err != nil {
+		}); err != nil && err != context.Canceled {
 			log.Printf("resources: informer cache sync failed after retry")
 			return
 		}
@@ -160,7 +160,7 @@ func (rc *ResourcesCollector) HasSynced() bool {
 
 // WaitForSync blocks up to the timeout duration until all informers have synced.
 func (rc *ResourcesCollector) WaitForSync() bool {
-	err := wait.PollImmediate(100*time.Millisecond, rc.syncTimeout, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, rc.syncTimeout, true, func(ctx context.Context) (bool, error) {
 		return rc.HasSynced(), nil
 	})
 	return err == nil
@@ -282,7 +282,7 @@ func (rc *ResourcesCollector) handlePodUpdate(oldObj, newObj interface{}) {
 func (rc *ResourcesCollector) handlePodDelete(obj interface{}) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
-		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		if tombstone, tombOK := obj.(cache.DeletedFinalStateUnknown); tombOK {
 			pod, ok = tombstone.Obj.(*corev1.Pod)
 		}
 	}
@@ -344,7 +344,7 @@ func (rc *ResourcesCollector) handleNodeUpdate(oldObj, newObj interface{}) {
 func (rc *ResourcesCollector) handleNodeDelete(obj interface{}) {
 	node, ok := obj.(*corev1.Node)
 	if !ok {
-		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		if tombstone, tombOK := obj.(cache.DeletedFinalStateUnknown); tombOK {
 			node, ok = tombstone.Obj.(*corev1.Node)
 		}
 	}
@@ -396,7 +396,7 @@ func (rc *ResourcesCollector) handleDepUpdate(oldObj, newObj interface{}) {
 func (rc *ResourcesCollector) handleDepDelete(obj interface{}) {
 	dep, ok := obj.(*appsv1.Deployment)
 	if !ok {
-		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		if tombstone, tombOK := obj.(cache.DeletedFinalStateUnknown); tombOK {
 			dep, ok = tombstone.Obj.(*appsv1.Deployment)
 		}
 	}

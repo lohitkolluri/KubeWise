@@ -47,7 +47,7 @@ var agentRestartCmd = &cobra.Command{
 		if err := restartAgentDeployment(); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Restarted deployment %s/%s\n", agentNS, agentSvc)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Restarted deployment %s/%s\n", agentNS, agentSvc)
 		return nil
 	},
 }
@@ -56,15 +56,15 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	if logsFollow {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		fmt.Fprintf(cmd.OutOrStdout(), "Streaming logs from %s/%s (ctrl+c to stop)…\n\n", agentNS, agentSvc)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Streaming logs from %s/%s (ctrl+c to stop)…\n\n", agentNS, agentSvc)
 		return streamAgentLogs(ctx, logsTail, func(line string) {
-			fmt.Fprintln(cmd.OutOrStdout(), line)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
 		})
 	}
 	text, err := fetchAgentLogs(logsTail)
 	if err != nil {
 		return err
 	}
-	fmt.Fprint(cmd.OutOrStdout(), text)
+	_, _ = fmt.Fprint(cmd.OutOrStdout(), text)
 	return nil
 }

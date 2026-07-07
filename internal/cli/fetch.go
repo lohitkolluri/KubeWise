@@ -92,22 +92,6 @@ func fetchAnomalies(limit int) ([]models.AnomalyRecord, error) {
 	return records, nil
 }
 
-func fetchAudit(limit int) ([]models.AuditRecord, error) {
-	path := "/api/v1/audit"
-	if limit > 0 {
-		path = fmt.Sprintf("/api/v1/audit?limit=%d", limit)
-	}
-	body, _, err := agentGet(path)
-	if err != nil {
-		return nil, err
-	}
-	var records []models.AuditRecord
-	if err := json.Unmarshal(body, &records); err != nil {
-		return nil, fmt.Errorf("parse audit: %w", err)
-	}
-	return records, nil
-}
-
 func fetchAuditFiltered(limit int, status, since, id string) ([]models.AuditRecord, error) {
 	status = strings.TrimSpace(status)
 	since = strings.TrimSpace(since)

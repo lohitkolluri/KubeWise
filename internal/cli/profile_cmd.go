@@ -28,15 +28,15 @@ var profileShowCmd = &cobra.Command{
 		}
 		p := pf.Profiles[pf.Current]
 		path, _ := profilePath()
-		fmt.Fprintf(cmd.OutOrStdout(), "File:        %s\n", path)
-		fmt.Fprintf(cmd.OutOrStdout(), "Active:      %s\n", pf.Current)
-		fmt.Fprintf(cmd.OutOrStdout(), "Agent URL:   %s\n", p.AgentURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "Namespace:   %s\n", p.AgentNamespace)
-		fmt.Fprintf(cmd.OutOrStdout(), "Service:     %s\n", p.AgentService)
-		fmt.Fprintf(cmd.OutOrStdout(), "Output:      %s\n", p.Output)
-		fmt.Fprintf(cmd.OutOrStdout(), "Timeout:     %ds\n", p.TimeoutSeconds)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "File:        %s\n", path)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Active:      %s\n", pf.Current)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Agent URL:   %s\n", p.AgentURL)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Namespace:   %s\n", p.AgentNamespace)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Service:     %s\n", p.AgentService)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Output:      %s\n", p.Output)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Timeout:     %ds\n", p.TimeoutSeconds)
 		if p.APIToken != "" {
-			fmt.Fprintln(cmd.OutOrStdout(), "API Token:   (set)")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "API Token:   (set)")
 		}
 		return nil
 	},
@@ -55,7 +55,7 @@ var profileListCmd = &cobra.Command{
 			if name == pf.Current {
 				marker = "*"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", marker, name)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", marker, name)
 		}
 		return nil
 	},
@@ -102,7 +102,7 @@ Example:
 			if err := setProfileField(name, key, value); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "set %s=%s\n", key, maskIfToken(key, value))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "set %s=%s\n", key, maskIfToken(key, value))
 		}
 		return nil
 	},

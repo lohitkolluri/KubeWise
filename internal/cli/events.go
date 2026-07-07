@@ -31,14 +31,14 @@ var eventsCmd = &cobra.Command{
 			return err
 		}
 		if len(list.Items) == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "No events in %s (since %s)\n", agentNS, eventsSince)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No events in %s (since %s)\n", agentNS, eventsSince)
 			return nil
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-12s %-8s %s\n", "TYPE", "OBJECT", "COUNT", "MESSAGE")
-		fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-12s %-8s %s\n", "TYPE", "OBJECT", "COUNT", "MESSAGE")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
 		for _, e := range list.Items {
 			obj := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
-			fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-12s %-8d %s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-12s %-8d %s\n",
 				trunc(e.Type, 10), trunc(obj, 12), e.Count, trunc(e.Message, 50))
 		}
 		return nil

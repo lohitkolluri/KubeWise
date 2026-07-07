@@ -94,7 +94,7 @@ func TestAdaptiveMedianNumericalCorrectness(t *testing.T) {
 	for i := 11; i <= 20; i++ {
 		est.Add(float64(i))
 	}
-	med, _, _, n, _ = est.Stats()
+	med, _, _, _, _ = est.Stats()
 	if math.Abs(med-15.5) > 1e-12 {
 		t.Errorf("sliding median: got %f, want 15.5", med)
 	}

@@ -19,15 +19,15 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db}
 	if err := s.Init(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init bbolt: %w", err)
 	}
 	if err := s.ensureAnomalyIndexes(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("rebuild anomaly indexes: %w", err)
 	}
 	if err := s.ensureAuditIndexes(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("rebuild audit indexes: %w", err)
 	}
 	return s, nil

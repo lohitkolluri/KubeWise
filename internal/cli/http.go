@@ -65,7 +65,7 @@ func agentRequest(method, path string, body any) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("connecting to agent: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("reading response: %w", err)
@@ -119,8 +119,4 @@ func agentWrite(path string, body any) ([]byte, int, error) {
 		return lastBody, lastCode, fmt.Errorf("agent returned %d on %s — redeploy with: bash hack/deploy-dev.sh (%s)", lastCode, path, hint)
 	}
 	return lastBody, lastCode, lastErr
-}
-
-func agentPut(path string, body any) ([]byte, int, error) {
-	return agentWrite(path, body)
 }

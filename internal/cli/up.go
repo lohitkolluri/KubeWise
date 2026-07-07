@@ -67,7 +67,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	}
 
 	if _, err := fetchHealth(); err == nil {
-		fmt.Fprintln(out, "✓ Agent already reachable at", resolveAgentURL())
+		_, _ = fmt.Fprintln(out, "✓ Agent already reachable at", resolveAgentURL())
 		return printUpHints(out)
 	}
 
@@ -81,7 +81,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	if err := startBackgroundPortForward(); err != nil {
 		return fmt.Errorf("port-forward: %w", err)
 	}
-	fmt.Fprintln(out, "… waiting for agent at", resolveAgentURL())
+	_, _ = fmt.Fprintln(out, "… waiting for agent at", resolveAgentURL())
 	if err := waitForAgent(30 * time.Second); err != nil {
 		_ = stopBackgroundPortForward()
 		return err
@@ -90,7 +90,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		_ = stopBackgroundPortForward()
 		return fmt.Errorf("port-forward exited early — see %s", mustPortForwardLog())
 	}
-	fmt.Fprintln(out, "✓ Port-forward running (kwctl down to stop)")
+	_, _ = fmt.Fprintln(out, "✓ Port-forward running (kwctl down to stop)")
 
 	if upPersistProfile {
 		if err := setProfileField(profileName, "agent-url", fmt.Sprintf("http://localhost:%d", upLocalPort)); err != nil {
@@ -109,11 +109,11 @@ func runDown(_ *cobra.Command, _ []string) error {
 }
 
 func printUpHints(out io.Writer) error {
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Next:")
-	fmt.Fprintln(out, "  kwctl connect    # verify")
-	fmt.Fprintln(out, "  kwctl ui         # control center")
-	fmt.Fprintln(out, "  kwctl status     # quick summary")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Next:")
+	_, _ = fmt.Fprintln(out, "  kwctl connect    # verify")
+	_, _ = fmt.Fprintln(out, "  kwctl ui         # control center")
+	_, _ = fmt.Fprintln(out, "  kwctl status     # quick summary")
 	return nil
 }
 
@@ -235,7 +235,7 @@ func mustPortForwardLog() string {
 }
 
 func runPortForwardForeground(out io.Writer) error {
-	fmt.Fprintf(out, "Forwarding %s/svc/%s → localhost:%d (Ctrl+C to stop)\n", agentNS, agentSvc, upLocalPort)
+	_, _ = fmt.Fprintf(out, "Forwarding %s/svc/%s → localhost:%d (Ctrl+C to stop)\n", agentNS, agentSvc, upLocalPort)
 	args := portForwardArgs()
 	cmd := exec.Command("kubectl", args...)
 	cmd.Stdout = out
