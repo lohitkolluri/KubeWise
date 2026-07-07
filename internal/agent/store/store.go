@@ -75,7 +75,3 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// DB returns the underlying bbolt handle for read/write transactions.
-func (s *Store) DB() *bolt.DB {
-	return s.db
-}

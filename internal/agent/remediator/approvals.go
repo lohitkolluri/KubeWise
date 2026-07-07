@@ -176,10 +176,11 @@ func (c *Correlator) SetLiveMode(live bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cfg.DryRun = !live
+	// Transition auto ↔ dry-run based on live flag, but preserve explicit
+	// modes (semi, off) that were already applied via ApplyRemediationConfig.
 	if live && c.cfg.Mode == models.RemediationModeDryRun {
 		c.cfg.Mode = models.RemediationModeAuto
-	}
-	if !live {
+	} else if !live && c.cfg.Mode == models.RemediationModeAuto {
 		c.cfg.Mode = models.RemediationModeDryRun
 	}
 	if c.executor != nil {

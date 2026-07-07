@@ -27,30 +27,41 @@ type Store interface {
 }
 
 type Server struct {
-	store      Store
-	remediator Remediator
-	server     *http.Server
-	startAt    time.Time
-	scrapes    atomic.Int64
-	gateStats  atomic.Value // gate.Stats
-	apiToken   string
+	store        Store
+	remediator   Remediator
+	server       *http.Server
+	startAt      time.Time
+	scrapes      atomic.Int64
+	gateStats    atomic.Value // gate.Stats
+	apiToken     string
+	corsOrigin   string
+	requireToken bool
 }
 
 func NewServer(store Store, addr string) *Server {
 	mux := http.NewServeMux()
-	s := &Server{
-		store:    store,
-		startAt:  time.Now(),
-		apiToken: os.Getenv("KUBEWISE_API_TOKEN"),
+	apiToken := os.Getenv("KUBEWISE_API_TOKEN")
+	corsOrigin := os.Getenv("KUBEWISE_CORS_ORIGIN")
+	if corsOrigin == "" {
+		corsOrigin = defaultCORSOrigin
 	}
-	if s.apiToken == "" {
+	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
+
+	s := &Server{
+		store:        store,
+		startAt:      time.Now(),
+		apiToken:     apiToken,
+		corsOrigin:   corsOrigin,
+		requireToken: requireToken,
+	}
+	if apiToken == "" && !requireToken {
 		log.Printf("api: WARNING: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
 	}
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)
 	s.server = &http.Server{
 		Addr:              addr,
-		Handler:           withMiddleware(mux, s.apiToken),
+		Handler:           withMiddleware(mux, middlewareConfig{apiToken: apiToken, corsOrigin: corsOrigin, requireToken: requireToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

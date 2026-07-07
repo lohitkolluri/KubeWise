@@ -81,7 +81,7 @@ func setupTestServer() *httptest.Server {
 	mux := http.NewServeMux()
 	s := NewServer(store, ":0")
 	s.registerRoutes(mux)
-	return httptest.NewServer(withMiddleware(mux, ""))
+	return httptest.NewServer(withMiddleware(mux, middlewareConfig{corsOrigin: "*"}))
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -182,7 +182,7 @@ func TestAnomaliesEmptyStore(t *testing.T) {
 	mux := http.NewServeMux()
 	s := NewServer(store, ":0")
 	s.registerRoutes(mux)
-	ts := httptest.NewServer(withMiddleware(mux, ""))
+	ts := httptest.NewServer(withMiddleware(mux, middlewareConfig{corsOrigin: "*"}))
 	defer ts.Close()
 
 	resp, _ := http.Get(ts.URL + "/api/v1/anomalies")
@@ -250,7 +250,7 @@ func TestConfigNoConfig(t *testing.T) {
 	mux := http.NewServeMux()
 	s := NewServer(store, ":0")
 	s.registerRoutes(mux)
-	ts := httptest.NewServer(withMiddleware(mux, ""))
+	ts := httptest.NewServer(withMiddleware(mux, middlewareConfig{corsOrigin: "*"}))
 	defer ts.Close()
 
 	resp, _ := http.Get(ts.URL + "/api/v1/config")
