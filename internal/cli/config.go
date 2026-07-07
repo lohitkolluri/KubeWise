@@ -11,7 +11,7 @@ import (
 )
 
 func init() {
-	configCmd.AddCommand(configShowCmd, configSetCmd, configApplyCmd)
+	configCmd.AddCommand(configShowCmd, configSetCmd, configApplyCmd, configInitCmd)
 	rootCmd.AddCommand(configCmd)
 }
 
@@ -109,6 +109,77 @@ var configApplyCmd = &cobra.Command{
 func init() {
 	configApplyCmd.Flags().StringP("file", "f", "", "YAML config file")
 	_ = configApplyCmd.MarkFlagRequired("file")
+}
+
+var (
+	configInitFile  string
+	configInitPrint bool
+	configInitFrom  string
+)
+
+var configInitCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Generate a starter agent config YAML file",
+	Long: `Generate a starter agent configuration YAML.
+
+By default this uses the current config from the agent (if reachable). You can
+also generate a sane default template for committing to git.
+
+Examples:
+  kwctl config init -f agent-config.yaml
+  kwctl config init --from defaults --print`,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		var cfg *models.AgentConfig
+		switch strings.TrimSpace(configInitFrom) {
+		case "", "agent":
+			c, err := fetchAgentConfig()
+			if err != nil {
+				// If no config saved or agent unreachable, fall back to defaults.
+				cfg = defaultAgentConfigTemplate()
+			} else {
+				cfg = c
+			}
+		case "defaults":
+			cfg = defaultAgentConfigTemplate()
+		default:
+			return fmt.Errorf("invalid --from %q (use agent or defaults)", configInitFrom)
+		}
+
+		if configInitPrint || configInitFile == "" {
+			return writeOutput(cmd.OutOrStdout(), "yaml", cfg, func() error { return nil })
+		}
+
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(configInitFile, data, 0o600); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", configInitFile)
+		return nil
+	},
+}
+
+func init() {
+	configInitCmd.Flags().StringVarP(&configInitFile, "file", "f", "agent-config.yaml", "output YAML file path")
+	configInitCmd.Flags().BoolVar(&configInitPrint, "print", false, "print YAML to stdout instead of writing a file")
+	configInitCmd.Flags().StringVar(&configInitFrom, "from", "agent", "source: agent (current) or defaults")
+}
+
+func defaultAgentConfigTemplate() *models.AgentConfig {
+	return &models.AgentConfig{
+		ScrapeInterval:    "30s",
+		PrometheusAddress: "http://prometheus-kube-prometheus-prometheus.monitoring:9090",
+		LLMProvider:       "openrouter",
+		LLMModel:          "openai/gpt-oss-120b",
+		Remediation: models.RemediationConfig{
+			Mode:          models.RemediationModeDryRun,
+			DryRun:        true,
+			RateLimit:     0,
+			MinConfidence: 0,
+		},
+	}
 }
 
 func applyConfigField(cfg *models.AgentConfig, key, value string) error {

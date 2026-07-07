@@ -9,7 +9,7 @@ data:
     # Patched at install time when Prometheus is detected; override via kwctl config.
     prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
     llm_provider: openrouter
-    llm_model: meta-llama/llama-3.1-8b-instruct
+    llm_model: google/gemini-2.0-flash-001
     remediation:
       mode: dry-run
       dry_run: true

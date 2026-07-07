@@ -3,7 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -24,7 +26,7 @@ type OpenRouterProvider struct {
 func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
 	apiKey = strings.TrimSpace(apiKey)
 	if model == "" {
-		model = defaultModel
+		model = DefaultModel
 	}
 	var sdk *openrouter.OpenRouter
 	if apiKey != "" {
@@ -32,7 +34,7 @@ func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
 			openrouter.WithSecurity(apiKey),
 			openrouter.WithHTTPReferer(appReferer),
 			openrouter.WithXTitle(appTitle),
-			openrouter.WithTimeout(60*time.Second),
+			openrouter.WithTimeout(180*time.Second),
 		)
 	}
 	return &OpenRouterProvider{sdk: sdk, apiKey: apiKey, model: model}
@@ -68,20 +70,48 @@ func (p *OpenRouterProvider) StructuredOutput(ctx context.Context, systemPrompt,
 		return fmt.Errorf("parse schema: %w", err)
 	}
 
-	strict := true
-	responseFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
-		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
-		JSONSchema: components.ChatJSONSchemaConfig{
-			Name:   "remediation_plan",
-			Strict: optionalnullable.From(&strict),
-			Schema: schemaMap,
-		},
-	})
+	var lastErr error
+	chain := modelChain(p.model)
+	for i, model := range chain {
+		strict := !IsFreeModel(model)
+		responseFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
+			Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
+			JSONSchema: components.ChatJSONSchemaConfig{
+				Name:   "remediation_plan",
+				Strict: optionalnullable.From(&strict),
+				Schema: schemaMap,
+			},
+		})
+		err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
+		if err == nil {
+			if i > 0 {
+				log.Printf("llm: openrouter fallback model %s succeeded", model)
+			}
+			return nil
+		}
+		lastErr = err
+		if !isRetryableOpenRouterError(err) {
+			return err
+		}
+		if i < len(chain)-1 {
+			log.Printf("llm: openrouter model %s failed (%v), trying fallback", model, err)
+		}
+	}
+	return lastErr
+}
 
+func (p *OpenRouterProvider) structuredOutputWithModel(
+	ctx context.Context,
+	model string,
+	systemPrompt, userContent string,
+	responseFormat components.ResponseFormat,
+	respPtr interface{},
+) error {
+	maxTok := maxTokensForModel(model)
 	res, err := p.sdk.Chat.Send(ctx, components.ChatRequest{
-		Model:          openrouter.Pointer(p.model),
+		Model:          openrouter.Pointer(model),
 		Temperature:    optionalnullable.From(openrouter.Pointer(0.2)),
-		MaxTokens:      optionalnullable.From(openrouter.Pointer(int64(2000))),
+		MaxTokens:      optionalnullable.From(openrouter.Pointer(maxTok)),
 		ResponseFormat: &responseFormat,
 		Messages: []components.ChatMessages{
 			components.CreateChatMessagesSystem(components.ChatSystemMessage{
@@ -106,6 +136,42 @@ func (p *OpenRouterProvider) StructuredOutput(ctx context.Context, systemPrompt,
 		return fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
 	}
 	return nil
+}
+
+func isRetryableOpenRouterError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sub := range []string{
+		"context deadline exceeded",
+		"client.timeout",
+		"timeout while",
+		"429",
+		"rate limit",
+		"502",
+		"503",
+		"504",
+		"empty message content",
+	} {
+		if strings.Contains(msg, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func maxTokensForModel(model string) int64 {
+	if IsFreeModel(model) || strings.Contains(model, "120b") {
+		return 2048
+	}
+	return 1024
 }
 
 func extractMessageContent(res *operations.SendChatCompletionRequestResponse) (string, error) {

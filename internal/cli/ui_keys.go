@@ -30,6 +30,7 @@ type uiKeyMap struct {
 	Restart    key.Binding
 	Approve    key.Binding
 	Reject     key.Binding
+	LogFollow  key.Binding
 	ToggleLive key.Binding
 	Confirm    key.Binding
 	Cancel     key.Binding
@@ -112,6 +113,10 @@ func defaultUIKeys() uiKeyMap {
 			key.WithKeys("x"),
 			key.WithHelp("x", "reject"),
 		),
+		LogFollow: key.NewBinding(
+			key.WithKeys("f"),
+			key.WithHelp("f", "follow logs"),
+		),
 		ToggleLive: key.NewBinding(
 			key.WithKeys("L"),
 			key.WithHelp("L", "live mode"),
@@ -136,6 +141,6 @@ func (k uiKeyMap) FullHelp() [][]key.Binding {
 		{k.TabPrev, k.TabNext, k.Tab1, k.Tab2, k.Tab3},
 		{k.Tab4, k.Tab5, k.Tab6, k.Tab7, k.Up},
 		{k.Top, k.Bottom, k.Detail, k.Refresh, k.Palette},
-		{k.Approve, k.Reject, k.ToggleLive, k.DryRun, k.Restart},
+		{k.Approve, k.Reject, k.LogFollow, k.ToggleLive, k.Restart},
 	}
 }

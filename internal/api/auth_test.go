@@ -49,22 +49,26 @@ func TestAuthMiddleware_AcceptsBearerToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_HealthBypassesAuth(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	for _, path := range []string{"/health", "/readyz", "/metrics"} {
+		t.Run(path, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
 
-	handler := withMiddleware(mux, "secret-token")
-	ts := httptest.NewServer(handler)
-	defer ts.Close()
+			handler := withMiddleware(mux, "secret-token")
+			ts := httptest.NewServer(handler)
+			defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/health")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+			resp, err := http.Get(ts.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s: expected 200, got %d", path, resp.StatusCode)
+			}
+		})
 	}
 }
 

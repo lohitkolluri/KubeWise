@@ -41,7 +41,7 @@ agent:
   scrapeInterval: 30s
   prometheusAddress: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
   llmProvider: openrouter
-  llmModel: meta-llama/llama-3.1-8b-instruct
+  llmModel: google/gemini-2.0-flash-001
   llmBaseURL: ""
   # Empty = watch all namespaces (subject to denylist). Non-empty limits observation scope.
   watchNamespaces: []

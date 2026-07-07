@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/lohitkolluri/KubeWise/internal/version"
 )
 
 func init() {
@@ -41,7 +43,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print kwctl version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Fprintf(cmd.OutOrStdout(), "kwctl %s\n", cliVersion)
+		fmt.Fprintf(cmd.OutOrStdout(), "kwctl %s\n", version.Version)
 	},
 }
 

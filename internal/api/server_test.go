@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -38,6 +40,18 @@ func (m *mockStore) ListAuditRecords(limit int) ([]models.AuditRecord, error) {
 	return []models.AuditRecord{}, nil
 }
 
+func (m *mockStore) ListAuditRecordsSince(since time.Time, limit int) ([]models.AuditRecord, error) {
+	return []models.AuditRecord{}, nil
+}
+
+func (m *mockStore) ListAuditRecordsByStatus(status models.AuditStatus, limit int) ([]models.AuditRecord, error) {
+	return []models.AuditRecord{}, nil
+}
+
+func (m *mockStore) GetAuditRecord(id string) (*models.AuditRecord, error) {
+	return nil, fmt.Errorf("audit record %q not found", id)
+}
+
 func (m *mockStore) GetLatestPredictions() ([]models.PredictionResult, error) {
 	return []models.PredictionResult{}, nil
 }
@@ -50,6 +64,8 @@ func (m *mockStore) ComputeAgentStats() (models.AgentStats, error) {
 		PredictionAccuracy: 0.7,
 	}, nil
 }
+
+func (m *mockStore) Ping() error { return nil }
 
 func setupTestServer() *httptest.Server {
 	store := &mockStore{

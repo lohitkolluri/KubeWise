@@ -18,8 +18,12 @@ type Store interface {
 	LoadConfig() (*models.AgentConfig, error)
 	SaveConfig(cfg *models.AgentConfig) error
 	ListAuditRecords(limit int) ([]models.AuditRecord, error)
+	ListAuditRecordsSince(since time.Time, limit int) ([]models.AuditRecord, error)
+	ListAuditRecordsByStatus(status models.AuditStatus, limit int) ([]models.AuditRecord, error)
+	GetAuditRecord(id string) (*models.AuditRecord, error)
 	GetLatestPredictions() ([]models.PredictionResult, error)
 	ComputeAgentStats() (models.AgentStats, error)
+	Ping() error
 }
 
 type Server struct {
@@ -80,6 +84,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) IncrementScrapes() {
 	s.scrapes.Add(1)
+	scrapesTotal.Inc()
 }
 
 func (s *Server) uptime() time.Duration {

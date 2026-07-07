@@ -4,7 +4,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
-const oomMinConfidence = 0.5
+const oomMinConfidence = 0.7
 const memoryMetric = "pod_memory_usage"
 
 type OOMPattern struct{}

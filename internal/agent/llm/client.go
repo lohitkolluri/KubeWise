@@ -7,9 +7,8 @@ import (
 )
 
 const (
-	defaultModel = "meta-llama/llama-3.1-8b-instruct"
-	appReferer   = "https://github.com/lohitkolluri/KubeWise"
-	appTitle     = "KubeWise"
+	appReferer = "https://github.com/lohitkolluri/KubeWise"
+	appTitle   = "KubeWise"
 )
 
 // Client is the LLM facade used by the remediation correlator.

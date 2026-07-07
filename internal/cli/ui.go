@@ -16,9 +16,13 @@ import (
 )
 
 var uiInterval time.Duration
+var uiMouse bool
+var uiAltScreen bool
 
 func init() {
 	uiCmd.Flags().DurationVar(&uiInterval, "interval", 2*time.Second, "auto-refresh interval")
+	uiCmd.Flags().BoolVar(&uiMouse, "mouse", false, "enable mouse interactions (disables terminal text selection/copy in many terminals)")
+	uiCmd.Flags().BoolVar(&uiAltScreen, "altscreen", true, "use terminal alternate screen buffer")
 	rootCmd.AddCommand(uiCmd)
 }
 
@@ -48,7 +52,15 @@ func runControlCenter(interval time.Duration) error {
 		interval = 2 * time.Second
 	}
 	m := newControlModel(interval)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	opts := []tea.ProgramOption{}
+	if uiAltScreen {
+		opts = append(opts, tea.WithAltScreen())
+	}
+	if uiMouse {
+		// NOTE: mouse capture prevents normal terminal selection/copy in many terminals.
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(m, opts...)
 	_, err := p.Run()
 	return err
 }
@@ -87,6 +99,9 @@ type controlModel struct {
 	loading     bool
 	ready       bool
 	confirm     confirmKind
+	logsFollow  bool
+	auditStatus string
+	auditSince  string
 
 	status    agentStatus
 	healthOK  bool
@@ -121,6 +136,7 @@ func newControlModel(interval time.Duration) controlModel {
 		palette:  newPaletteState(),
 		keys:     defaultUIKeys(),
 		spin:     s,
+		logsFollow: true,
 	}
 	m.help = help.New()
 	m.help.ShowAll = false
@@ -157,7 +173,7 @@ func (m controlModel) refreshAll() tea.Cmd {
 		_, herr := fetchHealth()
 		preds, _ := fetchPredictions()
 		anomalies, _ := fetchAnomalies(30)
-		audits, _ := fetchAudit(25)
+		audits, _ := fetchAuditFiltered(25, m.auditStatus, m.auditSince, "")
 		cfg, cfgErr := fetchAgentConfig()
 		if cfgErr != nil && strings.Contains(cfgErr.Error(), "no config") {
 			cfg = nil
@@ -272,7 +288,9 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logs = msg.logs
 			m.lastUpdate = msg.lastUpdate
 			m.logsVP.SetContent(msg.logs)
-			m.logsVP.GotoBottom()
+			if m.logsFollow {
+				m.logsVP.GotoBottom()
+			}
 			if m.statusMsg == "Refreshing…" {
 				m.statusMsg = ""
 			}
@@ -402,14 +420,33 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.tab == tabApprovals && len(m.pending) > 0 {
 			i := m.cursor[tabApprovals]
 			if i >= 0 && i < len(m.pending) {
-				if err := rejectRemediation(m.pending[i].ID, "rejected via kwctl"); err != nil {
-					m.err = err
-				} else {
-					m.statusMsg = "Remediation rejected"
-					m.err = nil
-					return m, tea.Batch(m.refreshAll(), scheduleToastClear())
-				}
+				id := m.pending[i].ID
+				return m, m.openPrompt(palettePrompt{
+					title:       "Reject remediation",
+					placeholder: "reason (required)",
+					value:       "rejected via kwctl",
+					apply: func(m *controlModel, value string) (string, error) {
+						if strings.TrimSpace(value) == "" {
+							return "", fmt.Errorf("reason must not be empty")
+						}
+						if err := rejectRemediation(id, value); err != nil {
+							return "", err
+						}
+						return "Remediation rejected", nil
+					},
+				})
 			}
+		}
+	case key.Matches(msg, m.keys.LogFollow):
+		if m.tab == tabLogs {
+			m.logsFollow = !m.logsFollow
+			if m.logsFollow {
+				m.logsVP.GotoBottom()
+				m.statusMsg = "logs: follow ON"
+			} else {
+				m.statusMsg = "logs: follow OFF"
+			}
+			return m, scheduleToastClear()
 		}
 	case key.Matches(msg, m.keys.Mode):
 		if m.tab == tabConfig && m.config != nil {
@@ -575,8 +612,12 @@ func (m controlModel) renderTabContent() string {
 		if m.logs == "" {
 			return emptyStateStyle.Render("No logs available.\nEnsure kubeconfig can reach the cluster and the agent pod is running.")
 		}
+		follow := "follow=ON"
+		if !m.logsFollow {
+			follow = "follow=OFF"
+		}
 		scroll := mutedStyle.Render(fmt.Sprintf("lines %d · scroll ↑↓ pgup/pgdn", strings.Count(m.logs, "\n")+1))
-		return scroll + "\n" + m.logsVP.View()
+		return scroll + mutedStyle.Render(" · " + follow + " (f)") + "\n" + m.logsVP.View()
 	default:
 		return ""
 	}
@@ -606,7 +647,8 @@ func (m controlModel) renderDashboard() string {
 		b.WriteString(lipgloss.NewStyle().Width(cellW).Render(cell))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(brandStyle.Render("Recent activity") + "\n")
+	b.WriteString(brandStyle.Render("Recent activity"))
+	b.WriteString("\n")
 	if len(m.preds) == 0 && len(m.anomalies) == 0 {
 		b.WriteString(emptyStateStyle.Render("  ✓ All clear — no active predictions or anomalies"))
 	} else {
@@ -630,7 +672,9 @@ func (m controlModel) renderDashboard() string {
 		}
 	}
 	if m.config != nil {
-		b.WriteString("\n" + brandStyle.Render("Config") + "\n")
+		b.WriteString("\n")
+		b.WriteString(brandStyle.Render("Config"))
+		b.WriteString("\n")
 		b.WriteString(formatConfigSummary(m.config))
 	}
 	return b.String()
@@ -671,11 +715,19 @@ func (m controlModel) auditLines() []string {
 		return []string{emptyStateStyle.Render("No remediation records")}
 	}
 	var lines []string
-	lines = append(lines, mutedStyle.Render(fmt.Sprintf("%-10s %-28s %-8s %s", "STATUS", "ACTION", "TIER", "REASON")))
+	lines = append(lines, mutedStyle.Render(fmt.Sprintf("%-12s %-28s %-8s %s", "STATUS", "ACTION", "TIER", "REASON")))
 	for _, r := range m.audits {
 		action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
-		lines = append(lines, fmt.Sprintf("%-10s %-28s %-8s %s",
-			r.Status, trunc(action, 26), r.RiskTier, trunc(r.Reason, 40)))
+		status := string(r.Status)
+		// Make it explicit when the system rejected a plan vs an operator rejection.
+		if r.Status == models.AuditRejected {
+			low := strings.ToLower(strings.TrimSpace(r.Reason))
+			if !strings.Contains(low, "operator") && !strings.Contains(low, "kwctl") {
+				status = "auto_rejected"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%-12s %-28s %-8s %s",
+			trunc(status, 12), trunc(action, 26), r.RiskTier, trunc(r.Reason, 40)))
 	}
 	return lines
 }
@@ -684,13 +736,17 @@ func (m controlModel) renderList(lines []string, cursor, total int) string {
 	var b strings.Builder
 	for i, line := range lines {
 		if i == 0 {
-			b.WriteString(line + "\n")
+			b.WriteString(line)
+			b.WriteString("\n")
 			continue
 		}
 		if i-1 == cursor {
-			b.WriteString(listSelectedStyle.Render("› "+line) + "\n")
+			b.WriteString(listSelectedStyle.Render("› " + line))
+			b.WriteString("\n")
 		} else {
-			b.WriteString("  " + line + "\n")
+			b.WriteString("  ")
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 	}
 	if total > 0 {

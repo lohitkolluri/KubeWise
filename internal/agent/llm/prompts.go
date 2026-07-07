@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -49,6 +50,8 @@ CONSTRAINTS
 4. Never recommend deleting Deployments, StatefulSets, Services, Namespaces, or CRDs.
 5. noop is always a safe option — prefer it for transient metrics spikes or single-sample anomalies.
 6. Always include specific, quantified evidence from metrics AND investigation context.
+7. patch_resources MUST include at least one of: cpu_request, cpu_limit, memory_request, memory_limit. Never emit patch_resources with empty parameters.
+8. scale_replicas MUST include parameters.replicas (integer as string). If you can't justify a new replica count, do not choose scale_replicas.
 
 TARGET FORMAT (critical — validation will fail otherwise):
 - namespace: Kubernetes namespace ONLY (e.g. kw-test). Never put the pod name here.
@@ -70,7 +73,14 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary, investiga
 	if len(anomalies) == 0 {
 		b.WriteString("No active anomalies detected.\n")
 	} else {
-		for i, a := range anomalies {
+		// Token efficiency: only send the highest-signal anomalies.
+		// (The gate already filters; this is a second layer to bound prompt size.)
+		sorted := append([]models.AnomalyRecord(nil), anomalies...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Score > sorted[j].Score })
+		if len(sorted) > 12 {
+			sorted = sorted[:12]
+		}
+		for i, a := range sorted {
 			b.WriteString(fmt.Sprintf("%d. Entity: %s | Namespace: %s | Metric: %s | Score: %.2f | Pattern: %s | Status: %s\n",
 				i+1, sanitizeField(a.Entity), sanitizeField(a.Namespace), sanitizeField(a.MetricName),
 				a.Score, sanitizeField(a.Pattern), sanitizeField(a.Status)))
@@ -84,7 +94,14 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary, investiga
 
 	if investigation != "" {
 		b.WriteString("\n## Live Cluster Investigation (describe, events, logs)\n\n")
-		b.WriteString(investigation)
+		// Investigator already caps and compacts; this is a final hard bound.
+		const maxChars = 12000
+		if len(investigation) > maxChars {
+			b.WriteString(investigation[:maxChars])
+			b.WriteString("\n[truncated]\n")
+		} else {
+			b.WriteString(investigation)
+		}
 	}
 
 	b.WriteString("\n## Valid Targets (use exactly these namespace + target pairs)\n\n")

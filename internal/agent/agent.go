@@ -24,7 +24,7 @@ import (
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
 
-const remediationTimeout = 2 * time.Minute
+const remediationTimeout = 4 * time.Minute
 const maxForecastSeriesPerScrape = 32
 
 // Agent is the main orchestration loop: collect → detect → gate → store → correlate → remediate.

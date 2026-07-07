@@ -19,41 +19,153 @@ func RemediationSchema() json.RawMessage {
 				"additionalProperties": false
 			},
 			"action": {
-				"type": "object",
-				"properties": {
-					"type": {
-						"type": "string",
-						"enum": ["restart_pod", "scale_replicas", "rollback_deployment", "patch_resources", "delete_pod", "escalate", "noop"],
-						"description": "Primary action (first step) for backward compatibility"
+				"description": "Primary action (must mirror first non-wait step for compatibility).",
+				"oneOf": [
+					{
+						"type": "object",
+						"properties": {
+							"type": { "const": "patch_resources" },
+							"target": { "type": "string" },
+							"namespace": { "type": "string" },
+							"parameters": {
+								"type": "object",
+								"description": "For patch_resources, include at least one resource field.",
+								"properties": {
+									"cpu_request": { "type": "string" },
+									"cpu_limit": { "type": "string" },
+									"memory_request": { "type": "string" },
+									"memory_limit": { "type": "string" }
+								},
+								"minProperties": 1,
+								"additionalProperties": false
+							},
+							"rationale": { "type": "string" }
+						},
+						"required": ["type", "target", "namespace", "parameters", "rationale"],
+						"additionalProperties": false
 					},
-					"target": { "type": "string", "description": "Name of the target resource" },
-					"namespace": { "type": "string", "description": "Kubernetes namespace of the target" },
-					"parameters": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional action parameters" },
-					"rationale": { "type": "string", "description": "Why this action addresses the root cause" }
-				},
-				"required": ["type", "target", "namespace", "rationale"],
-				"additionalProperties": false
+					{
+						"type": "object",
+						"properties": {
+							"type": { "const": "scale_replicas" },
+							"target": { "type": "string" },
+							"namespace": { "type": "string" },
+							"parameters": {
+								"type": "object",
+								"properties": {
+									"replicas": { "type": "string", "description": "Desired replica count (integer as string)" },
+									"deployment": { "type": "string", "description": "Optional deployment name when target is a pod" }
+								},
+								"required": ["replicas"],
+								"additionalProperties": false
+							},
+							"rationale": { "type": "string" }
+						},
+						"required": ["type", "target", "namespace", "parameters", "rationale"],
+						"additionalProperties": false
+					},
+					{
+						"type": "object",
+						"properties": {
+							"type": {
+								"type": "string",
+								"enum": ["restart_pod", "rollback_deployment", "delete_pod", "escalate", "noop"],
+								"description": "Primary action (first step) for backward compatibility"
+							},
+							"target": { "type": "string", "description": "Name of the target resource" },
+							"namespace": { "type": "string", "description": "Kubernetes namespace of the target" },
+							"parameters": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional action parameters", "default": {} },
+							"rationale": { "type": "string", "description": "Why this action addresses the root cause" }
+						},
+						"required": ["type", "target", "namespace", "rationale"],
+						"additionalProperties": false
+					}
+				]
 			},
 			"steps": {
 				"type": "array",
 				"description": "Ordered multi-step runbook (max 5 steps). Use when one action is insufficient.",
 				"items": {
-					"type": "object",
-					"properties": {
-						"order": { "type": "integer", "description": "Step number starting at 1" },
-						"type": {
-							"type": "string",
-							"enum": ["restart_pod", "scale_replicas", "rollback_deployment", "patch_resources", "delete_pod", "wait", "escalate", "noop"],
-							"description": "Step action type; use wait to pause between steps"
+					"oneOf": [
+						{
+							"type": "object",
+							"properties": {
+								"order": { "type": "integer" },
+								"type": { "const": "wait" },
+								"target": { "type": "string" },
+								"namespace": { "type": "string" },
+								"parameters": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+								"rationale": { "type": "string" },
+								"wait_seconds": { "type": "integer" }
+							},
+							"required": ["order", "type", "target", "namespace", "rationale"],
+							"additionalProperties": false
 						},
-						"target": { "type": "string" },
-						"namespace": { "type": "string" },
-						"parameters": { "type": "object", "additionalProperties": { "type": "string" } },
-						"rationale": { "type": "string" },
-						"wait_seconds": { "type": "integer", "description": "Pause after this step completes" }
-					},
-					"required": ["order", "type", "target", "namespace", "rationale"],
-					"additionalProperties": false
+						{
+							"type": "object",
+							"properties": {
+								"order": { "type": "integer" },
+								"type": { "const": "patch_resources" },
+								"target": { "type": "string" },
+								"namespace": { "type": "string" },
+								"parameters": {
+									"type": "object",
+									"properties": {
+										"cpu_request": { "type": "string" },
+										"cpu_limit": { "type": "string" },
+										"memory_request": { "type": "string" },
+										"memory_limit": { "type": "string" }
+									},
+									"minProperties": 1,
+									"additionalProperties": false
+								},
+								"rationale": { "type": "string" },
+								"wait_seconds": { "type": "integer" }
+							},
+							"required": ["order", "type", "target", "namespace", "parameters", "rationale"],
+							"additionalProperties": false
+						},
+						{
+							"type": "object",
+							"properties": {
+								"order": { "type": "integer" },
+								"type": { "const": "scale_replicas" },
+								"target": { "type": "string" },
+								"namespace": { "type": "string" },
+								"parameters": {
+									"type": "object",
+									"properties": {
+										"replicas": { "type": "string" },
+										"deployment": { "type": "string" }
+									},
+									"required": ["replicas"],
+									"additionalProperties": false
+								},
+								"rationale": { "type": "string" },
+								"wait_seconds": { "type": "integer" }
+							},
+							"required": ["order", "type", "target", "namespace", "parameters", "rationale"],
+							"additionalProperties": false
+						},
+						{
+							"type": "object",
+							"properties": {
+								"order": { "type": "integer", "description": "Step number starting at 1" },
+								"type": {
+									"type": "string",
+									"enum": ["restart_pod", "rollback_deployment", "delete_pod", "escalate", "noop"],
+									"description": "Step action type"
+								},
+								"target": { "type": "string" },
+								"namespace": { "type": "string" },
+								"parameters": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+								"rationale": { "type": "string" },
+								"wait_seconds": { "type": "integer", "description": "Pause after this step completes" }
+							},
+							"required": ["order", "type", "target", "namespace", "rationale"],
+							"additionalProperties": false
+						}
+					]
 				}
 			},
 			"verification": {

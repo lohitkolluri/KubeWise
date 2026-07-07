@@ -62,13 +62,14 @@ func TestOOMPatternPredictsOOM(t *testing.T) {
 
 func TestOOMPatternMemoryFlat(t *testing.T) {
 	p := &OOMPattern{}
+	now := time.Now()
 	metrics := []MetricResult{
 		{
 			Name: "pod_memory_usage",
 			Values: []MetricPoint{
-				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
-				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
-				{Value: memBytes(0.3), Timestamp: time.Now(), Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: now, Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: now.Add(30 * time.Second), Labels: map[string]string{"pod": "web-1"}},
+				{Value: memBytes(0.3), Timestamp: now.Add(60 * time.Second), Labels: map[string]string{"pod": "web-1"}},
 			},
 		},
 	}
@@ -233,7 +234,11 @@ func TestTimeToFailureEstimates(t *testing.T) {
 }
 
 func TestPredictorRunPatterns(t *testing.T) {
-	pred := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	// Unit test expects immediate pattern emission; disable debounce here.
+	cfg.PatternPersistence = 1
+	cfg.PatternCooldownScrapes = 0
+	pred := NewPredictor(cfg)
 	pred.AddPattern(&OOMPattern{})
 	pred.AddPattern(&CrashLoopPattern{})
 	pred.AddPattern(&DegradationPattern{})

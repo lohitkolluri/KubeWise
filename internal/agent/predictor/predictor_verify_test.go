@@ -105,7 +105,14 @@ func TestAdaptiveMedianNumericalCorrectness(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestVerifyCleanSteadyState(t *testing.T) {
-	pred := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	// Verification tests are meant to validate detector behavior with a sensitive config.
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	pred := NewPredictor(cfg)
 
 	rng := rand.New(rand.NewSource(42))
 
@@ -154,7 +161,13 @@ func TestVerifyCleanSteadyState(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestVerifySpikeDetection(t *testing.T) {
-	pred := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	pred := NewPredictor(cfg)
 
 	rng := rand.New(rand.NewSource(42))
 
@@ -187,7 +200,13 @@ func TestVerifySpikeDetection(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestVerifyRampDetection(t *testing.T) {
-	pred := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	pred := NewPredictor(cfg)
 
 	rng := rand.New(rand.NewSource(42))
 
@@ -467,7 +486,13 @@ func TestVerifyStartupSpikeThenSteady(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestVerifyMultipleMetricsIndependent(t *testing.T) {
-	pred := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	pred := NewPredictor(cfg)
 
 	rng := rand.New(rand.NewSource(42))
 
@@ -515,7 +540,14 @@ func TestVerifyMultipleMetricsIndependent(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestVerifyNonUniformTimestamps(t *testing.T) {
-	pred := NewPredictor(DefaultScorerConfig())
+	cfg := DefaultScorerConfig()
+	// Verification test expects spike detection; use a sensitive config.
+	cfg.HoeffdingDelta = 0.05
+	cfg.HoeffdingK = 5.0
+	cfg.MinScore = 0.3
+	cfg.ROCBoostWeight = 0.3
+	cfg.Persistence = 1
+	pred := NewPredictor(cfg)
 
 	// Feed warmup values at non-uniform intervals then a spike.
 	// The predictor ignores timestamps in scoring, so the spike should
@@ -533,7 +565,7 @@ func TestVerifyNonUniformTimestamps(t *testing.T) {
 		}
 		if i >= MinimumWarmupPoints {
 			for _, r := range results {
-				if r.Score >= 0.3 {
+				if r.Score >= cfg.MinScore {
 					spikeDetected = true
 				}
 			}

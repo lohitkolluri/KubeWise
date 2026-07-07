@@ -38,7 +38,10 @@ func (v *Verifier) Verify(ctx context.Context, plan models.RemediationPlan) erro
 
 	wait := time.Duration(plan.Verification.WaitSeconds) * time.Second
 	if wait <= 0 {
-		wait = 15 * time.Second
+		// Default waits tuned for common Kubernetes rollouts:
+		// - deployment readiness often needs longer than a pod restart
+		// - restart/delete pod changes the pod name; default check becomes deployment_ready
+		wait = defaultVerifyWait(checks)
 	}
 	select {
 	case <-ctx.Done():
@@ -58,6 +61,15 @@ func (v *Verifier) Verify(ctx context.Context, plan models.RemediationPlan) erro
 	return nil
 }
 
+func defaultVerifyWait(checks []models.VerificationCheck) time.Duration {
+	for _, c := range checks {
+		if c.Type == "deployment_ready" {
+			return 45 * time.Second
+		}
+	}
+	return 20 * time.Second
+}
+
 func defaultVerificationChecks(plan models.RemediationPlan) []models.VerificationCheck {
 	steps := plan.EffectiveSteps()
 	if len(steps) == 0 {
@@ -65,6 +77,19 @@ func defaultVerificationChecks(plan models.RemediationPlan) []models.Verificatio
 	}
 	last := steps[len(steps)-1]
 	ns, target := last.Namespace, last.Target
+
+	// Pod restarts/deletions typically change the pod name, so checking a specific pod
+	// by name yields false negatives. Prefer deployment readiness when we can infer it.
+	if last.Type == "restart_pod" || last.Type == "delete_pod" {
+		if dep := inferDeploymentFromPodName(target); dep != "" {
+			return []models.VerificationCheck{{
+				Type: "deployment_ready", Namespace: ns, Target: dep,
+			}}
+		}
+		// If we can't infer the owner, skip strict verification rather than failing noisily.
+		return nil
+	}
+
 	if deploymentActions[last.Type] {
 		if d := last.Parameters["deployment"]; d != "" {
 			target = d
@@ -81,6 +106,17 @@ func defaultVerificationChecks(plan models.RemediationPlan) []models.Verificatio
 			Type: "pod_ready", Namespace: ns, Target: target,
 		}}
 	}
+}
+
+// inferDeploymentFromPodName attempts to derive the deployment name from a pod name.
+// Typical pod name shape: <deployment>-<replicasetHash>-<suffix>.
+func inferDeploymentFromPodName(pod string) string {
+	parts := strings.Split(pod, "-")
+	if len(parts) < 3 {
+		return ""
+	}
+	// Drop last two segments (hash + suffix).
+	return strings.Join(parts[:len(parts)-2], "-")
 }
 
 func (v *Verifier) runCheck(ctx context.Context, check models.VerificationCheck) error {

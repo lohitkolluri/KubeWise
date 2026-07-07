@@ -31,7 +31,7 @@ func NewProvider(cfg Config) (Provider, error) {
 		provider = "openrouter"
 	}
 	if cfg.Model == "" {
-		cfg.Model = defaultModel
+		cfg.Model = DefaultModel
 	}
 
 	switch provider {

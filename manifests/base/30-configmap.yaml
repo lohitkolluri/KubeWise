@@ -11,7 +11,7 @@ data:
     scrape_interval: 30s
     prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
     llm_provider: openrouter
-    llm_model: meta-llama/llama-3.1-8b-instruct
+    llm_model: google/gemini-2.0-flash-001
     # llm_provider: ollama
     # llm_base_url: http://ollama.ollama.svc.cluster.local:11434
     # llm_model: llama3.1:8b

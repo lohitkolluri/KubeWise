@@ -25,19 +25,21 @@ func (d *DegradationPattern) Match(metrics []MetricResult, events []models.Anoma
 				val = 1
 			}
 			ns, entity := splitEntityKey(entityKey)
-			confidence := 0.5 + val*0.1
+			confidence := 0.6 + val*0.15
 			if confidence > 0.9 {
 				confidence = 0.9
 			}
 			history := historyForEntity(notReadyResult.Values, entityKey)
-			matches = append(matches, PatternMatch{
-				Pattern:         "Degradation",
-				Confidence:      confidence,
-				Entity:          entity,
-				Namespace:       ns,
-				SuggestedAction: "Investigate pod readiness and resource constraints",
-				TimeToFailure:   estimateDegradationTimeToFailure(history, val),
-			})
+			if confidence >= 0.7 {
+				matches = append(matches, PatternMatch{
+					Pattern:         "Degradation",
+					Confidence:      confidence,
+					Entity:          entity,
+					Namespace:       ns,
+					SuggestedAction: "Investigate pod readiness and resource constraints",
+					TimeToFailure:   estimateDegradationTimeToFailure(history, val),
+				})
+			}
 		}
 	}
 
@@ -86,7 +88,7 @@ func (d *DegradationPattern) Match(metrics []MetricResult, events []models.Anoma
 			ns, name := models.ParseEntity(pod)
 			matches = append(matches, PatternMatch{
 				Pattern:         "Degradation",
-				Confidence:      0.6,
+				Confidence:      0.7,
 				Entity:          name,
 				Namespace:       ns,
 				SuggestedAction: "Check pod logs and describe for failure details",

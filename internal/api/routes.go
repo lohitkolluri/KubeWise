@@ -3,13 +3,16 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/lohitkolluri/KubeWise/internal/version"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /api/v1/predictions", s.handlePredictions)
 	mux.HandleFunc("GET /api/v1/anomalies", s.handleAnomalies)
@@ -19,20 +22,33 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	s.registerRemediationRoutes(mux)
 	mux.HandleFunc("GET /api/v1/remediations", s.handleRemediations)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/v1/audit/{id}", s.handleAuditGet)
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
-	mux.HandleFunc("GET /", s.handleNotFound)
+	mux.HandleFunc("GET /", s.handleRoot)
+	s.registerMetrics(mux)
 }
 
-func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"name": "kubewise-agent", "version": "0.2.0"})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"name":    version.AgentName,
+		"version": version.Version,
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.Ping(); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +162,42 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := s.store.ListAuditRecords(limit)
+	// Optional filters:
+	// - status=pending|executed|rejected|failed|dry-run|verified|verify_failed|escalated
+	// - since=RFC3339 timestamp
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
+
+	var records []models.AuditRecord
+	if status != "" && since != "" {
+		// Prefer "since" semantics; filter status in-memory for now.
+		ts, err := time.Parse(time.RFC3339, since)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid since: must be RFC3339")
+			return
+		}
+		all, err := s.store.ListAuditRecordsSince(ts, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list audit records: %v", err))
+			return
+		}
+		for _, rec := range all {
+			if strings.EqualFold(string(rec.Status), status) {
+				records = append(records, rec)
+			}
+		}
+	} else if status != "" {
+		records, err = s.store.ListAuditRecordsByStatus(models.AuditStatus(status), limit)
+	} else if since != "" {
+		ts, err := time.Parse(time.RFC3339, since)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid since: must be RFC3339")
+			return
+		}
+		records, err = s.store.ListAuditRecordsSince(ts, limit)
+	} else {
+		records, err = s.store.ListAuditRecords(limit)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list audit records: %v", err))
 		return
@@ -155,4 +206,18 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		records = []models.AuditRecord{}
 	}
 	writeJSON(w, http.StatusOK, sanitizeAuditRecords(records))
+}
+
+func (s *Server) handleAuditGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing audit id")
+		return
+	}
+	rec, err := s.store.GetAuditRecord(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sanitizeAuditRecords([]models.AuditRecord{*rec})[0])
 }

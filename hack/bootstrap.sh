@@ -68,15 +68,38 @@ install_kwctl_cli() {
 }
 
 local_dev_install() {
-  require_cmd kind docker kubectl make
-  export KUBEWISE_NAMESPACE="${NAMESPACE}"
-  if ! kind get clusters 2>/dev/null | grep -qx "${KIND_CLUSTER:-kubewise}"; then
-  log "creating kind cluster (first run may take a few minutes)"
-    bash "${SCRIPT_DIR}/kind-cluster.sh"
+  require_cmd kind docker kubectl make helm
+  if ! docker info >/dev/null 2>&1; then
+    die "Docker is not running. Start Docker Desktop, then run: ./hack/bootstrap.sh --local --yes"
   fi
+  export KUBEWISE_NAMESPACE="${NAMESPACE}"
+  ensure_kind_cluster
   make -C "${ROOT_DIR}" deploy-dev OVERLAY=dev
+  apply_secret
+  patch_prometheus_if_found
+  if [[ -n "${OPENROUTER_API_KEY:-}" || -n "${KUBEWISE_API_TOKEN:-}" ]]; then
+    log "restarting agent to pick up secrets"
+    kubectl -n "${NAMESPACE}" rollout restart deployment/kubewise-agent
+    kubectl -n "${NAMESPACE}" rollout status deployment/kubewise-agent --timeout=180s
+  fi
   save_kwctl_profile
   print_done
+  echo ""
+  echo "  Quick start:  kwctl up && kwctl ui"
+}
+
+ensure_kind_cluster() {
+  local cluster="${KIND_CLUSTER:-kubewise}"
+  if kind get clusters 2>/dev/null | grep -qx "${cluster}"; then
+    if kubectl cluster-info >/dev/null 2>&1; then
+      log "using existing kind cluster ${cluster}"
+      return 0
+    fi
+    warn "kind cluster ${cluster} is not reachable — recreating"
+    kind delete cluster --name "${cluster}" || true
+  fi
+  log "creating kind cluster (first run may take several minutes)"
+  bash "${SCRIPT_DIR}/kind-cluster.sh"
 }
 
 remote_cluster_install() {
@@ -138,8 +161,14 @@ patch_prometheus_if_found() {
 }
 
 save_kwctl_profile() {
-  command -v kwctl >/dev/null 2>&1 || return 0
-  kwctl profile set \
+  local kwctl_bin=""
+  if [[ -x "${ROOT_DIR}/bin/kwctl" ]]; then
+    kwctl_bin="${ROOT_DIR}/bin/kwctl"
+  elif command -v kwctl >/dev/null 2>&1; then
+    kwctl_bin="$(command -v kwctl)"
+  fi
+  [[ -n "${kwctl_bin}" ]] || return 0
+  "${kwctl_bin}" profile set \
     "agent-url=http://localhost:8080" \
     "agent-namespace=${NAMESPACE}" 2>/dev/null || true
 }
@@ -151,13 +180,15 @@ print_done() {
 ║  KubeWise installed                                      ║
 ╚══════════════════════════════════════════════════════════╝
 
-  1) Port-forward (keep this running):
-     kubectl -n ${NAMESPACE} port-forward svc/kubewise-agent 8080:8080
+  1) Connect to the agent API:
+     kwctl up
 
   2) Open the control center:
      kwctl ui
 
   Or verify: kwctl connect
+
+  (Manual port-forward: kubectl -n ${NAMESPACE} port-forward svc/kubewise-agent 8080:8080)
 
 EOF
 }

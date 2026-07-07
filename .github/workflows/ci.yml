@@ -26,12 +26,30 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.1.6
+
       - name: Test
         run: go test ./... -count=1 -race -timeout=5m
 
-  docker-agent:
+  helm:
     runs-on: ubuntu-latest
     needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: |
+          helm lint ./charts/kubewise
+          helm template kubewise ./charts/kubewise >/dev/null
+
+  docker-agent:
+    runs-on: ubuntu-latest
+    needs: [test, helm]
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +66,7 @@ jobs:
 
   docker-forecaster:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, helm]
     steps:
       - uses: actions/checkout@v4
 
@@ -61,3 +79,7 @@ jobs:
           push: false
           platforms: linux/amd64
           tags: kubewise/forecaster:ci
+          load: true
+
+      - name: Forecaster unit tests
+        run: docker run --rm kubewise/forecaster:ci python -m unittest test_server.py -v

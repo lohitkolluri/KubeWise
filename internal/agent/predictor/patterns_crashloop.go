@@ -66,7 +66,7 @@ func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.Anomaly
 			confidence = 0.95
 		}
 
-		if confidence >= 0.5 {
+		if confidence >= 0.7 {
 			matches = append(matches, PatternMatch{
 				Pattern:         "CrashLoopRisk",
 				Confidence:      confidence,
