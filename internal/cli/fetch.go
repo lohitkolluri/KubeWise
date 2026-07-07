@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -158,6 +161,46 @@ func putAgentConfig(cfg *models.AgentConfig) error {
 	return err
 }
 
+func fetchHealthScores(namespace string) ([]models.HealthScore, error) {
+	path := "/api/v1/health"
+	if namespace != "" {
+		path += "?namespace=" + url.QueryEscape(namespace)
+	}
+	body, _, err := agentGet(path)
+	if err != nil {
+		return nil, err
+	}
+	var scores []models.HealthScore
+	if err := json.Unmarshal(body, &scores); err != nil {
+		return nil, fmt.Errorf("parse health scores: %w", err)
+	}
+	return scores, nil
+}
+
+func fetchHealthSummary() (*models.ClusterHealthSummary, error) {
+	body, _, err := agentGet("/api/v1/health/summary")
+	if err != nil {
+		return nil, err
+	}
+	var summary models.ClusterHealthSummary
+	if err := json.Unmarshal(body, &summary); err != nil {
+		return nil, fmt.Errorf("parse health summary: %w", err)
+	}
+	return &summary, nil
+}
+
+func fetchAccuracy() (*models.AccuracySnapshot, error) {
+	body, _, err := agentGet("/api/v1/accuracy")
+	if err != nil {
+		return nil, err
+	}
+	var snap models.AccuracySnapshot
+	if err := json.Unmarshal(body, &snap); err != nil {
+		return nil, fmt.Errorf("parse accuracy: %w", err)
+	}
+	return &snap, nil
+}
+
 func fetchRemediationMode() (models.RemediationModeView, error) {
 	body, _, err := agentGet("/api/v1/remediation/mode")
 	if err != nil {
@@ -232,4 +275,248 @@ func buildLimitQuery(limit int, extra url.Values) string {
 		return ""
 	}
 	return "?" + q.Encode()
+}
+
+// ── Parallel refresh ──
+
+type fetchResult struct {
+	status     agentStatus
+	healthOK   bool
+	err        error
+	preds      []models.PredictionResult
+	anomalies  []models.AnomalyRecord
+	audits     []models.AuditRecord
+	config     *models.AgentConfig
+	remMode    models.RemediationModeView
+	pending    []models.AuditRecord
+	logs       string
+	lastUpdate time.Time
+
+	// Health & Accuracy
+	healthScores []models.HealthScore
+	healthSum    *models.ClusterHealthSummary
+	accSnap      *models.AccuracySnapshot
+
+	// Per-tab errors
+	predErr   error
+	anomErr   error
+	auditErr  error
+	configErr error
+	remErr    error
+	pendErr   error
+	logsErr   error
+	healthErr error
+	accErr    error
+}
+
+func fetchAll(auditStatus, auditSince string) fetchResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var (
+		wg      sync.WaitGroup
+		result  fetchResult
+		mu      sync.Mutex
+	)
+
+	setErr := func(field *error, err error) {
+		mu.Lock()
+		*field = err
+		mu.Unlock()
+	}
+
+	// Launch all fetches in parallel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		st, err := fetchStatus()
+		mu.Lock()
+		result.status = st
+		result.err = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := fetchHealth()
+		mu.Lock()
+		result.healthOK = err == nil
+		if err != nil {
+			result.err = err
+		}
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.predErr, ctx.Err())
+			return
+		default:
+		}
+		preds, err := fetchPredictions()
+		mu.Lock()
+		result.preds = preds
+		result.predErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.anomErr, ctx.Err())
+			return
+		default:
+		}
+		anomalies, err := fetchAnomalies(30)
+		mu.Lock()
+		result.anomalies = anomalies
+		result.anomErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.auditErr, ctx.Err())
+			return
+		default:
+		}
+		audits, err := fetchAuditFiltered(25, auditStatus, auditSince, "")
+		mu.Lock()
+		result.audits = audits
+		result.auditErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.configErr, ctx.Err())
+			return
+		default:
+		}
+		cfg, err := fetchAgentConfig()
+		if err != nil && strings.Contains(err.Error(), "no config") {
+			cfg = nil
+			err = nil
+		}
+		mu.Lock()
+		result.config = cfg
+		result.configErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.remErr, ctx.Err())
+			return
+		default:
+		}
+		mode, err := fetchRemediationMode()
+		mu.Lock()
+		result.remMode = mode
+		result.remErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.pendErr, ctx.Err())
+			return
+		default:
+		}
+		pending, err := fetchApprovals(30)
+		mu.Lock()
+		result.pending = pending
+		result.pendErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.logsErr, ctx.Err())
+			return
+		default:
+		}
+		logs, err := fetchAgentLogs(80)
+		mu.Lock()
+		result.logs = logs
+		result.logsErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.healthErr, ctx.Err())
+			return
+		default:
+		}
+		scores, err := fetchHealthScores("")
+		mu.Lock()
+		result.healthScores = scores
+		result.healthErr = err
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.healthErr, ctx.Err())
+			return
+		default:
+		}
+		sum, err := fetchHealthSummary()
+		mu.Lock()
+		result.healthSum = sum
+		if err != nil {
+			result.healthErr = err
+		}
+		mu.Unlock()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			setErr(&result.accErr, ctx.Err())
+			return
+		default:
+		}
+		snap, err := fetchAccuracy()
+		mu.Lock()
+		result.accSnap = snap
+		if err != nil {
+			result.accErr = err
+		}
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+	result.lastUpdate = time.Now()
+	return result
 }
