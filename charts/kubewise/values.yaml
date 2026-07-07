@@ -39,7 +39,7 @@ persistence:
 
 agent:
   scrapeInterval: 30s
-  prometheusAddress: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+  prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
   llmProvider: openrouter
   llmModel: openrouter/gpt-oss-120b
   llmBaseURL: ""
