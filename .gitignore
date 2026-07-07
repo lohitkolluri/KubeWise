@@ -60,3 +60,4 @@ data/db/
 
 # Codex / OpenCode agent session state
 .omo/
+.serena/
