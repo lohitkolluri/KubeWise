@@ -8,8 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
+
+	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 var (
@@ -64,7 +65,7 @@ func runPredictWatch(cmd *cobra.Command) error {
 				continue
 			}
 			seen[key] = struct{}{}
-			fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s %s score=%.2f eta=%.0fs %s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s %s score=%.2f eta=%.0fs %s\n",
 				time.Now().Format("15:04:05"), p.Type, p.Entity, p.Score, p.ETASeconds, p.Action)
 		}
 		select {
@@ -86,14 +87,14 @@ func renderPredictions(cmd *cobra.Command, preds []models.PredictionResult) erro
 	preds = filterPredictions(preds)
 	return writeOutput(cmd.OutOrStdout(), outputFormat, preds, func() error {
 		if len(preds) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "No active predictions.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No active predictions.")
 			return nil
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-10s %s\n",
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-10s %s\n",
 			"TYPE", "ENTITY", "SCORE", "ETA(s)", "ACTION")
-		fmt.Fprintln(cmd.OutOrStdout(), repeatLine(80))
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), repeatLine(80))
 		for _, p := range preds {
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-10.0f %s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-10.0f %s\n",
 				trunc(p.Type, 10), trunc(p.Entity, 22), p.Score, p.ETASeconds, trunc(p.Action, 30))
 		}
 		return nil

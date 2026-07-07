@@ -26,7 +26,7 @@ func writeOutput(w io.Writer, format string, v any, tableFn func() error) error 
 	case "yaml":
 		enc := yaml.NewEncoder(w)
 		enc.SetIndent(2)
-		defer enc.Close()
+		defer func() { _ = enc.Close() }()
 		return enc.Encode(v)
 	default:
 		return tableFn()

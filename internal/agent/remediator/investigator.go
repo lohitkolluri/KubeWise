@@ -76,7 +76,7 @@ func (inv *Investigator) Gather(ctx context.Context, anomalies []models.AnomalyR
 }
 
 func (inv *Investigator) writePodInvestigation(ctx context.Context, b *strings.Builder, namespace, name string) {
-	b.WriteString(fmt.Sprintf("WORKLOAD %s/%s\n", namespace, name))
+	fmt.Fprintf(b, "WORKLOAD %s/%s\n", namespace, name)
 
 	pod, err := inv.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -84,27 +84,27 @@ func (inv *Investigator) writePodInvestigation(ctx context.Context, b *strings.B
 			inv.writeNodeSummary(b, node)
 			return
 		}
-		b.WriteString(fmt.Sprintf("- describe: unavailable (%v)\n", err))
+		fmt.Fprintf(b, "- describe: unavailable (%v)\n", err)
 		return
 	}
-	b.WriteString(fmt.Sprintf("- phase: %s\n", pod.Status.Phase))
+	fmt.Fprintf(b, "- phase: %s\n", pod.Status.Phase)
 	for _, cond := range pod.Status.Conditions {
 		if cond.Status != corev1.ConditionTrue {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("- condition: %s=%s (%s)\n", cond.Type, cond.Status, cond.Reason))
+		fmt.Fprintf(b, "- condition: %s=%s (%s)\n", cond.Type, cond.Status, cond.Reason)
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
 		state := containerStateSummary(cs)
-		b.WriteString(fmt.Sprintf("- container %s: ready=%v restarts=%d %s\n",
-			cs.Name, cs.Ready, cs.RestartCount, state))
+		fmt.Fprintf(b, "- container %s: ready=%v restarts=%d %s\n",
+			cs.Name, cs.Ready, cs.RestartCount, state)
 	}
 
 	events := inv.listPodEvents(ctx, namespace, name)
 	if len(events) > 0 {
 		b.WriteString("- recent events:\n")
 		for _, e := range events {
-			b.WriteString(fmt.Sprintf("  - [%s] %s: %s\n", e.Reason, e.Type, truncate(e.Message, 200)))
+			fmt.Fprintf(b, "  - [%s] %s: %s\n", e.Reason, e.Type, truncate(e.Message, 200))
 		}
 	}
 
@@ -115,12 +115,12 @@ func (inv *Investigator) writePodInvestigation(ctx context.Context, b *strings.B
 }
 
 func (inv *Investigator) writeNodeSummary(b *strings.Builder, node *corev1.Node) {
-	b.WriteString(fmt.Sprintf("NODE %s\n", node.Name))
+	fmt.Fprintf(b, "NODE %s\n", node.Name)
 	for _, cond := range node.Status.Conditions {
 		if cond.Status != corev1.ConditionTrue {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("- condition: %s=%s (%s)\n", cond.Type, cond.Status, cond.Reason))
+		fmt.Fprintf(b, "- condition: %s=%s (%s)\n", cond.Type, cond.Status, cond.Reason)
 	}
 	b.WriteString("\n")
 }

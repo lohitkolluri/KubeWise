@@ -81,9 +81,9 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary, investiga
 			sorted = sorted[:12]
 		}
 		for i, a := range sorted {
-			b.WriteString(fmt.Sprintf("%d. Entity: %s | Namespace: %s | Metric: %s | Score: %.2f | Pattern: %s | Status: %s\n",
+			fmt.Fprintf(&b, "%d. Entity: %s | Namespace: %s | Metric: %s | Score: %.2f | Pattern: %s | Status: %s\n",
 				i+1, sanitizeField(a.Entity), sanitizeField(a.Namespace), sanitizeField(a.MetricName),
-				a.Score, sanitizeField(a.Pattern), sanitizeField(a.Status)))
+				a.Score, sanitizeField(a.Pattern), sanitizeField(a.Status))
 		}
 	}
 
@@ -119,8 +119,8 @@ func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary, investiga
 			continue
 		}
 		seen[key] = struct{}{}
-		b.WriteString(fmt.Sprintf("- namespace=%s target=%s (pattern: %s, score: %.2f)\n",
-			sanitizeField(ns), sanitizeField(name), sanitizeField(a.Pattern), a.Score))
+		fmt.Fprintf(&b, "- namespace=%s target=%s (pattern: %s, score: %.2f)\n",
+			sanitizeField(ns), sanitizeField(name), sanitizeField(a.Pattern), a.Score)
 	}
 
 	b.WriteString("\n\nProduce a remediation plan with diagnosis, optional multi-step runbook (steps), and verification checks. Base root cause analysis on metrics AND investigation data above.")
@@ -142,8 +142,8 @@ func FormatMetricContext(summaries []MetricSummary) string {
 	var b strings.Builder
 	b.WriteString("Recent metric samples:\n")
 	for _, s := range summaries {
-		b.WriteString(fmt.Sprintf("- %s: %d samples, last value %.2f (trend: %s)\n",
-			s.Name, s.SampleCount, s.LastValue, s.Trend))
+		fmt.Fprintf(&b, "- %s: %d samples, last value %.2f (trend: %s)\n",
+			s.Name, s.SampleCount, s.LastValue, s.Trend)
 	}
 	return b.String()
 }

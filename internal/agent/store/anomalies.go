@@ -13,7 +13,7 @@ import (
 )
 
 func anomalyTimeIndexKey(t *time.Time, id string) []byte {
-	var inv uint64 = ^uint64(0)
+	var inv = ^uint64(0)
 	if t != nil && !t.IsZero() {
 		inv = ^uint64(t.UnixNano())
 	}
@@ -293,10 +293,10 @@ func (s *Store) RebuildAnomalyIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
 			return err
 		}
-		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAnomalyIndex)

@@ -194,8 +194,8 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	} else if status != "" {
 		records, err = s.store.ListAuditRecordsByStatus(models.AuditStatus(status), limit)
 	} else if since != "" {
-		ts, err := time.Parse(time.RFC3339, since)
-		if err != nil {
+		ts, parseErr := time.Parse(time.RFC3339, since)
+		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, "invalid since: must be RFC3339")
 			return
 		}

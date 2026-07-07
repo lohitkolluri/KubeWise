@@ -55,7 +55,7 @@ func (p *OllamaProvider) ValidateKey(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ollama unreachable at %s: %w", p.baseURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("ollama tags: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -97,7 +97,7 @@ func (p *OllamaProvider) StructuredOutput(ctx context.Context, systemPrompt, use
 	if err != nil {
 		return fmt.Errorf("ollama chat: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

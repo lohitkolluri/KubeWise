@@ -5,9 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 func init() {
@@ -39,21 +40,21 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	cfg, err := fetchAgentConfig()
 	if err != nil {
 		if strings.Contains(err.Error(), "no config") {
-			fmt.Fprintln(cmd.OutOrStdout(), err.Error())
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), err.Error())
 			return nil
 		}
 		return err
 	}
 	return writeOutput(cmd.OutOrStdout(), outputFormat, cfg, func() error {
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Scrape Interval:", cfg.ScrapeInterval)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Prometheus:", cfg.PrometheusAddress)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "LLM Provider:", cfg.LLMProvider)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "LLM Model:", cfg.LLMModel)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Remediation Mode:", cfg.Remediation.Mode)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %v\n", "Dry Run:", cfg.Remediation.DryRun)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-25s %d\n", "Rate Limit:", cfg.Remediation.RateLimit)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Scrape Interval:", cfg.ScrapeInterval)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Prometheus:", cfg.PrometheusAddress)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "LLM Provider:", cfg.LLMProvider)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "LLM Model:", cfg.LLMModel)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Remediation Mode:", cfg.Remediation.Mode)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %v\n", "Dry Run:", cfg.Remediation.DryRun)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %d\n", "Rate Limit:", cfg.Remediation.RateLimit)
 		if cfg.Remediation.MinConfidence > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "%-25s %.2f\n", "Min Confidence:", cfg.Remediation.MinConfidence)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %.2f\n", "Min Confidence:", cfg.Remediation.MinConfidence)
 		}
 		return nil
 	})
@@ -77,7 +78,7 @@ var configSetCmd = &cobra.Command{
 		if err := putAgentConfig(cfg); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Config updated. Restart the agent pod to apply runtime changes.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Config updated. Restart the agent pod to apply runtime changes.")
 		return nil
 	},
 }
@@ -101,7 +102,7 @@ var configApplyCmd = &cobra.Command{
 		if err := putAgentConfig(&cfg); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Config applied. Restart the agent pod to apply runtime changes.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Config applied. Restart the agent pod to apply runtime changes.")
 		return nil
 	},
 }
@@ -156,7 +157,7 @@ Examples:
 		if err := os.WriteFile(configInitFile, data, 0o600); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", configInitFile)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", configInitFile)
 		return nil
 	},
 }

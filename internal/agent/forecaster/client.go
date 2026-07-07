@@ -9,9 +9,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/lohitkolluri/KubeWise/internal/agent/forecaster/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/lohitkolluri/KubeWise/internal/agent/forecaster/pb"
 )
 
 // DefaultAddress is the default sidecar gRPC address.

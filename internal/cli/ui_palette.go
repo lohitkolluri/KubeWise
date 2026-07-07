@@ -11,8 +11,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/sahilm/fuzzy"
+
+	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 type palettePhase int
@@ -577,6 +578,7 @@ func (m *controlModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+//nolint:unused
 func (m controlModel) renderPalette() string {
 	w := m.width - 8
 	if w < 40 {

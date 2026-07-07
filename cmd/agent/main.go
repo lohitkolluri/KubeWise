@@ -17,7 +17,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer rt.Store.Close()
+	defer func() {
+		if err := rt.Store.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "error closing store: %v\n", err)
+		}
+	}()
 
 	agt, err := agent.NewAgent(
 		rt.Store,

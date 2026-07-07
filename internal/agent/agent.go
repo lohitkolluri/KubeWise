@@ -255,7 +255,9 @@ func (a *Agent) Stop() {
 			a.k8sCancel()
 		}
 		if a.forecaster != nil {
-			a.forecaster.Close()
+			if err := a.forecaster.Close(); err != nil {
+				log.Printf("agent: forecaster close error: %v", err)
+			}
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

@@ -29,14 +29,14 @@ var authShowCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		p := activeProfile()
 		path, _ := profilePath()
-		fmt.Fprintf(cmd.OutOrStdout(), "File:   %s\n", path)
-		fmt.Fprintf(cmd.OutOrStdout(), "Agent:  %s\n", p.AgentURL)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "File:   %s\n", path)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Agent:  %s\n", p.AgentURL)
 		if p.APIToken != "" {
-			fmt.Fprintln(cmd.OutOrStdout(), "Token:  (set)")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Token:  (set)")
 		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), "Token:  (not set)")
-			fmt.Fprintln(cmd.OutOrStdout(), "\nSet one with:")
-			fmt.Fprintln(cmd.OutOrStdout(), "  kwctl auth set-token --stdin")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Token:  (not set)")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nSet one with:")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  kwctl auth set-token --stdin")
 		}
 		return nil
 	},
@@ -80,7 +80,7 @@ Examples:
 		if err := setProfileField(profileName, "api-token", tok); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "API token saved in profile.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "API token saved in profile.")
 		return nil
 	},
 }
@@ -92,7 +92,7 @@ var authUnsetTokenCmd = &cobra.Command{
 		if err := setProfileField(profileName, "api-token", ""); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "API token removed from profile.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "API token removed from profile.")
 		return nil
 	},
 }

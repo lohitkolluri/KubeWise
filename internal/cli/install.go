@@ -86,7 +86,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	if err := kc.PingCluster(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "✓ Kubernetes cluster reachable")
+	_, _ = fmt.Fprintln(out, "✓ Kubernetes cluster reachable")
 
 	if installHelm {
 		promURL := ""
@@ -94,18 +94,18 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
 				promURL = url
 			} else if !installYes {
-				fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — set agent.prometheusAddress after install\n", installPrometheusNS)
+				_, _ = fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — set agent.prometheusAddress after install\n", installPrometheusNS)
 			}
 		}
 		if err := applyHelmInstall(out, promURL); err != nil {
 			return err
 		}
-		fmt.Fprintln(out, "✓ Helm release installed")
+		_, _ = fmt.Fprintln(out, "✓ Helm release installed")
 	} else {
 		if err := applyInstallManifests(out); err != nil {
 			return err
 		}
-		fmt.Fprintln(out, "✓ Manifests applied")
+		_, _ = fmt.Fprintln(out, "✓ Manifests applied")
 
 		if err := applyInstallSecret(); err != nil {
 			return err
@@ -114,29 +114,29 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		if !installSkipPrometheus {
 			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
 				if err := kc.PatchConfigMapPrometheus(ctx, agentNS, url); err != nil {
-					fmt.Fprintf(out, "warning: could not patch Prometheus URL: %v\n", err)
+					_, _ = fmt.Fprintf(out, "warning: could not patch Prometheus URL: %v\n", err)
 				} else {
-					fmt.Fprintf(out, "✓ Prometheus detected: %s\n", url)
+					_, _ = fmt.Fprintf(out, "✓ Prometheus detected: %s\n", url)
 				}
 			} else if !installYes {
-				fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — metrics collection may fail until configured\n", installPrometheusNS)
-				fmt.Fprintln(out, "  install Prometheus or run: kwctl config set prometheus_address http://...")
+				_, _ = fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — metrics collection may fail until configured\n", installPrometheusNS)
+				_, _ = fmt.Fprintln(out, "  install Prometheus or run: kwctl config set prometheus_address http://...")
 			}
 		}
 	}
 
-	fmt.Fprintln(out, "… waiting for agent deployment")
+	_, _ = fmt.Fprintln(out, "… waiting for agent deployment")
 	waitCtx, waitCancel := context.WithTimeout(ctx, installWaitTimeout)
 	defer waitCancel()
 	if err := kc.WaitForDeploymentAvailable(waitCtx, agentNS, agentSvc); err != nil {
 		return fmt.Errorf("agent not ready: %w", err)
 	}
-	fmt.Fprintln(out, "✓ Agent is running")
+	_, _ = fmt.Fprintln(out, "✓ Agent is running")
 
 	if err := saveInstallProfile(); err != nil {
-		fmt.Fprintf(out, "warning: could not save kwctl profile: %v\n", err)
+		_, _ = fmt.Fprintf(out, "warning: could not save kwctl profile: %v\n", err)
 	} else {
-		fmt.Fprintln(out, "✓ kwctl profile saved (~/.config/kwctl/config.yaml)")
+		_, _ = fmt.Fprintln(out, "✓ kwctl profile saved (~/.config/kwctl/config.yaml)")
 	}
 
 	printInstallNextSteps(out)
@@ -159,7 +159,7 @@ func runLocalInstall(out io.Writer) error {
 		return err
 	}
 	if err := saveInstallProfile(); err != nil {
-		fmt.Fprintf(out, "warning: could not save kwctl profile: %v\n", err)
+		_, _ = fmt.Fprintf(out, "warning: could not save kwctl profile: %v\n", err)
 	}
 	printInstallNextSteps(out)
 	return nil
@@ -207,7 +207,7 @@ func applyHelmInstall(out io.Writer, prometheusURL string) error {
 			chart = fmt.Sprintf("https://github.com/lohitkolluri/KubeWise/charts/kubewise?ref=%s", installRef)
 		}
 	}
-	fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
+	_, _ = fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
 
 	args := []string{
 		"upgrade", "--install", "kubewise", chart,
@@ -216,7 +216,7 @@ func applyHelmInstall(out io.Writer, prometheusURL string) error {
 	}
 	if prometheusURL != "" {
 		args = append(args, "--set", "agent.prometheusAddress="+prometheusURL)
-		fmt.Fprintf(out, "✓ Prometheus detected: %s\n", prometheusURL)
+		_, _ = fmt.Fprintf(out, "✓ Prometheus detected: %s\n", prometheusURL)
 	}
 	key := installOpenRouterKey
 	if key == "" {
@@ -225,7 +225,7 @@ func applyHelmInstall(out io.Writer, prometheusURL string) error {
 	if key != "" {
 		args = append(args, "--set", "secrets.openrouterApiKey="+key)
 	} else if !installYes {
-		fmt.Fprintln(out, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
+		_, _ = fmt.Fprintln(out, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
 	}
 	if tok := os.Getenv("KUBEWISE_API_TOKEN"); tok != "" {
 		args = append(args, "--set", "secrets.apiToken="+tok)
@@ -266,7 +266,7 @@ func applyInstallManifests(out io.Writer) error {
 	} else {
 		target = fmt.Sprintf("github.com/lohitkolluri/KubeWise/manifests/overlays/%s?ref=%s", installOverlay, installRef)
 	}
-	fmt.Fprintf(out, "Applying: %s\n", target)
+	_, _ = fmt.Fprintf(out, "Applying: %s\n", target)
 	c := exec.Command("kubectl", "apply", "-k", target)
 	c.Stdout = out
 	c.Stderr = os.Stderr
@@ -282,7 +282,7 @@ func applyInstallSecret() error {
 
 	if key == "" && apiTok == "" {
 		if !installYes {
-			fmt.Fprintln(os.Stdout, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
+			_, _ = fmt.Fprintln(os.Stdout, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
 		}
 		return nil
 	}
@@ -310,7 +310,7 @@ func applyInstallSecret() error {
 	if err := apply.Run(); err != nil {
 		return fmt.Errorf("apply secret: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, "✓ Secret applied")
+	_, _ = fmt.Fprintln(os.Stdout, "✓ Secret applied")
 	return nil
 }
 
@@ -346,14 +346,14 @@ func saveInstallProfile() error {
 }
 
 func printInstallNextSteps(out io.Writer) {
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "KubeWise is installed.")
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "  1. Connect to the agent:")
-	fmt.Fprintln(out, "     kwctl up")
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "  2. Open the control center:")
-	fmt.Fprintln(out, "     kwctl ui")
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "  Or: kwctl connect")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "KubeWise is installed.")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "  1. Connect to the agent:")
+	_, _ = fmt.Fprintln(out, "     kwctl up")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "  2. Open the control center:")
+	_, _ = fmt.Fprintln(out, "     kwctl ui")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "  Or: kwctl connect")
 }

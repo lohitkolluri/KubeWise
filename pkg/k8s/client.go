@@ -142,7 +142,7 @@ func (c *Client) GetPodLogs(ctx context.Context, namespace, podName, container s
 	if err != nil {
 		return "", fmt.Errorf("stream logs: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	data, err := io.ReadAll(stream)
 	if err != nil {
 		return "", fmt.Errorf("read logs: %w", err)
@@ -161,7 +161,7 @@ func (c *Client) StreamPodLogs(ctx context.Context, namespace, podName, containe
 	if err != nil {
 		return fmt.Errorf("stream logs: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	scanner := bufio.NewScanner(stream)
 	for scanner.Scan() {
 		if ctx.Err() != nil {

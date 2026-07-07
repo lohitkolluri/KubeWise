@@ -2,7 +2,7 @@ package cli
 
 import "github.com/charmbracelet/lipgloss"
 
-// ── Adaptive palette — semantic, readable on light and dark terminals ──
+//nolint:unused // design system tokens used across the TUI
 var (
 	// Severity / semantic colors
 	colorCritical = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"} // red
@@ -114,11 +114,11 @@ var (
 			MarginRight(1).
 			MarginBottom(1)
 
-	cardCriticalStyle = cardStyle.Copy().BorderForeground(colorCritical)
-	cardWarnStyle     = cardStyle.Copy().BorderForeground(colorWarning)
-	cardSuccessStyle  = cardStyle.Copy().BorderForeground(colorSuccess)
-	cardInfoStyle     = cardStyle.Copy().BorderForeground(colorInfo)
-	cardNeutralStyle  = cardStyle.Copy().BorderForeground(colorNeutral)
+	cardCriticalStyle = cardStyle.BorderForeground(colorCritical)
+	cardWarnStyle     = cardStyle.BorderForeground(colorWarning)
+	cardSuccessStyle  = cardStyle.BorderForeground(colorSuccess)
+	cardInfoStyle     = cardStyle.BorderForeground(colorInfo)
+	cardNeutralStyle  = cardStyle.BorderForeground(colorNeutral)
 
 	statLabelStyle = lipgloss.NewStyle().Foreground(colorMuted).Width(12)
 	statValueStyle = lipgloss.NewStyle().Bold(true).Foreground(colorHighlight)

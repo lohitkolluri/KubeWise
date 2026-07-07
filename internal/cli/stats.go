@@ -25,15 +25,15 @@ func runStats(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return writeOutput(cmd.OutOrStdout(), outputFormat, stats, func() error {
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions total:", stats.PredictionsTotal)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions pending:", stats.PredictionsPending)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions hit:", stats.PredictionsHit)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions missed:", stats.PredictionsMissed)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %.1f%%\n", "Prediction accuracy:", stats.PredictionAccuracy*100)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations total:", stats.RemediationsTotal)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations verified:", stats.RemediationsVerified)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations dry-run:", stats.RemediationsDryRun)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Pending approvals:", stats.RemediationsPending)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions total:", stats.PredictionsTotal)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions pending:", stats.PredictionsPending)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions hit:", stats.PredictionsHit)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions missed:", stats.PredictionsMissed)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %.1f%%\n", "Prediction accuracy:", stats.PredictionAccuracy*100)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations total:", stats.RemediationsTotal)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations verified:", stats.RemediationsVerified)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations dry-run:", stats.RemediationsDryRun)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Pending approvals:", stats.RemediationsPending)
 		return nil
 	})
 }

@@ -29,7 +29,7 @@ var healthCmd = &cobra.Command{
 		if outputFormat == "json" {
 			return writeOutput(cmd.OutOrStdout(), "json", h, nil)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "status: %s\n", h["status"])
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\n", h["status"])
 		return nil
 	},
 }
@@ -43,12 +43,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return writeOutput(cmd.OutOrStdout(), outputFormat, st, func() error {
-		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Uptime:", st.Uptime)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Started At:", st.StartedAt)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Scrapes:", st.Scrapes)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Passed:", st.GatePassed)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Dropped:", st.GateDropped)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Observed:", st.GateObserved)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Uptime:", st.Uptime)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Started At:", st.StartedAt)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Scrapes:", st.Scrapes)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Passed:", st.GatePassed)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Dropped:", st.GateDropped)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Observed:", st.GateObserved)
 		return nil
 	})
 }

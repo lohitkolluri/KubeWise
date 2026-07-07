@@ -27,7 +27,7 @@ func (e *K8sExecutor) ExecuteRunbook(ctx context.Context, plan models.Remediatio
 			sec := step.WaitSeconds
 			if sec <= 0 {
 				if v, ok := step.Parameters["seconds"]; ok {
-					fmt.Sscanf(v, "%d", &sec)
+					fmt.Sscanf(v, "%d", &sec) //nolint:errcheck
 				}
 			}
 			if sec <= 0 {

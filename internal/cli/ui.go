@@ -11,8 +11,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
+
+	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 var uiInterval time.Duration
@@ -89,8 +90,10 @@ const (
 	tabCount
 )
 
-var tabLabels = []string{"Dashboard", "Predict", "Anomalies", "Audit", "Approvals", "Config", "Logs", "Health"}
-var tabIcons = []string{"◎", "◈", "▲", "◆", "★", "⚙", "¶", "♥"}
+var (
+	tabLabels = []string{"Dashboard", "Predict", "Anomalies", "Audit", "Approvals", "Config", "Logs", "Health"}
+	tabIcons  = []string{"◎", "◈", "▲", "◆", "★", "⚙", "¶", "♥"} //nolint:unused
+)
 
 // ── Model ──
 
@@ -127,7 +130,7 @@ type controlModel struct {
 
 	// Per-tab loading & error state
 	loading    bool
-	loadingTab [tabCount]bool
+	loadingTab [tabCount]bool //nolint:unused
 	err        error
 	errTab     [tabCount]error
 
@@ -974,11 +977,11 @@ func (m controlModel) renderDashboard() string {
 				break
 			}
 			sty := scoreStyle(p.Score)
-			b.WriteString(fmt.Sprintf("  ▸ %s %s  %s  ETA %.0fs\n",
+			fmt.Fprintf(&b, "  ▸ %s %s  %s  ETA %.0fs\n",
 				sty.Render(trunc(p.Type, 14)),
 				mutedStyle.Render(trunc(p.Entity, 26)),
 				sty.Render(fmt.Sprintf("%.0f%%", p.Score*100)),
-				p.ETASeconds))
+				p.ETASeconds)
 		}
 		for i, a := range m.anomalies {
 			if i >= 4 {
@@ -989,11 +992,11 @@ func (m controlModel) renderDashboard() string {
 				pat = "statistical"
 			}
 			sty := scoreStyle(a.Score)
-			b.WriteString(fmt.Sprintf("  ▸ %s %s  %s %s\n",
+			fmt.Fprintf(&b, "  ▸ %s %s  %s %s\n",
 				sty.Render(trunc(pat, 14)),
 				mutedStyle.Render(trunc(a.Entity, 26)),
 				sty.Render(fmt.Sprintf("%.2f", a.Score)),
-				statusStyle(a.Status).Render(a.Status)))
+				statusStyle(a.Status).Render(a.Status))
 		}
 	}
 
@@ -1012,11 +1015,11 @@ func (m controlModel) renderDashboard() string {
 			if hs.Trend != "" {
 				trend = hs.Trend
 			}
-			b.WriteString(fmt.Sprintf("  ▸ %s  %s  %s  %s\n",
+			fmt.Fprintf(&b, "  ▸ %s  %s  %s  %s\n",
 				sty.Render(fmt.Sprintf("%.0f", hs.Score)),
 				trendStyle(trend).Render(trunc(trend, 10)),
 				mutedStyle.Render(trunc(hs.Namespace, 16)),
-				mutedStyle.Render(trunc(hs.Entity, 28))))
+				mutedStyle.Render(trunc(hs.Entity, 28)))
 		}
 	}
 
@@ -1033,6 +1036,7 @@ func (m controlModel) renderDashboard() string {
 	return b.String()
 }
 
+//nolint:unused
 func scoreStyleForCount(n, threshold int) lipgloss.Style {
 	if n >= threshold*2 {
 		return cardCriticalStyle
@@ -1333,6 +1337,7 @@ func (m *controlModel) toggleRemediationMode() {
 
 // ── Palette overlay ──
 
+//nolint:unused
 func (m controlModel) renderPaletteOverlay(base string) string {
 	_ = base
 	return m.renderPalette()
@@ -1347,49 +1352,49 @@ func (m controlModel) renderStructuredHelp() string {
 	b.WriteString(helpCategoryStyle.Render("Navigation"))
 	b.WriteString("\n")
 	for _, kb := range []key.Binding{m.keys.TabPrev, m.keys.TabNext, m.keys.Palette, m.keys.Help, m.keys.Quit} {
-		b.WriteString(fmt.Sprintf("  %s %s\n",
+		fmt.Fprintf(&b, "  %s %s\n",
 			helpKeyStyle.Render(kb.Help().Key),
-			helpDescStyle.Render(kb.Help().Desc)))
+			helpDescStyle.Render(kb.Help().Desc))
 	}
 
 	b.WriteString(helpCategoryStyle.Render("Tab shortcuts"))
 	b.WriteString("\n")
 	for _, kb := range []key.Binding{m.keys.Tab1, m.keys.Tab2, m.keys.Tab3, m.keys.Tab4, m.keys.Tab5, m.keys.Tab6, m.keys.Tab7, m.keys.Tab8} {
-		b.WriteString(fmt.Sprintf("  %s %s\n",
+		fmt.Fprintf(&b, "  %s %s\n",
 			helpKeyStyle.Render(kb.Help().Key),
-			helpDescStyle.Render(kb.Help().Desc)))
+			helpDescStyle.Render(kb.Help().Desc))
 	}
 
 	b.WriteString(helpCategoryStyle.Render("List navigation"))
 	b.WriteString("\n")
 	for _, kb := range []key.Binding{m.keys.Up, m.keys.Down, m.keys.Top, m.keys.Bottom, m.keys.Detail, m.keys.Back} {
-		b.WriteString(fmt.Sprintf("  %s %s\n",
+		fmt.Fprintf(&b, "  %s %s\n",
 			helpKeyStyle.Render(kb.Help().Key),
-			helpDescStyle.Render(kb.Help().Desc)))
+			helpDescStyle.Render(kb.Help().Desc))
 	}
 
 	b.WriteString(helpCategoryStyle.Render("Actions"))
 	b.WriteString("\n")
 	for _, kb := range []key.Binding{m.keys.Refresh, m.keys.DryRun, m.keys.Mode, m.keys.ToggleLive, m.keys.Restart} {
-		b.WriteString(fmt.Sprintf("  %s %s\n",
+		fmt.Fprintf(&b, "  %s %s\n",
 			helpKeyStyle.Render(kb.Help().Key),
-			helpDescStyle.Render(kb.Help().Desc)))
+			helpDescStyle.Render(kb.Help().Desc))
 	}
 
 	b.WriteString(helpCategoryStyle.Render("Approvals"))
 	b.WriteString("\n")
 	for _, kb := range []key.Binding{m.keys.Approve, m.keys.Reject, m.keys.Confirm, m.keys.Cancel} {
-		b.WriteString(fmt.Sprintf("  %s %s\n",
+		fmt.Fprintf(&b, "  %s %s\n",
 			helpKeyStyle.Render(kb.Help().Key),
-			helpDescStyle.Render(kb.Help().Desc)))
+			helpDescStyle.Render(kb.Help().Desc))
 	}
 
 	b.WriteString(helpCategoryStyle.Render("Logs"))
 	b.WriteString("\n")
 	for _, kb := range []key.Binding{m.keys.LogFollow} {
-		b.WriteString(fmt.Sprintf("  %s %s\n",
+		fmt.Fprintf(&b, "  %s %s\n",
 			helpKeyStyle.Render(kb.Help().Key),
-			helpDescStyle.Render(kb.Help().Desc)))
+			helpDescStyle.Render(kb.Help().Desc))
 	}
 
 	b.WriteString("\n" + helpCloseStyle.Render("Press ? to close help"))
@@ -1489,12 +1494,12 @@ func (m *controlModel) showDetailForSelection() {
 			for _, f := range hs.Factors {
 				fSty := scoreStyle(f.Score)
 				contrib := f.Score * f.Weight * 100
-				b.WriteString(fmt.Sprintf("  %s %s weight=%.2f value=%s contribution=%.1f\n",
+				fmt.Fprintf(b, "  %s %s weight=%.2f value=%s contribution=%.1f\n",
 					fSty.Render(trunc(f.Name, 20)),
 					mutedStyle.Render(trunc(f.Detail, 40)),
 					f.Weight,
 					fSty.Render(fmt.Sprintf("%.2f", f.Score)),
-					contrib))
+					contrib)
 			}
 		}
 		m.detail = b.String()

@@ -35,15 +35,15 @@ var remediationCmd = &cobra.Command{
 		}
 		return writeOutput(cmd.OutOrStdout(), outputFormat, records, func() error {
 			if len(records) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No remediation records.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No remediation records.")
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
 				"ID", "STATUS", "ACTION", "TIER", "REASON")
-			fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
 			for _, r := range records {
 				action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
-				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
 					trunc(r.ID, 28), string(r.Status), trunc(action, 18), string(r.RiskTier), trunc(r.Reason, 30))
 			}
 			return nil

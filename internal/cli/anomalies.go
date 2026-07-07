@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lohitkolluri/KubeWise/pkg/models"
 	"github.com/spf13/cobra"
+
+	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 var (
@@ -44,15 +45,15 @@ var anomaliesDescribeCmd = &cobra.Command{
 				if outputFormat == "json" {
 					return writeOutput(cmd.OutOrStdout(), "json", r, nil)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "ID:          %s\n", r.ID)
-				fmt.Fprintf(cmd.OutOrStdout(), "Entity:      %s\n", r.Entity)
-				fmt.Fprintf(cmd.OutOrStdout(), "Namespace:   %s\n", r.Namespace)
-				fmt.Fprintf(cmd.OutOrStdout(), "Metric:      %s\n", r.MetricName)
-				fmt.Fprintf(cmd.OutOrStdout(), "Pattern:     %s\n", r.Pattern)
-				fmt.Fprintf(cmd.OutOrStdout(), "Score:       %.2f\n", r.Score)
-				fmt.Fprintf(cmd.OutOrStdout(), "Status:      %s\n", r.Status)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ID:          %s\n", r.ID)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Entity:      %s\n", r.Entity)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Namespace:   %s\n", r.Namespace)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Metric:      %s\n", r.MetricName)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Pattern:     %s\n", r.Pattern)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Score:       %.2f\n", r.Score)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Status:      %s\n", r.Status)
 				if r.DetectedAt != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "Detected:    %s\n", r.DetectedAt.Format(timeRFC3339))
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Detected:    %s\n", r.DetectedAt.Format(timeRFC3339))
 				}
 				return nil
 			}
@@ -74,18 +75,18 @@ func runAnomaliesList(cmd *cobra.Command, args []string) error {
 	records = filterAnomalies(records)
 	return writeOutput(cmd.OutOrStdout(), outputFormat, records, func() error {
 		if len(records) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "No anomalies.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No anomalies.")
 			return nil
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-8s %s\n",
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-8s %s\n",
 			"TYPE", "ENTITY", "SCORE", "STATUS", "METRIC")
-		fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
 		for _, r := range records {
 			typ := r.Pattern
 			if typ == "" {
 				typ = "statistical"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-8s %s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-8s %s\n",
 				trunc(typ, 10), trunc(r.Entity, 22), r.Score, string(r.Status), trunc(r.MetricName, 30))
 		}
 		return nil
