@@ -46,7 +46,7 @@ Examples:
   OPENROUTER_API_KEY=sk-... kwctl install   # optional LLM key
 
 After install, port-forward and open the UI:
-  kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080
+  kubectl -n kubewise port-forward svc/kubewise 8080:8080
   kwctl ui`,
 	RunE: runInstall,
 }
@@ -288,7 +288,7 @@ func applyInstallSecret() error {
 	}
 
 	args := []string{
-		"create", "secret", "generic", "kubewise-agent-secret",
+		"create", "secret", "generic", "kubewise-secret",
 		"-n", agentNS,
 		"--dry-run=client", "-o", "yaml",
 	}
