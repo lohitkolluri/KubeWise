@@ -51,10 +51,10 @@ type Correlator struct {
 
 // RemediationConfig controls correlator behavior.
 type RemediationConfig struct {
-	Mode          string   // "dry-run", "auto", "off"
-	DryRun        bool     // when true, log actions but don't execute
-	Allowlist     []string // allowed action types (empty = all)
-	Denylist      []string // denied namespaces
+	Mode            string   // "dry-run", "auto", "off"
+	DryRun          bool     // when true, log actions but don't execute
+	Allowlist       []string // allowed action types (empty = all)
+	Denylist        []string // denied namespaces
 	MinConfidence   float64  // minimum LLM confidence to execute
 	RateLimit       int      // max anomalies per LLM call (0 = unlimited)
 	WatchNamespaces []string // empty = all namespaces (minus denylist)
@@ -186,13 +186,13 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		}
 
 		if err != nil {
-		// Validation failures are not operator actions; treat as an internal failure
-		// and keep anomalies in a correlatable state (so a future cycle can retry
-		// with new context / different plan).
-		c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
-		c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
-		log.Printf("remediator: plan validation failed: %v", err)
-		return nil
+			// Validation failures are not operator actions; treat as an internal failure
+			// and keep anomalies in a correlatable state (so a future cycle can retry
+			// with new context / different plan).
+			c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
+			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
+			log.Printf("remediator: plan validation failed: %v", err)
+			return nil
 		}
 	}
 

@@ -15,16 +15,16 @@ type NotificationsConfig struct {
 
 // TrackedPrediction records an open prediction awaiting outcome verification.
 type TrackedPrediction struct {
-	ID         string    `json:"id"`
-	Entity     string    `json:"entity"`
-	Namespace  string    `json:"namespace"`
-	Pattern    string    `json:"pattern"`
-	MetricName string    `json:"metric_name"`
-	Confidence float64   `json:"confidence"`
-	ETASeconds float64   `json:"eta_seconds"`
-	CreatedAt  time.Time `json:"created_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Outcome    string    `json:"outcome"` // pending, hit, miss, expired
+	ID         string     `json:"id"`
+	Entity     string     `json:"entity"`
+	Namespace  string     `json:"namespace"`
+	Pattern    string     `json:"pattern"`
+	MetricName string     `json:"metric_name"`
+	Confidence float64    `json:"confidence"`
+	ETASeconds float64    `json:"eta_seconds"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	Outcome    string     `json:"outcome"` // pending, hit, miss, expired
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 

@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	approvalsLimit  int
-	approvalReason  string
+	approvalsLimit int
+	approvalReason string
 )
 
 func init() {

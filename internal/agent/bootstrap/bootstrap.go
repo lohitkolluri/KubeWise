@@ -18,14 +18,14 @@ import (
 
 // Runtime holds bootstrapped agent dependencies loaded from env + store.
 type Runtime struct {
-	Store           *store.Store
-	Config          *models.AgentConfig
-	Interval        time.Duration
-	LLMConfig       llm.Config
-	Remediation     remediator.RemediationConfig
-	APIAddr         string
-	ForecasterAddr  string
-	DataDir         string
+	Store          *store.Store
+	Config         *models.AgentConfig
+	Interval       time.Duration
+	LLMConfig      llm.Config
+	Remediation    remediator.RemediationConfig
+	APIAddr        string
+	ForecasterAddr string
+	DataDir        string
 }
 
 // Init opens the store, loads or seeds config, and validates runtime settings.

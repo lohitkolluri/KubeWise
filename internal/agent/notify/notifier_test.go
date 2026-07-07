@@ -64,14 +64,14 @@ func TestNotifyRemediation_Pending(t *testing.T) {
 	defer srv.Close()
 
 	n := New(models.NotificationsConfig{
-		Enabled:         true,
-		WebhookURL:      srv.URL,
-		OnApproval:      true,
-		OnRemediation:   true,
+		Enabled:       true,
+		WebhookURL:    srv.URL,
+		OnApproval:    true,
+		OnRemediation: true,
 	})
 	n.NotifyRemediation(context.Background(), models.AuditRecord{
-		ID:     "audit-1",
-		Status: models.AuditPending,
+		ID:       "audit-1",
+		Status:   models.AuditPending,
 		RiskTier: models.RiskTier3,
 		Plan: models.RemediationPlan{
 			Diagnosis: models.Diagnosis{RootCause: "OOM", Confidence: 0.9},
