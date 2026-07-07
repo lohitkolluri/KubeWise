@@ -57,3 +57,6 @@ data/db/
 
 # Jupyter
 .ipynb_checkpoints
+
+# Codex / OpenCode agent session state
+.omo/
