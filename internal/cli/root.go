@@ -53,7 +53,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&kubeconfig, "kubeconfig", "", "", "path to kubeconfig file")
 	rootCmd.PersistentFlags().StringVarP(&contextName, "context", "", "", "kubeconfig context")
 	rootCmd.PersistentFlags().StringVarP(&agentNS, "agent-namespace", "n", "kubewise", "agent namespace")
-	rootCmd.PersistentFlags().StringVarP(&agentSvc, "agent-service", "s", "kubewise-agent", "agent service name")
+	rootCmd.PersistentFlags().StringVarP(&agentSvc, "agent-service", "s", "kubewise", "agent service name")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format: table, json, yaml")
 	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "kwctl profile name (from ~/.config/kwctl/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&agentURL, "agent-url", "", "agent base URL (overrides profile)")
