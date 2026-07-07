@@ -74,4 +74,3 @@ func (s *Store) Ping() error {
 func (s *Store) Close() error {
 	return s.db.Close()
 }
-

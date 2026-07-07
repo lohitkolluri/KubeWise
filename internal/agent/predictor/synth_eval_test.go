@@ -18,7 +18,8 @@ import (
 // - failing pod: rising restarts + not-ready + rising memory (plus a CrashLoopBackOff event)
 //
 // Run it with:
-//   go test ./internal/agent/predictor -run TestSyntheticTPFP -v
+//
+//	go test ./internal/agent/predictor -run TestSyntheticTPFP -v
 func TestSyntheticTPFP(t *testing.T) {
 	cfg := DefaultScorerConfig()
 	cfg.MinWarmup = 6 // keep the synthetic run short but meaningful

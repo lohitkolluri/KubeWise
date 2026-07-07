@@ -15,10 +15,10 @@ const maxRequestBodyBytes = 1 << 20 // 1 MiB
 const defaultCORSOrigin = "*"
 
 var securityHeaders = map[string]string{
-	"X-Content-Type-Options":    "nosniff",
-	"X-Frame-Options":           "DENY",
-	"Referrer-Policy":           "strict-origin-when-cross-origin",
-	"X-XSS-Protection":          "0", // discontinued but still scanned by some auditors
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options":        "DENY",
+	"Referrer-Policy":        "strict-origin-when-cross-origin",
+	"X-XSS-Protection":       "0", // discontinued but still scanned by some auditors
 }
 
 type middlewareConfig struct {

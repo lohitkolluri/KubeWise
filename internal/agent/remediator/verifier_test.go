@@ -41,4 +41,3 @@ func TestVerifier_DefaultWaitLongerForDeployment(t *testing.T) {
 		t.Fatalf("expected wait >=40s, got %s", wait)
 	}
 }
-

@@ -15,8 +15,8 @@ const (
 
 // Free OpenRouter models (zero cost, rate-limited). Good for local dev with rich prompts.
 const (
-	FreeModelGPTOSS  = "openai/gpt-oss-120b:free"  // 131K ctx, strong reasoning
-	FreeModelLaguna  = "poolside/laguna-m.1:free"    // 262K ctx, coding agent
+	FreeModelGPTOSS = "openai/gpt-oss-120b:free" // 131K ctx, strong reasoning
+	FreeModelLaguna = "poolside/laguna-m.1:free" // 262K ctx, coding agent
 )
 
 // DevDefaultModel is the recommended model for kind/local dev.
