@@ -1,6 +1,7 @@
 package predictor
 
 import (
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -193,6 +194,13 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 	var results []models.PredictionResult
 
+	// Track per-key stats for the diagnostic summary at the end of Run().
+	type metricStat struct {
+		dp    int
+		score float64
+	}
+	seen := make(map[string]*metricStat)
+
 	for _, mr := range metrics {
 		if len(mr.Values) == 0 {
 			continue
@@ -232,6 +240,9 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- warmup phase ------------------------------------------------------
 			est.Add(pt.Value)
 
+			if _, tracked := seen[key]; !tracked {
+				seen[key] = &metricStat{dp: dp, score: -1}
+			}
 			if dp < p.config.MinWarmup {
 				continue
 			}
@@ -281,6 +292,11 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- final score --------------------------------------------------------
 			score := p.scorer.Score(primaryScore, rocBoost)
 
+			if prev := seen[key]; prev != nil {
+				prev.score = score
+				prev.dp = dp
+			}
+
 			// Persistence: require >=N consecutive scrapes above threshold before emitting.
 			// This cuts false positives from single-sample spikes.
 			emit := false
@@ -310,6 +326,36 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				})
 			}
 		}
+	}
+
+	// --- diagnostic summary ----------------------------------------------------
+	loggedKeys := len(seen)
+	warmup := 0
+	maxScore := 0.0
+	maxKey := ""
+	aboveThreshold := 0
+	belowThreshold := 0
+	for k, st := range seen {
+		if st.dp < p.config.MinWarmup {
+			warmup++
+		} else if st.score >= p.config.MinScore {
+			aboveThreshold++
+			if st.score > maxScore {
+				maxScore = st.score
+				maxKey = k
+			}
+		} else if st.score >= 0 {
+			belowThreshold++
+			if st.score > maxScore {
+				maxScore = st.score
+				maxKey = k
+			}
+		}
+	}
+	if loggedKeys > 0 {
+		log.Printf("predictor: keys=%d warmup=%d scoring=%d above_min=%.2f=%d below_min=%.2f=%d max_score=%.3f(%s)",
+			loggedKeys, warmup, loggedKeys-warmup, p.config.MinScore, aboveThreshold,
+			p.config.MinScore, belowThreshold, maxScore, maxKey)
 	}
 
 	return results, nil

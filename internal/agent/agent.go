@@ -27,6 +27,8 @@ import (
 const remediationTimeout = 4 * time.Minute
 const maxForecastSeriesPerScrape = 32
 
+const healthComputeInterval = 10 // compute health/accuracy every N scrape cycles
+
 // Agent is the main orchestration loop: collect → detect → gate → store → correlate → remediate.
 type Agent struct {
 	store              *store.Store
@@ -38,6 +40,8 @@ type Agent struct {
 	correlator         *remediator.Correlator
 	anomalyGate        *gate.AnomalyGate
 	outcomeTracker     *outcome.Tracker
+	healthComputer     *outcome.HealthComputer
+	accuracyComputer   *outcome.AccuracyComputer
 	notifier           *notify.Notifier
 	apiServer          *api.Server
 	cfg                *models.AgentConfig
@@ -45,6 +49,7 @@ type Agent struct {
 	apiAddr            string
 	minScore           float64
 	scrapes            atomic.Int64
+	healthTick         atomic.Int64
 	anomalySeq         uint64
 	stopOnce           sync.Once
 	stopCh             chan struct{}
@@ -120,20 +125,22 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	apiSrv.SetRemediator(corr)
 
 	a := &Agent{
-		store:       s,
-		collector:   col,
-		predictor:   pred,
-		forecaster:  fcast,
-		correlator:     corr,
-		anomalyGate:    ag,
-		outcomeTracker: outcome.NewTracker(s),
-		notifier:       notifier,
-		apiServer:   apiSrv,
-		cfg:         cfg,
-		stopCh:      make(chan struct{}),
-		interval:    interval,
-		apiAddr:     apiAddr,
-		minScore:    predCfg.MinScore,
+		store:             s,
+		collector:         col,
+		predictor:         pred,
+		forecaster:        fcast,
+		correlator:        corr,
+		anomalyGate:       ag,
+		outcomeTracker:    outcome.NewTracker(s),
+		healthComputer:    outcome.NewHealthComputer(s),
+		accuracyComputer:  outcome.NewAccuracyComputer(s),
+		notifier:          notifier,
+		apiServer:         apiSrv,
+		cfg:               cfg,
+		stopCh:            make(chan struct{}),
+		interval:          interval,
+		apiAddr:           apiAddr,
+		minScore:          predCfg.MinScore,
 	}
 	a.runCtx, a.runCancel = context.WithCancel(context.Background())
 
@@ -399,8 +406,18 @@ func (a *Agent) runOnce() {
 			notifyCancel()
 		}
 	}
-	if err := a.store.SaveLatestPredictions(allPredictions); err != nil {
-		log.Printf("agent[%d]: save predictions: %v", scrapeNum, err)
+	// Only save predictions when there are any — this prevents overwriting
+	// active predictions with an empty list when the current cycle's metrics
+	// temporarily recede below the anomaly threshold. Previously generated
+	// predictions remain visible until replaced by a new non-empty set or
+	// explicitly resolved.
+	if len(allPredictions) > 0 {
+		if err := a.store.SaveLatestPredictions(allPredictions); err != nil {
+			log.Printf("agent[%d]: save predictions: %v", scrapeNum, err)
+		}
+	} else if len(predictions) == 0 && patternCount == 0 {
+		// No new predictions this cycle — keep existing ones from previous cycles.
+		log.Printf("agent[%d]: no new predictions — preserving existing stored predictions", scrapeNum)
 	}
 
 	gateStats := a.anomalyGate.StatsSnapshot()
@@ -428,6 +445,20 @@ func (a *Agent) runOnce() {
 	defer remCancel()
 	if err := a.correlator.RunOnce(remCtx); err != nil {
 		log.Printf("agent[%d]: remediation error: %v", scrapeNum, err)
+	}
+
+	tick := a.healthTick.Add(1)
+	if tick%healthComputeInterval == 0 {
+		if a.healthComputer != nil {
+			if _, err := a.healthComputer.ComputeAll(); err != nil {
+				log.Printf("agent[%d]: health compute error: %v", scrapeNum, err)
+			}
+			if a.accuracyComputer != nil {
+				if _, err := a.accuracyComputer.ComputeSnapshot(7 * 24 * time.Hour); err != nil {
+					log.Printf("agent[%d]: accuracy compute error: %v", scrapeNum, err)
+				}
+			}
+		}
 	}
 }
 
