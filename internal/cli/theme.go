@@ -55,16 +55,16 @@ var (
 			Padding(0, 1)
 
 	// ── Text styles ──
-	errStyle      = lipgloss.NewStyle().Foreground(colorCritical)
-	warnStyle     = lipgloss.NewStyle().Foreground(colorWarning)
-	infoStyle     = lipgloss.NewStyle().Foreground(colorInfo)
-	successStyle  = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
-	mutedStyle    = lipgloss.NewStyle().Foreground(colorMuted)
-	subtleStyle   = lipgloss.NewStyle().Foreground(colorSubtle)
-	keyStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	keyDimStyle   = lipgloss.NewStyle().Foreground(colorNeutral)
-	headingStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorHighlight)
-	labelStyle    = lipgloss.NewStyle().Foreground(colorMuted)
+	errStyle     = lipgloss.NewStyle().Foreground(colorCritical)
+	warnStyle    = lipgloss.NewStyle().Foreground(colorWarning)
+	infoStyle    = lipgloss.NewStyle().Foreground(colorInfo)
+	successStyle = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
+	mutedStyle   = lipgloss.NewStyle().Foreground(colorMuted)
+	subtleStyle  = lipgloss.NewStyle().Foreground(colorSubtle)
+	keyStyle     = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	keyDimStyle  = lipgloss.NewStyle().Foreground(colorNeutral)
+	headingStyle = lipgloss.NewStyle().Bold(true).Foreground(colorHighlight)
+	labelStyle   = lipgloss.NewStyle().Foreground(colorMuted)
 
 	// ── Status ──
 	statusOKStyle          = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
@@ -130,8 +130,8 @@ var (
 	kpiSuccessStyle  = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
 
 	// ── Detail view ──
-	detailLabelStyle = lipgloss.NewStyle().Foreground(colorMuted).Width(16)
-	detailValueStyle = lipgloss.NewStyle().Foreground(colorHighlight)
+	detailLabelStyle   = lipgloss.NewStyle().Foreground(colorMuted).Width(16)
+	detailValueStyle   = lipgloss.NewStyle().Foreground(colorHighlight)
 	detailSectionStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorAccent).
@@ -149,10 +149,10 @@ var (
 					Padding(0, 1)
 
 	// ── Help overlay ──
-	helpCategoryStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).PaddingTop(1)
-	helpKeyStyle        = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(14)
-	helpDescStyle       = lipgloss.NewStyle().Foreground(colorSubtle)
-	helpCloseStyle      = lipgloss.NewStyle().Foreground(colorMuted)
+	helpCategoryStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).PaddingTop(1)
+	helpKeyStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(14)
+	helpDescStyle     = lipgloss.NewStyle().Foreground(colorSubtle)
+	helpCloseStyle    = lipgloss.NewStyle().Foreground(colorMuted)
 
 	// ── Empty state ──
 	emptyStateStyle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Padding(1, 2)

@@ -314,9 +314,9 @@ func fetchAll(auditStatus, auditSince string) fetchResult {
 	defer cancel()
 
 	var (
-		wg      sync.WaitGroup
-		result  fetchResult
-		mu      sync.Mutex
+		wg     sync.WaitGroup
+		result fetchResult
+		mu     sync.Mutex
 	)
 
 	setErr := func(field *error, err error) {

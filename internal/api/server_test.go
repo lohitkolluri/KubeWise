@@ -85,9 +85,9 @@ func (m *mockStore) ComputeClusterSummary() (*models.ClusterHealthSummary, error
 
 func (m *mockStore) GetLatestAccuracySnapshot() (*models.AccuracySnapshot, error) {
 	return &models.AccuracySnapshot{
-		ByPredictor:   map[string]models.AccuracyMetrics{},
-		ByNamespace:   map[string]models.AccuracyMetrics{},
-		ByMetric:      map[string]models.AccuracyMetrics{},
+		ByPredictor:    map[string]models.AccuracyMetrics{},
+		ByNamespace:    map[string]models.AccuracyMetrics{},
+		ByMetric:       map[string]models.AccuracyMetrics{},
 		ByResourceKind: map[string]models.AccuracyMetrics{},
 	}, nil
 }

@@ -25,8 +25,8 @@ type uiKeyMap struct {
 	Bottom key.Binding
 
 	// Actions
-	Detail key.Binding
-	Back   key.Binding
+	Detail  key.Binding
+	Back    key.Binding
 	Refresh key.Binding
 
 	// Palette & help

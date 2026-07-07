@@ -26,27 +26,27 @@ type Predictor struct {
 	datapoints     map[string]int
 	// streak counts consecutive scrapes above MinScore per metric key.
 	// This suppresses one-off spikes (reduces false positives).
-	streak         map[string]int
-	patternTick    int
-	patternStreak  map[string]int
+	streak          map[string]int
+	patternTick     int
+	patternStreak   map[string]int
 	patternLastSeen map[string]int
 	patternLastEmit map[string]int
-	patterns       []PatternMatcher
+	patterns        []PatternMatcher
 }
 
 // NewPredictor creates a Predictor wired with the given scorer configuration.
 func NewPredictor(config ScorerConfig) *Predictor {
 	return &Predictor{
-		estimators:     make(map[string]*AdaptiveMedian),
-		changepoints:   make(map[string]*ChangepointDetector),
-		roc:            &RateOfChange{},
-		scorer:         NewScorer(config),
-		config:         config,
-		history:        make(map[string][]MetricPoint),
-		patternHistory: make(map[string][]MetricPoint),
-		datapoints:     make(map[string]int),
-		streak:         make(map[string]int),
-		patternStreak:  make(map[string]int),
+		estimators:      make(map[string]*AdaptiveMedian),
+		changepoints:    make(map[string]*ChangepointDetector),
+		roc:             &RateOfChange{},
+		scorer:          NewScorer(config),
+		config:          config,
+		history:         make(map[string][]MetricPoint),
+		patternHistory:  make(map[string][]MetricPoint),
+		datapoints:      make(map[string]int),
+		streak:          make(map[string]int),
+		patternStreak:   make(map[string]int),
 		patternLastSeen: make(map[string]int),
 		patternLastEmit: make(map[string]int),
 	}

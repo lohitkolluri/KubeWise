@@ -231,10 +231,10 @@ func TestScore_OverflowClamping(t *testing.T) {
 	s := NewScorer(DefaultScorerConfig())
 
 	tests := []struct {
-		name   string
-		prim   float64
-		boost  float64
-		want   float64
+		name  string
+		prim  float64
+		boost float64
+		want  float64
 	}{
 		{"max+maxboost", 1.0, DefaultScorerConfig().ROCBoostWeight, 1.0},
 		{"high+med", 0.85, 0.15, 1.0},

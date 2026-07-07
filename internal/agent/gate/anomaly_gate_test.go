@@ -237,7 +237,7 @@ func TestGate_SustainResetsOnSubthreshold(t *testing.T) {
 	now := time.Now()
 
 	// Two good scrapes, then a bad one resets the counter.
-	g.Filter("pod-1", "cpu", 0.5, "statistical", now)          // scrape 1: recorded
+	g.Filter("pod-1", "cpu", 0.5, "statistical", now)                     // scrape 1: recorded
 	g.Filter("pod-1", "cpu", 0.5, "statistical", now.Add(30*time.Second)) // scrape 2: recorded
 
 	// Sub-threshold score — resets history.
