@@ -9,11 +9,11 @@ fullnameOverride: ""
 
 image:
   agent:
-    repository: kubewise/agent
+    repository: ghcr.io/lohitkolluri/kubewise-agent
     tag: latest
     pullPolicy: IfNotPresent
   forecaster:
-    repository: kubewise/forecaster
+    repository: ghcr.io/lohitkolluri/kubewise-forecaster
     tag: latest
     pullPolicy: IfNotPresent
 
