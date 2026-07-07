@@ -119,10 +119,13 @@ type controlModel struct {
 	help   help.Model
 	spin   spinner.Model
 
-	palette           paletteState
-	paletteInputTitle string
-	paletteInputApply func(m *controlModel, value string) (string, error)
-	paletteQuitApp    bool
+		detailVP      viewport.Model
+		detailVPHeight int
+
+		palette           paletteState
+		paletteInputTitle string
+		paletteInputApply func(m *controlModel, value string) (string, error)
+		paletteQuitApp    bool
 }
 
 func newControlModel(interval time.Duration) controlModel {
@@ -137,6 +140,7 @@ func newControlModel(interval time.Duration) controlModel {
 		keys:     defaultUIKeys(),
 		spin:     s,
 		logsFollow: true,
+		detailVP: viewport.New(80, 10),
 	}
 	m.help = help.New()
 	m.help.ShowAll = false
@@ -227,14 +231,17 @@ func (m controlModel) contentHeight() int {
 
 func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.help.Width = msg.Width
-		m.logsVP.Width = msg.Width - 6
-		m.logsVP.Height = m.contentHeight()
-		m.resizePalette()
-		return m, nil
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.help.Width = msg.Width
+			m.logsVP.Width = msg.Width - 6
+			m.logsVP.Height = m.contentHeight()
+			m.detailVP.Width = msg.Width - 6
+			m.detailVPHeight = m.contentHeight()
+			m.detailVP.Height = m.detailVPHeight
+			m.resizePalette()
+			return m, nil
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -255,9 +262,15 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleConfirmKey(msg)
 		}
 		if m.detail != "" {
-			if key.Matches(msg, m.keys.Back) || key.Matches(msg, m.keys.Quit) {
+			switch {
+			case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.Quit):
 				m.detail = ""
 				m.detailTitle = ""
+			case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Down),
+				key.Matches(msg, m.keys.Top), key.Matches(msg, m.keys.Bottom):
+				var cmd tea.Cmd
+				m.detailVP, cmd = m.detailVP.Update(msg)
+				return m, cmd
 			}
 			return m, nil
 		}
@@ -774,8 +787,18 @@ func (m controlModel) renderConfig() string {
 
 func (m controlModel) renderDetail() string {
 	title := brandStyle.Render(m.detailTitle)
-	body := panelStyle.Width(m.width - 6).Render(m.detail)
-	help := mutedStyle.Render("\nesc back · q quit")
+	m.detailVP.SetContent(m.detail)
+	content := m.detailVP.View()
+	total := m.detailVP.TotalLineCount()
+	shown := m.detailVP.VisibleLineCount()
+	top := m.detailVP.YOffset
+	scrollInfo := ""
+	if total > shown {
+		pct := int(float64(top) / float64(total-shown) * 100)
+		scrollInfo = mutedStyle.Render(fmt.Sprintf("  ↑↓ scroll %d%%", pct))
+	}
+	help := mutedStyle.Render("\nesc back · q quit") + scrollInfo
+	body := panelStyle.Width(m.width - 6).Height(m.detailVPHeight).Render(content)
 	return title + "\n" + body + help
 }
 
@@ -854,6 +877,122 @@ func (m controlModel) renderPaletteOverlay(base string) string {
 	return m.renderPalette()
 }
 
+// buildAuditDetail formats all AuditRecord fields into b.
+// When isApproval is true, extra prompting is shown for the operator.
+func buildAuditDetail(b *strings.Builder, r models.AuditRecord, isApproval bool) {
+	fmt.Fprintf(b, "%-16s %s\n", "ID:", r.ID)
+	fmt.Fprintf(b, "%-16s %s\n", "Status:", r.Status)
+	fmt.Fprintf(b, "%-16s %s\n", "Tier:", r.RiskTier)
+	fmt.Fprintf(b, "%-16s %s\n", "Created:", r.CreatedAt.Format(time.RFC3339))
+	if r.ExecutedAt != nil {
+		fmt.Fprintf(b, "%-16s %s\n", "Executed:", r.ExecutedAt.Format(time.RFC3339))
+	}
+	if r.VerifiedAt != nil {
+		fmt.Fprintf(b, "%-16s %s\n", "Verified:", r.VerifiedAt.Format(time.RFC3339))
+	}
+	if r.AnomalyID != "" {
+		fmt.Fprintf(b, "%-16s %s\n", "Anomaly ID:", r.AnomalyID)
+	}
+	if len(r.AnomalyIDs) > 0 {
+		fmt.Fprintf(b, "%-16s %v\n", "Anomaly IDs:", r.AnomalyIDs)
+	}
+	if r.Reason != "" {
+		fmt.Fprintf(b, "%-16s %s\n", "Reason:", r.Reason)
+	}
+	if r.Error != "" {
+		fmt.Fprintf(b, "%-16s %s\n", "Error:", r.Error)
+	}
+
+	b.WriteString("\n── Diagnosis ──\n")
+	d := r.Plan.Diagnosis
+	fmt.Fprintf(b, "  %-14s %s\n", "Root cause:", d.RootCause)
+	fmt.Fprintf(b, "  %-14s %s\n", "Severity:", d.Severity)
+	fmt.Fprintf(b, "  %-14s %.0f%%\n", "Confidence:", d.Confidence*100)
+	if len(d.Evidence) > 0 {
+		b.WriteString("  Evidence:\n")
+		for _, ev := range d.Evidence {
+			if strings.TrimSpace(ev) != "" {
+				fmt.Fprintf(b, "    · %s\n", ev)
+			}
+		}
+	}
+
+	b.WriteString("── Action ──\n")
+	act := r.Plan.Action
+	fmt.Fprintf(b, "  %-14s %s\n", "Type:", act.Type)
+	fmt.Fprintf(b, "  %-14s %s/%s\n", "Target:", act.Namespace, act.Target)
+	if act.Rationale != "" {
+		fmt.Fprintf(b, "  %-14s %s\n", "Rationale:", act.Rationale)
+	}
+	if len(act.Parameters) > 0 {
+		b.WriteString("  Parameters:\n")
+		for k, v := range act.Parameters {
+			fmt.Fprintf(b, "    %s=%s\n", k, v)
+		}
+	}
+
+	if len(r.Plan.Steps) > 0 {
+		b.WriteString("── Runbook Steps ──\n")
+		for _, s := range r.Plan.Steps {
+			fmt.Fprintf(b, "  %d. %s %s/%s", s.Order, s.Type, s.Namespace, s.Target)
+			if s.Rationale != "" {
+				fmt.Fprintf(b, " (%s)", s.Rationale)
+			}
+			if s.WaitSeconds > 0 {
+				fmt.Fprintf(b, " wait=%ds", s.WaitSeconds)
+			}
+			b.WriteString("\n")
+			if len(s.Parameters) > 0 {
+				for k, v := range s.Parameters {
+					fmt.Fprintf(b, "     %s=%s\n", k, v)
+				}
+			}
+		}
+	}
+
+	b.WriteString("── Risk ──\n")
+	risk := r.Plan.Risk
+	fmt.Fprintf(b, "  %-14s %s\n", "Blast radius:", risk.BlastRadius)
+	fmt.Fprintf(b, "  %-14s %v\n", "Reversible:", risk.Reversible)
+	if risk.EstimatedTimeToResolve != "" {
+		fmt.Fprintf(b, "  %-14s %s\n", "Est. resolve:", risk.EstimatedTimeToResolve)
+	}
+
+	if len(r.Plan.Verification.Checks) > 0 {
+		b.WriteString("── Verification ──\n")
+		for _, c := range r.Plan.Verification.Checks {
+			fmt.Fprintf(b, "  · %s %s/%s\n", c.Type, c.Namespace, c.Target)
+		}
+		if r.Plan.Verification.WaitSeconds > 0 {
+			fmt.Fprintf(b, "  wait=%ds before verify\n", r.Plan.Verification.WaitSeconds)
+		}
+	}
+
+	if r.Plan.Investigation.Summary != "" {
+		b.WriteString("── Investigation ──\n")
+		fmt.Fprintf(b, "  %s\n", r.Plan.Investigation.Summary)
+	}
+
+	if !isApproval {
+		if r.Prompt != "" {
+			b.WriteString("── LLM Prompt ──\n")
+			fmt.Fprintf(b, "  %s\n", r.Prompt)
+		}
+		if r.LLMResponse != "" {
+			b.WriteString("── LLM Response ──\n")
+			fmt.Fprintf(b, "  %s\n", r.LLMResponse)
+		}
+		if r.K8sResult != "" {
+			b.WriteString("── K8s Result ──\n")
+			fmt.Fprintf(b, "  %s\n", r.K8sResult)
+		}
+		if r.VerificationNote != "" {
+			b.WriteString("── Verification Note ──\n")
+			fmt.Fprintf(b, "  %s\n", r.VerificationNote)
+		}
+	}
+}
+
 func (m *controlModel) showDetailForSelection() {
 	switch m.tab {
 	case tabPredict:
@@ -862,38 +1001,62 @@ func (m *controlModel) showDetailForSelection() {
 			return
 		}
 		p := m.preds[i]
-		m.detailTitle = "Prediction"
-		m.detail = fmt.Sprintf("Type:      %s\nEntity:    %s\nNamespace: %s\nScore:     %.2f\nETA:       %.0fs\nAction:    %s\nMetric:    %s",
-			p.Type, p.Entity, p.Namespace, p.Score, p.ETASeconds, p.Action, p.MetricName)
+		m.detailTitle = fmt.Sprintf("Prediction  %s/%s", trunc(p.Namespace, 12), trunc(p.Entity, 24))
+		b := new(strings.Builder)
+		fmt.Fprintf(b, "%-16s %s\n", "Type:", p.Type)
+		fmt.Fprintf(b, "%-16s %s\n", "Entity:", p.Entity)
+		fmt.Fprintf(b, "%-16s %s\n", "Namespace:", p.Namespace)
+		fmt.Fprintf(b, "%-16s %.2f\n", "Score:", p.Score)
+		fmt.Fprintf(b, "%-16s %.0f%%\n", "Confidence:", p.Confidence*100)
+		fmt.Fprintf(b, "%-16s %s (%.0fs)\n", "ETA:", p.ETA(), p.ETASeconds)
+		fmt.Fprintf(b, "%-16s %s\n", "Action:", p.Action)
+		fmt.Fprintf(b, "%-16s %s\n", "Metric:", p.MetricName)
+		fmt.Fprintf(b, "%-16s %s\n", "Timestamp:", p.Timestamp.Format(time.RFC3339))
+		m.detail = b.String()
 	case tabAnomalies:
 		i := m.cursor[tabAnomalies]
 		if i < 0 || i >= len(m.anomalies) {
 			return
 		}
 		a := m.anomalies[i]
-		m.detailTitle = "Anomaly " + trunc(a.ID, 12)
-		m.detail = fmt.Sprintf("ID:        %s\nEntity:    %s\nNamespace: %s\nPattern:   %s\nMetric:    %s\nScore:     %.2f\nStatus:    %s",
-			a.ID, a.Entity, a.Namespace, a.Pattern, a.MetricName, a.Score, a.Status)
+		m.detailTitle = fmt.Sprintf("Anomaly  %s", trunc(a.ID, 12))
+		b := new(strings.Builder)
+		fmt.Fprintf(b, "%-16s %s\n", "ID:", a.ID)
+		fmt.Fprintf(b, "%-16s %s\n", "Entity:", a.Entity)
+		fmt.Fprintf(b, "%-16s %s\n", "Namespace:", a.Namespace)
+		fmt.Fprintf(b, "%-16s %s\n", "Pattern:", a.Pattern)
+		fmt.Fprintf(b, "%-16s %s\n", "Metric:", a.MetricName)
+		fmt.Fprintf(b, "%-16s %.2f\n", "Score:", a.Score)
+		fmt.Fprintf(b, "%-16s %s\n", "Status:", a.Status)
+		if a.DetectedAt != nil {
+			fmt.Fprintf(b, "%-16s %s\n", "Detected:", a.DetectedAt.Format(time.RFC3339))
+		}
+		if a.RemediatedAt != nil {
+			fmt.Fprintf(b, "%-16s %s\n", "Remediated:", a.RemediatedAt.Format(time.RFC3339))
+		}
+		m.detail = b.String()
 	case tabAudit:
 		i := m.cursor[tabAudit]
 		if i < 0 || i >= len(m.audits) {
 			return
 		}
 		r := m.audits[i]
-		m.detailTitle = "Remediation"
-		m.detail = fmt.Sprintf("ID:         %s\nStatus:     %s\nTier:       %s\nAction:     %s\nTarget:     %s/%s\nReason:     %s\nConfidence: %.2f",
-			r.ID, r.Status, r.RiskTier, r.Plan.Action.Type, r.Plan.Action.Namespace, r.Plan.Action.Target, r.Reason, r.Plan.Diagnosis.Confidence)
+		m.detailTitle = fmt.Sprintf("Remediation  %s", trunc(r.ID, 12))
+		b := new(strings.Builder)
+		buildAuditDetail(b, r, false)
+		m.detail = b.String()
 	case tabApprovals:
 		i := m.cursor[tabApprovals]
 		if i < 0 || i >= len(m.pending) {
 			return
 		}
 		r := m.pending[i]
-		m.detailTitle = "Pending approval " + trunc(r.ID, 12)
-		m.detail = fmt.Sprintf("ID:         %s\nTier:       %s (requires approval)\nAction:     %s\nTarget:     %s/%s\nRoot cause: %s\nConfidence: %.2f\nBlast:      %s\nReversible: %v\n\nPress a to approve, x to reject",
-			r.ID, r.RiskTier, r.Plan.Action.Type, r.Plan.Action.Namespace, r.Plan.Action.Target,
-			r.Plan.Diagnosis.RootCause, r.Plan.Diagnosis.Confidence,
-			r.Plan.Risk.BlastRadius, r.Plan.Risk.Reversible)
+		m.detailTitle = fmt.Sprintf("Approval  %s", trunc(r.ID, 12))
+		b := new(strings.Builder)
+		b.WriteString("─── Pending Human Approval ───\n\n")
+		buildAuditDetail(b, r, true)
+		b.WriteString("\nPress a to approve · x to reject · esc back\n")
+		m.detail = b.String()
 	}
 }
 

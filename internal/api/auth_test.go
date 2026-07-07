@@ -12,7 +12,7 @@ func TestAuthMiddleware_RejectsWithoutToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := withMiddleware(mux, "secret-token")
+	handler := withMiddleware(mux, middlewareConfig{apiToken: "secret-token", corsOrigin: "*"})
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -32,7 +32,7 @@ func TestAuthMiddleware_AcceptsBearerToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := withMiddleware(mux, "secret-token")
+	handler := withMiddleware(mux, middlewareConfig{apiToken: "secret-token", corsOrigin: "*"})
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -56,7 +56,7 @@ func TestAuthMiddleware_HealthBypassesAuth(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			})
 
-			handler := withMiddleware(mux, "secret-token")
+			handler := withMiddleware(mux, middlewareConfig{apiToken: "secret-token", corsOrigin: "*"})
 			ts := httptest.NewServer(handler)
 			defer ts.Close()
 

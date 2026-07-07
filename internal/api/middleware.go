@@ -12,21 +12,43 @@ import (
 
 const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
-// publicPaths are reachable without API token auth (probes + observability).
-func publicPath(path string) bool {
+const defaultCORSOrigin = "*"
+
+var securityHeaders = map[string]string{
+	"X-Content-Type-Options":    "nosniff",
+	"X-Frame-Options":           "DENY",
+	"Referrer-Policy":           "strict-origin-when-cross-origin",
+	"X-XSS-Protection":          "0", // discontinued but still scanned by some auditors
+}
+
+type middlewareConfig struct {
+	apiToken     string
+	corsOrigin   string
+	requireToken bool
+}
+
+func publicPath(path string, requireToken bool) bool {
+	if requireToken {
+		return false
+	}
 	switch path {
-	case "/health", "/readyz", "/metrics":
+	case "/health", "/readyz", "/metrics", "/status":
 		return true
 	default:
 		return false
 	}
 }
 
-func withMiddleware(next http.Handler, apiToken string) http.Handler {
+func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if apiToken != "" && !publicPath(r.URL.Path) {
+		for k, v := range securityHeaders {
+			w.Header().Set(k, v)
+		}
+		w.Header().Set("Access-Control-Allow-Origin", cfg.corsOrigin)
+
+		if cfg.apiToken != "" && !publicPath(r.URL.Path, cfg.requireToken) {
 			auth := r.Header.Get("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") || !secureCompare(strings.TrimPrefix(auth, "Bearer "), apiToken) {
+			if !strings.HasPrefix(auth, "Bearer ") || !secureCompare(strings.TrimPrefix(auth, "Bearer "), cfg.apiToken) {
 				writeError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
@@ -58,7 +80,6 @@ func (w *logWriter) WriteHeader(code int) {
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("api: json encode error: %v", err)

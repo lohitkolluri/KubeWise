@@ -220,13 +220,24 @@ func (a *Agent) Run() error {
 	for {
 		select {
 		case <-ticker.C:
-			a.runOnce()
+			a.runOnceSafe()
 		case <-a.stopCh:
 			log.Println("agent: stopping")
 			return nil
 		}
 	}
 }
+
+// runOnceSafe calls runOnce and recovers from panics to prevent agent death.
+func (a *Agent) runOnceSafe() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("agent: recovered panic in scrape cycle: %v", r)
+		}
+	}()
+	a.runOnce()
+}
+
 
 // Stop signals the agent loop to stop.
 func (a *Agent) Stop() {
