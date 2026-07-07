@@ -1,5 +1,7 @@
 package predictor
 
+import "math"
+
 // ScorerConfig controls the anomaly scoring pipeline.  The primary signal is
 // the Hoeffding-based anomaly score from the adaptive median estimator.
 // A secondary ROC-acceleration boost is added when a metric is trending
@@ -103,9 +105,11 @@ func (s *Scorer) Score(primary, rocBoost float64) float64 {
 	return clamp(total, 0, 1)
 }
 
-// clamp bounds v to [lo, hi].
+// clamp bounds v to [lo, hi].  NaN is clamped to the lower bound
+// (treated as "not a number" < lo since any comparison with NaN is false).
 func clamp(v, lo, hi float64) float64 {
-	if v < lo {
+	// math.IsNaN(v) catches what v < lo misses: NaN < anything is false.
+	if v < lo || math.IsNaN(v) {
 		return lo
 	}
 	if v > hi {

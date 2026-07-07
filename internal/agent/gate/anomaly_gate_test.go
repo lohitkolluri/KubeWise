@@ -208,6 +208,87 @@ func TestGate_ShouldPersist(t *testing.T) {
 	}
 }
 
+func TestGate_ObserveScoreThenFilter(t *testing.T) {
+	g := NewGate(DefaultConfig())
+	g.config.SustainCount = 3
+	g.config.Threshold = 0.3
+	g.config.CooldownDuration = 5 * time.Minute
+	now := time.Now()
+
+	// Pre-record via ObserveScore — this is the normal agent loop flow.
+	for i := 0; i < 3; i++ {
+		g.ObserveScore("pod-1", "cpu", 0.5, now.Add(time.Duration(i)*30*time.Second))
+	}
+
+	// Filter should now find the pre-recorded sustainment.
+	r := g.Filter("pod-1", "cpu", 0.5, "statistical", now.Add(90*time.Second))
+	if !r.Pass {
+		t.Fatalf("expected pass via sustainment, got reason=%s", r.Reason)
+	}
+	if r.Reason != "sustainment" {
+		t.Fatalf("expected reason sustainment, got %s", r.Reason)
+	}
+}
+
+func TestGate_SustainResetsOnSubthreshold(t *testing.T) {
+	g := NewGate(DefaultConfig())
+	g.config.SustainCount = 3
+	g.config.Threshold = 0.3
+	now := time.Now()
+
+	// Two good scrapes, then a bad one resets the counter.
+	g.Filter("pod-1", "cpu", 0.5, "statistical", now)          // scrape 1: recorded
+	g.Filter("pod-1", "cpu", 0.5, "statistical", now.Add(30*time.Second)) // scrape 2: recorded
+
+	// Sub-threshold score — resets history.
+	r := g.Filter("pod-1", "cpu", 0.1, "statistical", now.Add(60*time.Second))
+	if r.Pass {
+		t.Fatal("expected drop after sub-threshold reset")
+	}
+
+	// Need 3 more consecutive good scrapes.
+	for i := 0; i < 2; i++ {
+		r = g.Filter("pod-1", "cpu", 0.5, "statistical", now.Add(time.Duration(90+i*30)*time.Second))
+		if r.Pass {
+			t.Fatalf("expected drop at scrape %d (need 3)", i+1)
+		}
+	}
+	r = g.Filter("pod-1", "cpu", 0.5, "statistical", now.Add(150*time.Second))
+	if !r.Pass {
+		t.Fatalf("expected pass at scrape 3, got reason=%s", r.Reason)
+	}
+}
+
+func TestGate_MultiMetricAcceleratesSustain(t *testing.T) {
+	g := NewGate(DefaultConfig())
+	g.config.SustainCount = 3
+	g.config.Threshold = 0.3
+	g.config.CorrelationWindow = 60 * time.Second
+	g.config.ScrapeInterval = 30 * time.Second
+	now := time.Now()
+
+	// First metric at scrape 1: recorded but insufficient.
+	r := g.Filter("pod-1", "cpu", 0.4, "statistical", now)
+	if r.Pass {
+		t.Fatal("expected drop on single metric scrape 1")
+	}
+
+	// First metric at scrape 2: still only 2/3 sustain.
+	r = g.Filter("pod-1", "cpu", 0.4, "statistical", now.Add(30*time.Second))
+	if r.Pass {
+		t.Fatal("expected drop on single metric scrape 2")
+	}
+
+	// Second metric for same entity within CorrelationWindow — correlation passes.
+	r = g.Filter("pod-1", "memory", 0.5, "statistical", now.Add(40*time.Second))
+	if !r.Pass {
+		t.Fatalf("expected pass via multi-metric, got reason=%s", r.Reason)
+	}
+	if r.Reason != "multi_metric_correlation" {
+		t.Fatalf("expected reason multi_metric_correlation, got %s", r.Reason)
+	}
+}
+
 func TestGate_DefaultConfig(t *testing.T) {
 	g := NewGate(DefaultConfig())
 
