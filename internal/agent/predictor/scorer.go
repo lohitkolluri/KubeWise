@@ -53,11 +53,11 @@ func DefaultScorerConfig() ScorerConfig {
 		HoeffdingK:     6.0,
 		MinWarmup:      MinimumWarmupPoints,
 		// Emit fewer statistical anomalies; patterns carry the “prediction” UX.
-		MinScore:       0.65,
-		Persistence:    2,
-		PatternPersistence:    2,
+		MinScore:               0.65,
+		Persistence:            2,
+		PatternPersistence:     2,
 		PatternCooldownScrapes: 1,
-		ROCBoostWeight: 0.2,
+		ROCBoostWeight:         0.2,
 	}
 }
 

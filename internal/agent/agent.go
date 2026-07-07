@@ -125,22 +125,22 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	apiSrv.SetRemediator(corr)
 
 	a := &Agent{
-		store:             s,
-		collector:         col,
-		predictor:         pred,
-		forecaster:        fcast,
-		correlator:        corr,
-		anomalyGate:       ag,
-		outcomeTracker:    outcome.NewTracker(s),
-		healthComputer:    outcome.NewHealthComputer(s),
-		accuracyComputer:  outcome.NewAccuracyComputer(s),
-		notifier:          notifier,
-		apiServer:         apiSrv,
-		cfg:               cfg,
-		stopCh:            make(chan struct{}),
-		interval:          interval,
-		apiAddr:           apiAddr,
-		minScore:          predCfg.MinScore,
+		store:            s,
+		collector:        col,
+		predictor:        pred,
+		forecaster:       fcast,
+		correlator:       corr,
+		anomalyGate:      ag,
+		outcomeTracker:   outcome.NewTracker(s),
+		healthComputer:   outcome.NewHealthComputer(s),
+		accuracyComputer: outcome.NewAccuracyComputer(s),
+		notifier:         notifier,
+		apiServer:        apiSrv,
+		cfg:              cfg,
+		stopCh:           make(chan struct{}),
+		interval:         interval,
+		apiAddr:          apiAddr,
+		minScore:         predCfg.MinScore,
 	}
 	a.runCtx, a.runCancel = context.WithCancel(context.Background())
 
@@ -244,7 +244,6 @@ func (a *Agent) runOnceSafe() {
 	}()
 	a.runOnce()
 }
-
 
 // Stop signals the agent loop to stop.
 func (a *Agent) Stop() {

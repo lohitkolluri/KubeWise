@@ -104,10 +104,10 @@ const (
 )
 
 type controlModel struct {
-	interval    time.Duration
-	tab         int
-	width       int
-	height      int
+	interval time.Duration
+	tab      int
+	width    int
+	height   int
 
 	// Data
 	status    agentStatus
@@ -126,15 +126,15 @@ type controlModel struct {
 	accSnap      *models.AccuracySnapshot
 
 	// Per-tab loading & error state
-	loading   bool
+	loading    bool
 	loadingTab [tabCount]bool
-	err       error
-	errTab    [tabCount]error
+	err        error
+	errTab     [tabCount]error
 
 	// Detail view
-	detail        string
-	detailTitle   string
-	detailVP      viewport.Model
+	detail         string
+	detailTitle    string
+	detailVP       viewport.Model
 	detailVPHeight int
 
 	// Status bar
@@ -143,21 +143,21 @@ type controlModel struct {
 	uptime     string
 
 	// Mode state
-	ready      bool
-	logsFollow bool
+	ready       bool
+	logsFollow  bool
 	auditStatus string
-	auditSince string
+	auditSince  string
 
 	// Confirmations
 	confirm         confirmKind
 	confirmTargetID string // for confirmApproveRemediation
 
 	// UI components
-	cursor  [tabCount]int
-	keys    uiKeyMap
-	help    help.Model
-	spin    spinner.Model
-	logsVP  viewport.Model
+	cursor [tabCount]int
+	keys   uiKeyMap
+	help   help.Model
+	spin   spinner.Model
+	logsVP viewport.Model
 
 	// Palette
 	palette           paletteState
@@ -211,26 +211,26 @@ func (m controlModel) refreshAll() tea.Cmd {
 	return func() tea.Msg {
 		r := fetchAll(m.auditStatus, m.auditSince)
 		return dataMsg{
-			status:     r.status,
-			healthOK:   r.healthOK,
-			preds:      r.preds,
-			anomalies:  r.anomalies,
-			audits:     r.audits,
-			config:     r.config,
-			remMode:    r.remMode,
-			pending:    r.pending,
-			logs:       r.logs,
-			lastUpdate: r.lastUpdate,
-			err:        r.err,
-			predErr:    r.predErr,
-			anomErr:    r.anomErr,
-			auditErr:   r.auditErr,
-			configErr:  r.configErr,
-			remErr:     r.remErr,
-			pendErr:    r.pendErr,
-			logsErr:    r.logsErr,
-			healthErr:  r.healthErr,
-			accErr:     r.accErr,
+			status:       r.status,
+			healthOK:     r.healthOK,
+			preds:        r.preds,
+			anomalies:    r.anomalies,
+			audits:       r.audits,
+			config:       r.config,
+			remMode:      r.remMode,
+			pending:      r.pending,
+			logs:         r.logs,
+			lastUpdate:   r.lastUpdate,
+			err:          r.err,
+			predErr:      r.predErr,
+			anomErr:      r.anomErr,
+			auditErr:     r.auditErr,
+			configErr:    r.configErr,
+			remErr:       r.remErr,
+			pendErr:      r.pendErr,
+			logsErr:      r.logsErr,
+			healthErr:    r.healthErr,
+			accErr:       r.accErr,
 			healthScores: r.healthScores,
 			healthSum:    r.healthSum,
 			accSnap:      r.accSnap,
@@ -847,7 +847,7 @@ func (m controlModel) renderTabContent() string {
 		}
 		lines := strings.Count(m.logs, "\n") + 1
 		scroll := mutedStyle.Render(fmt.Sprintf("lines %d", lines))
-		return scroll + mutedStyle.Render(" · " + follow + " (f)") + "\n" + m.logsVP.View()
+		return scroll + mutedStyle.Render(" · "+follow+" (f)") + "\n" + m.logsVP.View()
 	case tabHealth:
 		if m.errTab[tabHealth] != nil {
 			return m.renderTabError("health scores", m.errTab[tabHealth])
@@ -1249,7 +1249,7 @@ func (m controlModel) renderDetail() string {
 	}
 	help := mutedStyle.Render("esc back · q quit") + scrollInfo
 
-	body := detailBorderActiveStyle.Width(m.width-6).Height(m.detailVPHeight-2).Render(content)
+	body := detailBorderActiveStyle.Width(m.width - 6).Height(m.detailVPHeight - 2).Render(content)
 	return title + "\n" + body + "\n" + help
 }
 

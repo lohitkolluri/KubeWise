@@ -16,9 +16,9 @@ func (s *Server) handleAccuracyLatest(w http.ResponseWriter, r *http.Request) {
 	}
 	if snap == nil {
 		snap = &models.AccuracySnapshot{
-			ByPredictor: map[string]models.AccuracyMetrics{},
-			ByNamespace: map[string]models.AccuracyMetrics{},
-			ByMetric:    map[string]models.AccuracyMetrics{},
+			ByPredictor:    map[string]models.AccuracyMetrics{},
+			ByNamespace:    map[string]models.AccuracyMetrics{},
+			ByMetric:       map[string]models.AccuracyMetrics{},
 			ByResourceKind: map[string]models.AccuracyMetrics{},
 		}
 	}
