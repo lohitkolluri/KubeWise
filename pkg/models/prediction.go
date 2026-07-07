@@ -22,15 +22,16 @@ func ValidRemediationMode(mode string) bool {
 
 // PredictionResult represents a failure prediction made by the engine.
 type PredictionResult struct {
-	Type       string    `json:"type"`
-	Entity     string    `json:"entity"`
-	Namespace  string    `json:"namespace"`
-	MetricName string    `json:"metric_name"`
-	Action     string    `json:"action"`
-	Confidence float64   `json:"confidence"`
-	ETASeconds float64   `json:"eta_seconds"`
-	Timestamp  time.Time `json:"timestamp"`
-	Score      float64   `json:"score"`
+	Type        string    `json:"type"`
+	Entity      string    `json:"entity"`
+	Namespace   string    `json:"namespace"`
+	MetricName  string    `json:"metric_name"`
+	PredictorID string    `json:"predictor_id"` // e.g. "bocpd", "pattern:oom", "adaptive_median"
+	Action      string    `json:"action"`
+	Confidence  float64   `json:"confidence"`
+	ETASeconds  float64   `json:"eta_seconds"`
+	Timestamp   time.Time `json:"timestamp"`
+	Score       float64   `json:"score"`
 }
 
 // ETA returns the prediction time-to-failure as a duration.
