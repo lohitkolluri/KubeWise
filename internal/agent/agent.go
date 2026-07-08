@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/collector"
+	"github.com/lohitkolluri/KubeWise/internal/agent/featureflags"
 	"github.com/lohitkolluri/KubeWise/internal/agent/forecaster"
 	"github.com/lohitkolluri/KubeWise/internal/agent/gate"
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
@@ -19,6 +20,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/remediator"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/internal/api"
+	"github.com/lohitkolluri/KubeWise/internal/engine"
 	k8sclient "github.com/lohitkolluri/KubeWise/pkg/k8s"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
@@ -44,6 +46,7 @@ type Agent struct {
 	accuracyComputer   *outcome.AccuracyComputer
 	notifier           *notify.Notifier
 	apiServer          *api.Server
+	featureFlags       featureflags.Flags
 	cfg                *models.AgentConfig
 	interval           time.Duration
 	apiAddr            string
@@ -113,7 +116,21 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		remCfg.WatchNamespaces = cfg.WatchNamespaces
 	}
 
-	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg)
+	ff := featureflags.Load()
+
+	// Create and populate rule engine with 8 built-in rules for known failure patterns.
+	ruleEngine := engine.New()
+	engine.MustRegister(ruleEngine, &engine.OOMRule{})
+	engine.MustRegister(ruleEngine, &engine.CrashLoopRule{})
+	engine.MustRegister(ruleEngine, &engine.ImagePullBackOffRule{})
+	engine.MustRegister(ruleEngine, &engine.NodeNotReadyRule{})
+	engine.MustRegister(ruleEngine, &engine.PendingRule{})
+	engine.MustRegister(ruleEngine, &engine.ReadyRatioRule{})
+	engine.MustRegister(ruleEngine, &engine.CPUThrottleRule{})
+	engine.MustRegister(ruleEngine, &engine.MemoryPressureRule{})
+	log.Printf("agent: registered %d rules", ruleEngine.RuleCount())
+
+	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg, ff, ruleEngine)
 	notifier := notify.New(cfg.Notifications)
 	corr.SetNotifier(notifier)
 
@@ -125,12 +142,13 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	apiSrv.SetRemediator(corr)
 
 	a := &Agent{
-		store:            s,
-		collector:        col,
-		predictor:        pred,
-		forecaster:       fcast,
-		correlator:       corr,
-		anomalyGate:      ag,
+			store:            s,
+			collector:        col,
+			predictor:        pred,
+			forecaster:       fcast,
+			correlator:       corr,
+			anomalyGate:      ag,
+			featureFlags:     ff,
 		outcomeTracker:   outcome.NewTracker(s),
 		healthComputer:   outcome.NewHealthComputer(s),
 		accuracyComputer: outcome.NewAccuracyComputer(s),

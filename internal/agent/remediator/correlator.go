@@ -10,9 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lohitkolluri/KubeWise/internal/agent/featureflags"
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
 	"github.com/lohitkolluri/KubeWise/internal/agent/notify"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
+	"github.com/lohitkolluri/KubeWise/internal/engine"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
@@ -36,7 +38,7 @@ var knownActionTypes = map[string]bool{
 }
 
 // Correlator orchestrates the LLM-based remediation pipeline:
-// collect anomalies → call LLM → assign risk tier → execute → audit.
+// collect anomalies → rule engine (fast path) → call LLM → assign risk tier → execute → audit.
 type Correlator struct {
 	llmClient    *llm.Client
 	tierAssigner *TierAssigner
@@ -46,27 +48,33 @@ type Correlator struct {
 	store        *store.Store
 	cfg          RemediationConfig
 	notifier     *notify.Notifier
+	featureFlags featureflags.Flags
+	ruleEngine   *engine.RuleEngine
 	mu           sync.RWMutex
 }
 
 // RemediationConfig controls correlator behavior.
 type RemediationConfig struct {
-	Mode            string   // "dry-run", "auto", "off"
-	DryRun          bool     // when true, log actions but don't execute
-	Allowlist       []string // allowed action types (empty = all)
-	Denylist        []string // denied namespaces
-	MinConfidence   float64  // minimum LLM confidence to execute
-	RateLimit       int      // max anomalies per LLM call (0 = unlimited)
-	WatchNamespaces []string // empty = all namespaces (minus denylist)
+	Mode                  string   // "dry-run", "auto", "off"
+	DryRun                bool     // when true, log actions but don't execute
+	Allowlist             []string // allowed action types (empty = all)
+	Denylist              []string // denied namespaces
+	MinConfidence         float64  // minimum LLM confidence to execute
+	RateLimit             int      // max anomalies per LLM call (0 = unlimited)
+	WatchNamespaces       []string // empty = all namespaces (minus denylist)
+	RuleConfidenceThreshold float64 // minimum confidence for rule engine to auto-remediate (default 0.9)
 }
 
 // NewCorrelator creates the remediation pipeline.
-func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig) *Correlator {
+func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig, ff featureflags.Flags, ruleEngine *engine.RuleEngine) *Correlator {
 	if cfg.Mode == "" {
 		cfg.Mode = "dry-run"
 	}
 	if cfg.MinConfidence <= 0 {
 		cfg.MinConfidence = 0.7
+	}
+	if cfg.RuleConfidenceThreshold <= 0 {
+		cfg.RuleConfidenceThreshold = 0.9
 	}
 	return &Correlator{
 		llmClient:    llmClient,
@@ -76,6 +84,8 @@ func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store,
 		verifier:     newVerifierFromExecutor(executor),
 		store:        s,
 		cfg:          cfg,
+		featureFlags: ff,
+		ruleEngine:   ruleEngine,
 	}
 }
 
@@ -112,7 +122,7 @@ func (c *Correlator) emitAuditNotification(record *models.AuditRecord) {
 	n.NotifyRemediation(ctx, *record)
 }
 
-// RunOnce executes one remediation cycle: fetch anomalies, correlate via LLM, execute.
+// RunOnce executes one remediation cycle: fetch anomalies, correlate via rule engine (fast path) or LLM, execute.
 func (c *Correlator) RunOnce(ctx context.Context) error {
 	cfg := c.snapshotConfig()
 	if cfg.Mode == "off" {
@@ -141,6 +151,18 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	}
 
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
+
+	// Rule engine fast path (gated by feature flag). Runs before investigator/LLM to short-circuit
+	// known failure patterns that don't need LLM reasoning.
+	if c.featureFlags.RuleEngine && c.ruleEngine != nil {
+		match, err := c.evaluateRules(ctx, cfg, correlatable)
+		if err != nil {
+			log.Printf("remediator: rule engine error: %v", err)
+		}
+		if match {
+			return nil // short-circuited via rule engine path (audited inside)
+		}
+	}
 
 	metricsSummary := c.buildMetricsSummary(correlatable)
 	investigation := ""
@@ -336,6 +358,179 @@ func (c *Correlator) snapshotConfig() RemediationConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cfg
+}
+
+// buildMetricSummaries extracts metric summaries from anomalies for the rule engine.
+func (c *Correlator) buildMetricSummaries(anomalies []models.AnomalyRecord) []engine.MetricSummary {
+	seen := make(map[string]struct{})
+	var summaries []engine.MetricSummary
+	for _, a := range anomalies {
+		if a.MetricName == "" {
+			continue
+		}
+		key := a.Entity + "|" + a.MetricName
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		ns, name := models.ParseEntity(a.Entity)
+		if a.Namespace != "" && ns == "" {
+			ns = a.Namespace
+		}
+		labels := map[string]string{"namespace": ns, "pod": name}
+		pts, err := c.store.GetMetricSeries(a.MetricName, labels, 15)
+		if err != nil || len(pts) == 0 {
+			summaries = append(summaries, engine.MetricSummary{
+				Name:    a.MetricName + "@" + a.Entity,
+				Current: a.Score,
+				Trend:   "unknown",
+			})
+			continue
+		}
+		last := pts[len(pts)-1]
+		var total float64
+		maxVal := pts[0].Value
+		for _, p := range pts {
+			total += p.Value
+			if p.Value > maxVal {
+				maxVal = p.Value
+			}
+		}
+		trend := "stable"
+		if len(pts) >= 2 && last.Value > pts[0].Value*1.1 {
+			trend = "rising"
+		} else if len(pts) >= 2 && last.Value < pts[0].Value*0.9 {
+			trend = "falling"
+		}
+		summaries = append(summaries, engine.MetricSummary{
+			Name:        a.MetricName + "@" + a.Entity,
+			Current:     last.Value,
+			Average:     total / float64(len(pts)),
+			Max:         maxVal,
+			SampleCount: len(pts),
+			Trend:       trend,
+		})
+	}
+	return summaries
+}
+
+// evaluateRules runs the rule engine against correlatable anomalies.
+// Returns true if a deterministic match was processed (short-circuit LLM).
+func (c *Correlator) evaluateRules(ctx context.Context, cfg RemediationConfig, correlatable []models.AnomalyRecord) (bool, error) {
+	ruleInput := engine.EngineInput{
+		Anomalies: correlatable,
+		Metrics:   c.buildMetricSummaries(correlatable),
+	}
+	ruleResults, err := c.ruleEngine.Evaluate(ctx, ruleInput)
+	if err != nil {
+		return false, err
+	}
+	if len(ruleResults) == 0 {
+		return false, nil
+	}
+
+	processed := false
+	for _, rr := range ruleResults {
+		if rr.Confidence >= cfg.RuleConfidenceThreshold && !rr.NeedsLLM {
+			plan := engine.RuleToPlan(rr)
+			ok := c.processRuleResult(ctx, cfg, plan, rr, correlatable)
+			if ok {
+				processed = true
+			}
+		}
+		if rr.NeedsLLM {
+			log.Printf("remediator: rule %s matched but needs LLM — falling through to LLM path", rr.RuleName)
+		}
+	}
+	return processed, nil
+}
+
+// processRuleResult runs a rule-sourced plan through the existing pipeline:
+// validate → tier assign → gate → dry-run → execute → verify.
+// All safety gates apply: tier assignments, cooldowns, T3 approval, dry-run.
+func (c *Correlator) processRuleResult(ctx context.Context, cfg RemediationConfig, plan models.RemediationPlan, rr engine.RuleResult, correlatable []models.AnomalyRecord) bool {
+	if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
+		log.Printf("remediator: rule %s plan validation failed: %v", rr.RuleName, err)
+		return false
+	}
+	tier := c.tierAssigner.AssignTierPlan(plan)
+	matched := c.anomaliesMatchingPlan(correlatable, plan)
+
+	log.Printf("remediator: rule %s action=%s target=%s/%s tier=%s confidence=%.2f",
+		rr.RuleName, plan.Action.Type, plan.Action.Namespace, plan.Action.Target, tier, plan.Diagnosis.Confidence)
+
+	reason := c.gateByTierPlan(tier, plan)
+	if reason != "" {
+		c.logAudit(&plan, matched, tier, models.AuditRejected, reason, "rule_engine:"+rr.RuleName, "")
+		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
+		log.Printf("remediator: rule %s rejected — %s", rr.RuleName, reason)
+		return false
+	}
+
+	if tier == models.RiskTier3 {
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		if cfg.DryRun {
+			log.Printf("remediator: [dry-run] rule %s T3 %s %s/%s — needs approval when live",
+				rr.RuleName, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+			c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run T3 (rule engine)", "rule_engine:"+rr.RuleName, "")
+			return true
+		}
+		c.logAudit(&plan, matched, tier, models.AuditPending,
+			"awaiting human approval (T3, rule engine)", "rule_engine:"+rr.RuleName, "")
+		log.Printf("remediator: rule %s T3 %s %s/%s — pending approval",
+			rr.RuleName, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+		return true
+	}
+
+	if plan.Action.Type == "escalate" {
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		c.logAudit(&plan, matched, tier, models.AuditEscalated, "escalated to human operator (rule engine)", "rule_engine:"+rr.RuleName, "")
+		log.Printf("remediator: rule %s escalated %s/%s to human operator", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
+		return true
+	}
+
+	if cfg.DryRun {
+		log.Printf("remediator: [dry-run] rule %s would execute %s/%s", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode (rule engine)", "rule_engine:"+rr.RuleName, c.dryRunSummary(plan))
+		return true
+	}
+
+	if c.executor == nil {
+		c.logAudit(&plan, matched, tier, models.AuditRejected, "k8s executor unavailable", "rule_engine:"+rr.RuleName, "")
+		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
+		log.Printf("remediator: rule %s rejected — k8s executor unavailable", rr.RuleName)
+		return false
+	}
+
+	result, err := c.executor.Execute(ctx, plan)
+	if err != nil {
+		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), "rule_engine:"+rr.RuleName, result)
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		log.Printf("remediator: rule %s execution failed: %v", rr.RuleName, err)
+		return false
+	}
+
+	if tier == models.RiskTier2 {
+		for _, step := range plan.EffectiveSteps() {
+			if step.Type != waitActionType {
+				c.tierAssigner.SetCooldown(step.Namespace, step.Type)
+			}
+		}
+	}
+
+	now := time.Now()
+	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
+	if verifyNote == "" {
+		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
+		c.logAuditVerified(&plan, matched, tier, "", "rule_engine:"+rr.RuleName, result, verifyNote, &now)
+		log.Printf("remediator: rule %s executed and verified %s/%s", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
+	} else {
+		c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
+		c.logAudit(&plan, matched, tier, models.AuditVerifyFailed, verifyNote, "rule_engine:"+rr.RuleName, result)
+		log.Printf("remediator: rule %s executed but verification failed: %s", rr.RuleName, verifyNote)
+	}
+	return true
 }
 
 func (c *Correlator) filterNewAnomalies(records []models.AnomalyRecord, cfg RemediationConfig) []models.AnomalyRecord {
