@@ -41,7 +41,7 @@ agent:
   scrapeInterval: 30s
   prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
   llmProvider: openrouter
-  llmModel: openrouter/gpt-oss-120b
+  llmModel: openai/gpt-oss-120b
   llmBaseURL: ""
   # Empty = watch all namespaces (subject to denylist). Non-empty limits observation scope.
   watchNamespaces: []
