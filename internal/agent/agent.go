@@ -21,6 +21,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/internal/api"
 	"github.com/lohitkolluri/KubeWise/internal/engine"
+	"github.com/lohitkolluri/KubeWise/internal/llmrouter"
 	k8sclient "github.com/lohitkolluri/KubeWise/pkg/k8s"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
@@ -130,7 +131,13 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	engine.MustRegister(ruleEngine, &engine.MemoryPressureRule{})
 	log.Printf("agent: registered %d rules", ruleEngine.RuleCount())
 
-	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg, ff, ruleEngine)
+	// Create LLM router for multi-model dispatch (gated by feature flag).
+	var llmRouter *llmrouter.LLMRouter
+	if ff.LLMRouter && llmClient != nil {
+		llmRouter = llmrouter.New(llmClient, llmrouter.DefaultRouterConfig())
+	}
+
+	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg, ff, ruleEngine, llmRouter)
 	notifier := notify.New(cfg.Notifications)
 	corr.SetNotifier(notifier)
 

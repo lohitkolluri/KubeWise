@@ -30,6 +30,14 @@ func NewOpenRouterClient(apiKey, model string) (*Client, error) {
 	return NewClient(Config{Provider: "openrouter", APIKey: apiKey, Model: model})
 }
 
+// SetModel changes the model used by the underlying provider.
+// This enables the LLM router to switch models without recreating the client.
+func (c *Client) SetModel(model string) {
+	if c != nil && c.provider != nil {
+		c.provider.SetModel(model)
+	}
+}
+
 // ProviderName returns the active backend name.
 func (c *Client) ProviderName() string {
 	if c == nil || c.provider == nil {

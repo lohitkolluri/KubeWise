@@ -96,6 +96,9 @@ func (p *OpenRouterProvider) SetSessionID(sessionID string) {
 	)
 }
 
+// SetModel changes the model used for subsequent requests.
+func (p *OpenRouterProvider) SetModel(model string) { p.model = model }
+
 func (p *OpenRouterProvider) Name() string { return "openrouter" }
 
 func (p *OpenRouterProvider) HasAPIKey() bool { return p.apiKey != "" }

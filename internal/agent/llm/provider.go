@@ -13,6 +13,7 @@ type Provider interface {
 	Name() string
 	HasAPIKey() bool
 	ValidateKey(ctx context.Context) error
+	SetModel(model string)
 	StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error
 }
 
