@@ -20,10 +20,27 @@ func findAgentPod(ctx context.Context) (podName string, err error) {
 		return "", err
 	}
 	pod, err := kc.FindRunningPod(ctx, agentNS, agentSvc)
-	if err != nil {
-		return "", err
+	if err == nil {
+		return pod.Name, nil
 	}
-	return pod.Name, nil
+	// If the service name doesn't match pod prefix (e.g. Helm chart vs raw manifest naming),
+	// try common alternatives like stripping "-agent" / "-service" suffix or the release name.
+	altPrefixes := []string{
+		strings.TrimSuffix(agentSvc, "-agent"),
+		strings.TrimSuffix(agentSvc, "-service"),
+		agentSvc + "-agent",
+		agentSvc + "-service",
+	}
+	for _, pfx := range altPrefixes {
+		if pfx == agentSvc {
+			continue
+		}
+		pod, altErr := kc.FindRunningPod(ctx, agentNS, pfx)
+		if altErr == nil {
+			return pod.Name, nil
+		}
+	}
+	return "", err
 }
 
 func fetchAgentLogs(tail int64) (string, error) {

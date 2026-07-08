@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	yaml "gopkg.in/yaml.v3"
 )
@@ -34,10 +35,18 @@ func writeOutput(w io.Writer, format string, v any, tableFn func() error) error 
 }
 
 func trunc(s string, n int) string {
-	if len(s) <= n {
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	// Truncate by runes, not bytes, to avoid splitting multi-byte characters
+	var runes int
+	for i := range s {
+		if runes >= n-1 {
+			return s[:i] + "…"
+		}
+		runes++
+	}
+	return s
 }
 
 func repeatLine(n int) string {

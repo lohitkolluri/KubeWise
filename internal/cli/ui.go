@@ -1193,22 +1193,53 @@ func (m controlModel) renderList(lines []string, cursor, total int) string {
 		return lines[0]
 	}
 
-	var b strings.Builder
-	for i, line := range lines {
-		if i == 0 {
-			b.WriteString(line)
-			b.WriteString("\n")
-			continue
+	// Calculate visible range — header takes 1 line, each data item takes 1 line
+	headerLines := 1
+	maxVisible := m.contentHeight() - 1 // leave room for status line
+	if maxVisible < 3 {
+		maxVisible = 3
+	}
+	dataLines := lines[headerLines:]
+	dataCount := len(dataLines)
+
+	// Center cursor in visible window
+	half := maxVisible / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxVisible
+	if end > dataCount {
+		end = dataCount
+		start = end - maxVisible
+		if start < 0 {
+			start = 0
 		}
-		if i-1 == cursor {
+	}
+
+	var b strings.Builder
+	// Header
+	b.WriteString(lines[0])
+	b.WriteString("\n")
+
+	// Visible data items
+	for i := start; i < end; i++ {
+		line := lines[headerLines+i]
+		if i == cursor {
 			b.WriteString(listSelectedStyle.Render("› " + line))
 		} else {
 			b.WriteString("  " + line)
 		}
 		b.WriteString("\n")
 	}
+
 	if total > 0 {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("\n%d/%d  enter detail  g/G top/bottom", cursor+1, total)))
+		scrollInfo := ""
+		if dataCount > maxVisible {
+			pct := int(float64(cursor) / float64(dataCount-1) * 100)
+			scrollInfo = fmt.Sprintf("  scroll %d%%", pct)
+		}
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("\n%d/%d%s  enter detail  g/G top/bottom", cursor+1, total, scrollInfo)))
 	}
 	return b.String()
 }

@@ -123,6 +123,12 @@ func normalizeRunbookSteps(plan *models.RemediationPlan, anomalies []models.Anom
 				step.Target = name
 			}
 		}
+		// patch_resources without parameters is a common LLM error.
+		// Demote to noop instead of failing the entire plan.
+		if step.Type == "patch_resources" && len(step.Parameters) == 0 {
+			step.Type = "noop"
+			step.Rationale = "demoted from patch_resources: missing resource parameters"
+		}
 		out = append(out, step)
 	}
 	// Re-number to keep sequential ordering after dropping steps.
