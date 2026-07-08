@@ -3,6 +3,8 @@ package remediator
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -13,6 +15,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/featureflags"
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
 	"github.com/lohitkolluri/KubeWise/internal/agent/notify"
+	"github.com/lohitkolluri/KubeWise/internal/agent/semcache"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/internal/engine"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -38,7 +41,7 @@ var knownActionTypes = map[string]bool{
 }
 
 // Correlator orchestrates the LLM-based remediation pipeline:
-// collect anomalies → rule engine (fast path) → call LLM → assign risk tier → execute → audit.
+// collect anomalies → rule engine (fast path) → semantic cache (fast path) → call LLM → assign risk tier → execute → audit.
 type Correlator struct {
 	llmClient    *llm.Client
 	tierAssigner *TierAssigner
@@ -50,6 +53,7 @@ type Correlator struct {
 	notifier     *notify.Notifier
 	featureFlags featureflags.Flags
 	ruleEngine   *engine.RuleEngine
+	semCache     *semcache.Cache
 	mu           sync.RWMutex
 }
 
@@ -86,6 +90,7 @@ func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store,
 		cfg:          cfg,
 		featureFlags: ff,
 		ruleEngine:   ruleEngine,
+		semCache:     semcache.New(semcache.Config{}),
 	}
 }
 
@@ -152,6 +157,13 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 
 	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
 
+	// Prune expired cache entries before any cache operations.
+	if c.featureFlags.SemanticCache && c.semCache != nil {
+		if removed := c.semCache.Prune(); removed > 0 {
+			log.Printf("remediator: pruned %d expired cache entries", removed)
+		}
+	}
+
 	// Rule engine fast path (gated by feature flag). Runs before investigator/LLM to short-circuit
 	// known failure patterns that don't need LLM reasoning.
 	if c.featureFlags.RuleEngine && c.ruleEngine != nil {
@@ -164,28 +176,45 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		}
 	}
 
-	metricsSummary := c.buildMetricsSummary(correlatable)
-	investigation := ""
-	if c.investigator != nil {
-		invCtx, invCancel := gatherTimeout(ctx)
-		investigation = c.investigator.Gather(invCtx, correlatable)
-		invCancel()
-		if investigation != "" {
-			log.Printf("remediator: gathered cluster investigation context (%d bytes)", len(investigation))
+	// Semantic cache fast path (gated by feature flag). Skips investigation and LLM for
+	// anomaly patterns that were recently processed with identical fingerprints.
+	var cachedPlan *models.RemediationPlan
+	if c.featureFlags.SemanticCache && c.semCache != nil {
+		if entry := c.lookupCachedPlan(correlatable); entry != nil {
+			cachedPlan = entry
+			log.Printf("remediator: semantic cache hit — reusing cached plan")
 		}
 	}
 
-	userPrompt := llm.BuildUserPrompt(correlatable, metricsSummary, investigation)
-	systemPrompt := llm.SystemPrompt()
-	schema := llm.RemediationSchema()
+	metricsSummary := c.buildMetricsSummary(correlatable)
 
 	var plan models.RemediationPlan
-	if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
-		return fmt.Errorf("llm correlation: %w", err)
-	}
+	var userPrompt, investigation string
+	systemPrompt := llm.SystemPrompt()
+	schema := llm.RemediationSchema()
+	fromCache := cachedPlan != nil
 
-	normalizePlan(&plan, correlatable)
-	plan.Investigation = models.InvestigationContext{Summary: investigation}
+	if fromCache {
+		plan = *cachedPlan
+		normalizePlan(&plan, correlatable)
+	} else {
+		if c.investigator != nil {
+			invCtx, invCancel := gatherTimeout(ctx)
+			investigation = c.investigator.Gather(invCtx, correlatable)
+			invCancel()
+			if investigation != "" {
+				log.Printf("remediator: gathered cluster investigation context (%d bytes)", len(investigation))
+			}
+		}
+
+		userPrompt = llm.BuildUserPrompt(correlatable, metricsSummary, investigation)
+		if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
+			return fmt.Errorf("llm correlation: %w", err)
+		}
+
+		normalizePlan(&plan, correlatable)
+		plan.Investigation = models.InvestigationContext{Summary: investigation}
+	}
 
 	if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
 		// One-shot repair attempt for common structural issues where the model
@@ -216,6 +245,11 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 			log.Printf("remediator: plan validation failed: %v", err)
 			return nil
 		}
+	}
+
+	// Cache the validated plan so future identical anomalies skip the LLM.
+	if c.featureFlags.SemanticCache && !fromCache {
+		c.storeCachedPlan(correlatable, plan)
 	}
 
 	tier := c.tierAssigner.AssignTierPlan(plan)
@@ -822,4 +856,56 @@ func (c *Correlator) anomalyFetchLimit(cfg RemediationConfig) int {
 		limit = 100
 	}
 	return limit
+}
+
+// lookupCachedPlan checks the semantic cache for a matching anomaly fingerprint.
+// Returns a deserialized RemediationPlan on cache hit, nil otherwise.
+func (c *Correlator) lookupCachedPlan(anomalies []models.AnomalyRecord) *models.RemediationPlan {
+	fp := fingerprintAnomalyGroup(anomalies)
+	if fp == "" {
+		return nil
+	}
+	entry := c.semCache.Get(fp)
+	if entry == nil {
+		return nil
+	}
+	var plan models.RemediationPlan
+	if err := json.Unmarshal([]byte(entry.PlanJSON), &plan); err != nil {
+		log.Printf("remediator: semcache deserialize error: %v", err)
+		return nil
+	}
+	return &plan
+}
+
+// storeCachedPlan serializes and stores a RemediationPlan in the semantic cache.
+func (c *Correlator) storeCachedPlan(anomalies []models.AnomalyRecord, plan models.RemediationPlan) {
+	fp := fingerprintAnomalyGroup(anomalies)
+	if fp == "" {
+		return
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		log.Printf("remediator: semcache serialize error: %v", err)
+		return
+	}
+	c.semCache.Set(fp, string(data))
+}
+
+// fingerprintAnomalyGroup computes a combined fingerprint for a group of anomalies.
+// Uses a combined SHA256 hash of all individual anomaly fingerprints.
+func fingerprintAnomalyGroup(anomalies []models.AnomalyRecord) string {
+	if len(anomalies) == 0 {
+		return ""
+	}
+	if len(anomalies) == 1 {
+		a := anomalies[0]
+		return semcache.Fingerprint(a.Entity, a.Namespace, a.MetricName, a.Pattern, a.Score)
+	}
+	h := sha256.New()
+	for _, a := range anomalies {
+		fp := semcache.Fingerprint(a.Entity, a.Namespace, a.MetricName, a.Pattern, a.Score)
+		h.Write([]byte(fp))
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
