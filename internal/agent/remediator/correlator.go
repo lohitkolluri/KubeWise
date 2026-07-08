@@ -39,6 +39,11 @@ var validBlastRadii = map[string]bool{
 var knownActionTypes = map[string]bool{
 	"restart_pod": true, "delete_pod": true, "scale_replicas": true,
 	"rollback_deployment": true, "patch_resources": true, "noop": true, "escalate": true,
+	// Tool plugin action types.
+	"helm_upgrade": true, "helm_rollback": true,
+	"argocd_sync": true, "argocd_rollback": true,
+	"github_create_pr": true, "github_merge_pr": true,
+	"terraform_apply": true,
 }
 
 // Correlator orchestrates the LLM-based remediation pipeline:
