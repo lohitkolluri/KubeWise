@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -134,6 +136,8 @@ func (e *K8sExecutor) execute(ctx context.Context, plan models.RemediationPlan, 
 		return e.patchResources(ctx, plan.Action.Namespace, plan.Action.Target, plan.Action.Parameters)
 	case "noop":
 		return "no action taken (noop)", nil
+	case "view_logs":
+		return e.viewPodLogs(ctx, plan.Action.Namespace, plan.Action.Target, plan.Action.Parameters)
 	case "escalate":
 		return "escalated to human operator", nil
 	default:
@@ -279,6 +283,54 @@ func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string
 	}
 
 	return fmt.Sprintf("patched resources for deployment %s/%s container %s", namespace, name, container), nil
+}
+
+func (e *K8sExecutor) viewPodLogs(ctx context.Context, namespace, name string, params map[string]string) (string, error) {
+	tail := int64(50)
+	if t := params["tail"]; t != "" {
+		if v, err := strconv.ParseInt(t, 10, 64); err == nil && v > 0 && v < 500 {
+			tail = v
+		}
+	}
+	container := params["container"]
+	pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=" + name,
+	})
+	if err != nil {
+		return "", fmt.Errorf("list pods for %s/%s: %w", namespace, name, err)
+	}
+	if len(pods.Items) == 0 {
+		// Try direct pod name match
+		pod, err2 := e.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err2 != nil {
+			return "", fmt.Errorf("no pods found for %s/%s", namespace, name)
+		}
+		logs, err2 := e.getPodLogs(ctx, namespace, pod.Name, container, tail)
+		if err2 != nil {
+			return "", err2
+		}
+		return logs, nil
+	}
+	// Return logs from the first matching pod
+	return e.getPodLogs(ctx, namespace, pods.Items[0].Name, container, tail)
+}
+
+func (e *K8sExecutor) getPodLogs(ctx context.Context, namespace, podName, container string, tail int64) (string, error) {
+	opts := &corev1.PodLogOptions{TailLines: &tail}
+	if container != "" {
+		opts.Container = container
+	}
+	req := e.clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return "", fmt.Errorf("stream logs %s/%s: %w", namespace, podName, err)
+	}
+	defer func() { _ = stream.Close() }()
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		return "", fmt.Errorf("read logs %s/%s: %w", namespace, podName, err)
+	}
+	return string(data), nil
 }
 
 // executeToolAction dispatches a remediation action to the tool plugin system.

@@ -38,7 +38,7 @@ var validBlastRadii = map[string]bool{
 
 var knownActionTypes = map[string]bool{
 	"restart_pod": true, "delete_pod": true, "scale_replicas": true,
-	"rollback_deployment": true, "patch_resources": true, "noop": true, "escalate": true,
+	"rollback_deployment": true, "patch_resources": true, "view_logs": true, "noop": true, "escalate": true,
 	// Tool plugin action types.
 	"helm_upgrade": true, "helm_rollback": true,
 	"argocd_sync": true, "argocd_rollback": true,
