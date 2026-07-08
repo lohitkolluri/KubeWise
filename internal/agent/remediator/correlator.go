@@ -18,6 +18,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/semcache"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/internal/engine"
+	"github.com/lohitkolluri/KubeWise/internal/llmrouter"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
@@ -44,6 +45,7 @@ var knownActionTypes = map[string]bool{
 // collect anomalies → rule engine (fast path) → semantic cache (fast path) → call LLM → assign risk tier → execute → audit.
 type Correlator struct {
 	llmClient    *llm.Client
+	llmRouter    *llmrouter.LLMRouter
 	tierAssigner *TierAssigner
 	executor     *K8sExecutor
 	investigator *Investigator
@@ -70,7 +72,7 @@ type RemediationConfig struct {
 }
 
 // NewCorrelator creates the remediation pipeline.
-func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig, ff featureflags.Flags, ruleEngine *engine.RuleEngine) *Correlator {
+func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig, ff featureflags.Flags, ruleEngine *engine.RuleEngine, llmRouter *llmrouter.LLMRouter) *Correlator {
 	if cfg.Mode == "" {
 		cfg.Mode = "dry-run"
 	}
@@ -82,6 +84,7 @@ func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store,
 	}
 	return &Correlator{
 		llmClient:    llmClient,
+		llmRouter:    llmRouter,
 		tierAssigner: NewTierAssigner(5 * time.Minute),
 		executor:     executor,
 		investigator: newInvestigatorFromExecutor(executor),
@@ -208,8 +211,19 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		}
 
 		userPrompt = llm.BuildUserPrompt(correlatable, metricsSummary, investigation)
-		if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
-			return fmt.Errorf("llm correlation: %w", err)
+		if c.llmRouter != nil && c.featureFlags.LLMRouter {
+			llmInput := llmrouter.LLMInput{
+				SystemPrompt:   systemPrompt,
+				UserContent:    userPrompt,
+				ResponseSchema: schema,
+			}
+			if _, err := c.llmRouter.RouteStructured(ctx, llmrouter.TaskRCA, llmInput, &plan); err != nil {
+				return fmt.Errorf("llm router correlation: %w", err)
+			}
+		} else {
+			if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
+				return fmt.Errorf("llm correlation: %w", err)
+			}
 		}
 
 		normalizePlan(&plan, correlatable)
@@ -225,13 +239,30 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 				"- If you choose patch_resources, you MUST include at least one of cpu_request,cpu_limit,memory_request,memory_limit.\n" +
 				"- If you cannot supply required parameters, choose restart_pod for CrashLoop/BackOff, otherwise choose noop or escalate.\n" +
 				"- Never output empty parameters for patch_resources or scale_replicas.\n"
-			if rerr := c.llmClient.StructuredOutput(ctx, repairSystem, userPrompt, schema, &repaired); rerr == nil {
-				normalizePlan(&repaired, correlatable)
-				repaired.Investigation = models.InvestigationContext{Summary: investigation}
-				if verr := validateRunbookSteps(repaired, correlatable, cfg); verr == nil {
-					plan = repaired
-				} else {
-					err = verr
+			if c.llmRouter != nil && c.featureFlags.LLMRouter {
+				llmInput := llmrouter.LLMInput{
+					SystemPrompt:   repairSystem,
+					UserContent:    userPrompt,
+					ResponseSchema: schema,
+				}
+				if _, rerr := c.llmRouter.RouteStructured(ctx, llmrouter.TaskRemediation, llmInput, &repaired); rerr == nil {
+					normalizePlan(&repaired, correlatable)
+					repaired.Investigation = models.InvestigationContext{Summary: investigation}
+					if verr := validateRunbookSteps(repaired, correlatable, cfg); verr == nil {
+						plan = repaired
+					} else {
+						err = verr
+					}
+				}
+			} else {
+				if rerr := c.llmClient.StructuredOutput(ctx, repairSystem, userPrompt, schema, &repaired); rerr == nil {
+					normalizePlan(&repaired, correlatable)
+					repaired.Investigation = models.InvestigationContext{Summary: investigation}
+					if verr := validateRunbookSteps(repaired, correlatable, cfg); verr == nil {
+						plan = repaired
+					} else {
+						err = verr
+					}
 				}
 			}
 		}

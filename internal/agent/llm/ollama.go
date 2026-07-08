@@ -42,6 +42,9 @@ func NewOllamaProvider(baseURL, model, apiKey string) *OllamaProvider {
 
 func (p *OllamaProvider) Name() string { return "ollama" }
 
+// SetModel changes the model used for subsequent requests.
+func (p *OllamaProvider) SetModel(model string) { p.model = model }
+
 // HasAPIKey is true when a reachable base URL is configured (Ollama often needs no key).
 func (p *OllamaProvider) HasAPIKey() bool { return p.baseURL != "" }
 

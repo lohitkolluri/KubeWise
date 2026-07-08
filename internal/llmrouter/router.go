@@ -92,21 +92,15 @@ func (r *LLMRouter) Route(ctx context.Context, task TaskType, input LLMInput) (*
 	return nil, fmt.Errorf("llmrouter: all models failed for task %s: %w", task, lastErr)
 }
 
-// callModel invokes the LLM client with a specific model, extracting token
-// usage from the structured output response.
+// callModel sets the model on the client and invokes StructuredOutput.
 func (r *LLMRouter) callModel(ctx context.Context, model string, input LLMInput) (*LLMResponse, error) {
-	// Merge model into the system prompt so the provider picks it up
-	// via Config.Model. The llm.Client.StructuredOutput delegates to
-	// the provider which uses its configured model.
+	r.client.SetModel(model)
 	var respData json.RawMessage
 	err := r.client.StructuredOutput(ctx, input.SystemPrompt, input.UserContent, input.ResponseSchema, &respData)
 	if err != nil {
 		return nil, err
 	}
 
-	// The llm.Client doesn't expose token counts directly. We estimate
-	// token usage from prompt length as a fallback. When the OpenRouter
-	// provider is enhanced to return usage details, this will be updated.
 	estimatedInput := estimateTokens(input.SystemPrompt + input.UserContent)
 	estimatedOutput := estimateTokens(string(respData))
 
@@ -115,6 +109,20 @@ func (r *LLMRouter) callModel(ctx context.Context, model string, input LLMInput)
 		InputTokens:  estimatedInput,
 		OutputTokens: estimatedOutput,
 	}, nil
+}
+
+// RouteStructured is a convenience wrapper around Route that unmarshals the
+// response data directly into respPtr. It returns the LLMResponse for
+// observability (token counts, model used, duration).
+func (r *LLMRouter) RouteStructured(ctx context.Context, task TaskType, input LLMInput, respPtr interface{}) (*LLMResponse, error) {
+	resp, err := r.Route(ctx, task, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(resp.Data), respPtr); err != nil {
+		return nil, fmt.Errorf("llmrouter: unmarshal response: %w", err)
+	}
+	return resp, nil
 }
 
 // estimateTokens provides a rough token estimate using 4 chars per token ratio.
