@@ -54,6 +54,15 @@ agent:
       - kube-system
       - kubewise
     allowlist: []
+  # Feature gates for v2 capabilities. All default false (v1-compatible).
+  features:
+    ruleEngine: false
+    contextBuilder: false
+    llmRouter: false
+    semanticCache: false
+    eventsV2: false
+    toolPlugins: false
+    observability: false
   notifications:
     enabled: false
     webhookURL: ""

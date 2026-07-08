@@ -81,6 +81,20 @@ spec:
                   optional: true
             - name: KUBEWISE_REQUIRE_API_TOKEN
               value: {{ .Values.security.requireApiToken | quote }}
+            - name: KUBEWISE_FEATURE_RULE_ENGINE
+              value: {{ .Values.agent.features.ruleEngine | quote }}
+            - name: KUBEWISE_FEATURE_CONTEXT_BUILDER
+              value: {{ .Values.agent.features.contextBuilder | quote }}
+            - name: KUBEWISE_FEATURE_LLM_ROUTER
+              value: {{ .Values.agent.features.llmRouter | quote }}
+            - name: KUBEWISE_FEATURE_SEMANTIC_CACHE
+              value: {{ .Values.agent.features.semanticCache | quote }}
+            - name: KUBEWISE_FEATURE_EVENTS_V2
+              value: {{ .Values.agent.features.eventsV2 | quote }}
+            - name: KUBEWISE_FEATURE_TOOL_PLUGINS
+              value: {{ .Values.agent.features.toolPlugins | quote }}
+            - name: KUBEWISE_FEATURE_OBSERVABILITY
+              value: {{ .Values.agent.features.observability | quote }}
           resources:
             {{- toYaml .Values.resources.agent | nindent 12 }}
           startupProbe:
