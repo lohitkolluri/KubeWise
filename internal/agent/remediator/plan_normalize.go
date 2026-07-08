@@ -17,9 +17,19 @@ var actionTypeAliases = map[string]string{
 	"rollback_deployment": "rollback_deployment",
 	"patch":               "patch_resources",
 	"patch_resources":     "patch_resources",
+	"view_logs":           "view_logs",
+	"logs":                "view_logs",
+	"view_log":            "view_logs",
 	"escalate":            "escalate",
 	"noop":                "noop",
 	"none":                "noop",
+	"helm_upgrade":        "helm_upgrade",
+	"helm_rollback":       "helm_rollback",
+	"argocd_sync":         "argocd_sync",
+	"argocd_rollback":     "argocd_rollback",
+	"github_create_pr":    "github_create_pr",
+	"github_merge_pr":     "github_merge_pr",
+	"terraform_apply":     "terraform_apply",
 }
 
 var blastRadiusAliases = map[string]string{

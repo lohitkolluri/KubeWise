@@ -15,6 +15,7 @@ var ActionTierMap = map[string]models.RiskTier{
 	"scale_replicas":      models.RiskTier2,
 	"rollback_deployment": models.RiskTier2,
 	"patch_resources":     models.RiskTier2,
+	"view_logs":           models.RiskTier1,
 	"escalate":            models.RiskTier3,
 	"noop":                models.RiskTier1,
 }

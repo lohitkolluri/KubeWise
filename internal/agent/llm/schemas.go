@@ -69,7 +69,7 @@ func RemediationSchema() json.RawMessage {
 						"properties": {
 							"type": {
 								"type": "string",
-								"enum": ["restart_pod", "rollback_deployment", "delete_pod", "escalate", "noop"],
+								"enum": ["restart_pod", "rollback_deployment", "delete_pod", "view_logs", "escalate", "noop"],
 								"description": "Primary action (first step) for backward compatibility"
 							},
 							"target": { "type": "string", "description": "Name of the target resource" },
@@ -153,7 +153,7 @@ func RemediationSchema() json.RawMessage {
 								"order": { "type": "integer", "description": "Step number starting at 1" },
 								"type": {
 									"type": "string",
-									"enum": ["restart_pod", "rollback_deployment", "delete_pod", "escalate", "noop"],
+									"enum": ["restart_pod", "rollback_deployment", "delete_pod", "view_logs", "escalate", "noop"],
 									"description": "Step action type"
 								},
 								"target": { "type": "string" },

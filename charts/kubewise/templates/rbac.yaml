@@ -10,7 +10,7 @@ metadata:
     {{- include "kubewise.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [pods, pods/status, nodes, nodes/status, events]
+    resources: [pods, pods/status, pods/log, nodes, nodes/status, events]
     verbs: [get, list, watch]
   - apiGroups: ["apps"]
     resources: [deployments, deployments/status, replicasets, replicasets/status]
@@ -52,7 +52,7 @@ metadata:
     {{- include "kubewise.labels" $ | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [pods, pods/status, events]
+    resources: [pods, pods/status, pods/log, events]
     verbs: [get, list, watch, delete]
   - apiGroups: ["apps"]
     resources: [deployments, deployments/status, replicasets, replicasets/status]

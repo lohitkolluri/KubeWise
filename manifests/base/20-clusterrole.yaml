@@ -8,7 +8,7 @@ metadata:
 rules:
   # Metrics collection & observation
   - apiGroups: [""]
-    resources: [pods, pods/status, nodes, nodes/status, events]
+    resources: [pods, pods/status, pods/log, nodes, nodes/status, events]
     verbs: [get, list, watch]
   - apiGroups: ["apps"]
     resources: [deployments, deployments/status, replicasets, replicasets/status]
