@@ -1,0 +1,81 @@
+{{- if and .Values.agent.features.observability .Values.agent.observability.alloy.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "kubewise.fullname" . }}-alloy
+  namespace: {{ include "kubewise.namespace" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alloy
+spec:
+  selector:
+    matchLabels:
+      {{- include "kubewise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: alloy
+  template:
+    metadata:
+      labels:
+        {{- include "kubewise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: alloy
+    spec:
+      serviceAccountName: {{ include "kubewise.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: false
+      containers:
+        - name: alloy
+          image: "{{ .Values.agent.observability.alloy.image.repository }}:{{ .Values.agent.observability.alloy.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.observability.alloy.image.pullPolicy }}
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --stability.level=public-preview
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/var/lib/alloy/data
+          env:
+            - name: ALLOY_LOKI_ENDPOINT
+              value: {{ .Values.agent.observability.alloy.lokiEndpoint | quote }}
+            - name: ALLOY_TEMPO_ENDPOINT
+              value: {{ .Values.agent.observability.alloy.tempoEndpoint | quote }}
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http
+              containerPort: 12345
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy
+          resources:
+            {{- toYaml .Values.agent.observability.alloy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kubewise.fullname" . }}-alloy-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: Directory
+        - name: data
+          emptyDir: {}
+{{- end }}

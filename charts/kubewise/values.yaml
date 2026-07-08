@@ -63,6 +63,55 @@ agent:
     eventsV2: false
     toolPlugins: false
     observability: false
+  observability:
+    # When agent.features.observability=true, Loki + Tempo + Alloy are deployed.
+    loki:
+      enabled: false
+      # Monolithic mode — single binary for in-cluster use.
+      mode: Monolithic
+      persistence:
+        enabled: false
+        size: 10Gi
+        storageClass: ""
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    tempo:
+      enabled: false
+      persistence:
+        enabled: false
+        size: 10Gi
+        storageClass: ""
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    alloy:
+      # Grafana Alloy DaemonSet — scrapes pod logs and forwards to Loki.
+      enabled: false
+      image:
+        repository: grafana/alloy
+        tag: v1.7.4
+        pullPolicy: IfNotPresent
+      # Loki endpoint for log forwarding (in-cluster).
+      lokiEndpoint: http://kubewise-loki:3100
+      # Tempo endpoint for trace forwarding.
+      tempoEndpoint: http://kubewise-tempo:4318
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+
   notifications:
     enabled: false
     webhookURL: ""
@@ -97,3 +146,59 @@ resources:
     limits:
       cpu: "1"
       memory: 512Mi
+
+# -- Loki subchart values (used when agent.observability.loki.enabled=true)
+loki:
+  deploymentMode: Monolithic
+  write:
+    replicas: 0
+  read:
+    replicas: 0
+  backend:
+    replicas: 0
+  loki:
+    useTestSchema: true
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    auth_enabled: false
+    analytics:
+      reporting_enabled: false
+  singleBinary:
+    replicas: 0
+    persistence:
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+# -- Tempo subchart values (used when agent.observability.tempo.enabled=true)
+tempo:
+  tempo:
+    search:
+      enabled: true
+    metricsGenerator:
+      enabled: false
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+  server:
+    grpc_server_max_recv_msg: 4194304
+    http_server_read_timeout: 30s
+  persistence:
+    enabled: false
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

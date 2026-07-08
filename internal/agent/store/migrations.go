@@ -20,6 +20,8 @@ var (
 	bucketHealthScores  = []byte("health_scores")
 	bucketHealthHistory = []byte("health_history")
 	bucketAccuracySnaps = []byte("accuracy_snapshots")
+	bucketEvents        = []byte("events")
+	bucketEventIndex    = []byte("event_idx")
 )
 
 // Init ensures all required buckets exist.
@@ -40,6 +42,8 @@ func (s *Store) Init() error {
 			bucketHealthScores,
 			bucketHealthHistory,
 			bucketAccuracySnaps,
+			bucketEvents,
+			bucketEventIndex,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err

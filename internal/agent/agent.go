@@ -55,6 +55,7 @@ type Agent struct {
 	scrapes            atomic.Int64
 	healthTick         atomic.Int64
 	anomalySeq         uint64
+	eventSeq           atomic.Uint64
 	stopOnce           sync.Once
 	stopCh             chan struct{}
 	runCtx             context.Context
@@ -193,6 +194,22 @@ func (a *Agent) watchK8sEvents(ctx context.Context) {
 	ch := a.eventsCollector.WatchEvents(ctx)
 	for record := range ch {
 		a.persistEventAnomaly(record)
+		// Persist to event store for historical queries (Phase 2.2).
+		seq := a.eventSeq.Add(1)
+		se := &store.StoredEvent{
+			ID:             fmt.Sprintf("evt-%d-%d", time.Now().UnixNano(), seq),
+			Reason:         record.Reason,
+			Message:        record.Message,
+			InvolvedObject: record.InvolvedObject,
+			Namespace:      record.Namespace,
+			Source:         record.Source,
+			FirstSeen:      record.FirstTimestamp,
+			LastSeen:       record.LastTimestamp,
+			Count:          record.Count,
+		}
+		if err := a.store.SaveEvent(se); err != nil {
+			log.Printf("agent: save event: %v", err)
+		}
 	}
 }
 

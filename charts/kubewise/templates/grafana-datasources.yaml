@@ -1,0 +1,37 @@
+{{- if .Values.agent.features.observability }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubewise.fullname" . }}-grafana-datasources
+  namespace: {{ include "kubewise.namespace" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+    grafana_datasource: "1"
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: {{ .Values.agent.prometheusAddress | quote }}
+        isDefault: true
+        editable: false
+      {{- if .Values.agent.observability.loki.enabled }}
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: http://{{ include "kubewise.fullname" . }}-loki:3100
+        editable: false
+      {{- end }}
+      {{- if .Values.agent.observability.tempo.enabled }}
+      - name: Tempo
+        type: tempo
+        uid: tempo
+        access: proxy
+        url: http://{{ include "kubewise.fullname" . }}-tempo:3200
+        editable: false
+      {{- end }}
+{{- end }}

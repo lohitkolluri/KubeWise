@@ -1,0 +1,69 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "title": "KubeWise — LLM Cost & Usage",
+  "uid": "kubewise-llm-cost",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["kubewise", "llm", "cost"],
+  "timezone": "browser",
+  "time": { "from": "now-7d", "to": "now" },
+  "refresh": "5m",
+  "panels": [
+    {
+      "title": "Total Tokens Consumed",
+      "type": "timeseries",
+      "uid": "panel-tokens",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "rate(kubewise_llm_tokens_total[5m])",
+        "legendFormat": "{{ provider }} — {{ direction }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Estimated Cost ($/day)",
+      "type": "timeseries",
+      "uid": "panel-cost",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "rate(kubewise_llm_cost_total[5m])",
+        "legendFormat": "{{ provider }} — {{ model }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Cache Hit Rate",
+      "type": "timeseries",
+      "uid": "panel-cache",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [{
+        "expr": "rate(kubewise_llm_cache_hits_total[5m]) / (rate(kubewise_llm_cache_hits_total[5m]) + rate(kubewise_llm_cache_misses_total[5m])) * 100",
+        "legendFormat": "Cache Hit %",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "LLM Calls by Provider",
+      "type": "piechart",
+      "uid": "panel-provider",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [{
+        "expr": "sum by(provider) (rate(kubewise_llm_requests_total[1h]))",
+        "legendFormat": "{{ provider }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Average Response Latency",
+      "type": "stat",
+      "uid": "panel-latency",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [{
+        "expr": "avg(kubewise_llm_latency_seconds)",
+        "legendFormat": "Avg Latency (s)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    }
+  ]
+}
