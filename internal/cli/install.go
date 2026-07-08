@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+
+	"github.com/lohitkolluri/KubeWise/internal/cli/wizard"
 )
 
 const (
@@ -21,6 +24,7 @@ var (
 	installYes            bool
 	installLocal          bool
 	installHelm           bool
+	installDryRun         bool
 	installChartPath      string
 	installRef            string
 	installOverlay        string
@@ -55,6 +59,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installYes, "yes", false, "non-interactive; accept defaults")
 	installCmd.Flags().BoolVar(&installLocal, "local", false, "dev mode: kind cluster + build local images")
 	installCmd.Flags().BoolVar(&installHelm, "helm", false, "install via Helm chart instead of kustomize manifests")
+	installCmd.Flags().BoolVar(&installDryRun, "dry-run", false, "wizard mode: generate config YAML without installing")
 	installCmd.Flags().StringVar(&installChartPath, "chart", "", "Helm chart path or URL (default: GitHub chart at --ref)")
 	installCmd.Flags().StringVar(&installRef, "ref", defaultInstallRef, "git ref for remote kustomize overlay or Helm chart")
 	installCmd.Flags().StringVar(&installOverlay, "overlay", defaultInstallOverlay, "kustomize overlay name (install, dev, prod)")
@@ -71,6 +76,13 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 
 	if installLocal {
 		return runLocalInstall(out)
+	}
+
+	// Interactive wizard mode — no flags set.
+	nonInteractive := installYes || installHelm || installChartPath != "" ||
+		installManifestsDir != "" || installOverlay != defaultInstallOverlay
+	if !nonInteractive || installDryRun {
+		return runInstallWizard(out)
 	}
 
 	if err := requireKubectl(); err != nil {
@@ -140,6 +152,38 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	}
 
 	printInstallNextSteps(out)
+	return nil
+}
+
+func runInstallWizard(out io.Writer) error {
+	m := wizard.New()
+	if installDryRun {
+		m.State().DryRun = true
+	}
+
+	p := tea.NewProgram(m)
+	model, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("wizard error: %w", err)
+	}
+
+	finalModel := model.(wizard.Model)
+	if !finalModel.IsComplete() {
+		_, _ = fmt.Fprintln(out, "Install cancelled.")
+		return nil
+	}
+
+	result, err := finalModel.State().Execute(context.Background())
+	if result != "" {
+		_, _ = fmt.Fprintln(out, result)
+	}
+	if err != nil {
+		return fmt.Errorf("install: %w", err)
+	}
+
+	if !installDryRun {
+		_, _ = fmt.Fprintln(out, "\nKubeWise is installed.")
+	}
 	return nil
 }
 
