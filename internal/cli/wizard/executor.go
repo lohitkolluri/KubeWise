@@ -15,19 +15,19 @@ func (s WizardState) Execute(ctx context.Context) (string, error) {
 	var log stringsBuilder
 
 	if s.DryRun {
-		log.WriteString("[dry-run] Validating configuration...\n")
+		_, _ = log.WriteString("[dry-run] Validating configuration...\n")
 		configYAML, err := s.GenerateConfig()
 		if err != nil {
 			return log.String(), fmt.Errorf("generate config: %w", err)
 		}
-		log.WriteString("Generated config:\n")
-		log.WriteString(configYAML)
-		log.WriteString("\n[dry-run] No changes made.\n")
+		_, _ = log.WriteString("Generated config:\n")
+		_, _ = log.WriteString(configYAML)
+		_, _ = log.WriteString("\n[dry-run] No changes made.\n")
 		return log.String(), nil
 	}
 
 	// 1. Generate and save config.
-	log.WriteString("Generating configuration...\n")
+	_, _ = log.WriteString("Generating configuration...\n")
 	configYAML, err := s.GenerateConfig()
 	if err != nil {
 		return log.String(), fmt.Errorf("generate config: %w", err)
@@ -40,10 +40,10 @@ func (s WizardState) Execute(ctx context.Context) (string, error) {
 	if err := os.WriteFile(configPath, []byte(configYAML), 0600); err != nil {
 		return log.String(), fmt.Errorf("write config: %w", err)
 	}
-	log.WriteString(fmt.Sprintf("✓ Config saved to %s\n", configPath))
+	_, _ = fmt.Fprintf(&log, "✓ Config saved to %s\n", configPath)
 
 	// 2. Run Helm install.
-	log.WriteString("Installing Helm chart...\n")
+	_, _ = log.WriteString("Installing Helm chart...\n")
 	if err := s.helmInstall(ctx, &log); err != nil {
 		return log.String(), fmt.Errorf("helm install: %w", err)
 	}

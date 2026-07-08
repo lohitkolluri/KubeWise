@@ -220,12 +220,12 @@ func (s *Store) CompactEvents(retention time.Duration) (int, error) {
 				if data != nil {
 					var e StoredEvent
 					if json.Unmarshal(data, &e) == nil {
-						b.Delete([]byte("dedup|" + eventDedupKey(e.Namespace, e.InvolvedObject, e.Reason)))
+						_ = b.Delete([]byte("dedup|" + eventDedupKey(e.Namespace, e.InvolvedObject, e.Reason)))
 					}
 				}
-				b.Delete([]byte(key))
+				_ = b.Delete([]byte(key))
 			}
-			idx.Delete([]byte(key))
+			_ = idx.Delete([]byte(key))
 			deleted++
 		}
 		return nil

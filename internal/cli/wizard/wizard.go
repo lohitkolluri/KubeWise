@@ -49,7 +49,6 @@ type Model struct {
 	width  int
 	height int
 	cursor int // cursor position within a step
-	err    error
 }
 
 // stepNames for rendering step indicators.

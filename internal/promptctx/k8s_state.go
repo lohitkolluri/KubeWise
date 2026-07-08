@@ -15,8 +15,8 @@ func HashK8sState(s *K8sState) string {
 	h := sha256.New()
 	if s.Deployment != nil {
 		h.Write([]byte(s.Deployment.Name))
-		h.Write([]byte(fmt.Sprintf("%d", s.Deployment.Replicas)))
-		h.Write([]byte(fmt.Sprintf("%d", s.Deployment.Available)))
+		_, _ = fmt.Fprintf(h, "%d", s.Deployment.Replicas)
+		_, _ = fmt.Fprintf(h, "%d", s.Deployment.Available)
 		h.Write([]byte(s.Deployment.Strategy))
 		h.Write([]byte(s.Deployment.Image))
 	}
@@ -35,7 +35,7 @@ func HashK8sState(s *K8sState) string {
 	if s.Pod != nil {
 		h.Write([]byte(s.Pod.Name))
 		h.Write([]byte(s.Pod.Phase))
-		h.Write([]byte(fmt.Sprintf("%d", s.Pod.Restarts)))
+		_, _ = fmt.Fprintf(h, "%d", s.Pod.Restarts)
 		for _, c := range s.Pod.Container {
 			h.Write([]byte(c.Name))
 			h.Write([]byte(c.State))

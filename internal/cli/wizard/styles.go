@@ -7,12 +7,12 @@ var (
 	colorPrimary   = lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#A78BFA"}
 	colorAccent    = lipgloss.AdaptiveColor{Light: "#0D9488", Dark: "#2DD4BF"}
 	colorCritical  = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"}
-	colorWarning   = lipgloss.AdaptiveColor{Light: "#CA8A04", Dark: "#FBBF24"}
+	colorWarning   = lipgloss.AdaptiveColor{Light: "#CA8A04", Dark: "#FBBF24"} //nolint:unused
 	colorSuccess   = lipgloss.AdaptiveColor{Light: "#16A34A", Dark: "#4ADE80"}
 	colorNeutral   = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"}
-	colorSubtle    = lipgloss.AdaptiveColor{Light: "#4B5563", Dark: "#D1D5DB"}
+	colorSubtle    = lipgloss.AdaptiveColor{Light: "#4B5563", Dark: "#D1D5DB"} //nolint:unused
 	colorMuted     = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#6B7280"}
-	colorSurface   = lipgloss.AdaptiveColor{Light: "#F9FAFB", Dark: "#1F2937"}
+	colorSurface   = lipgloss.AdaptiveColor{Light: "#F9FAFB", Dark: "#1F2937"} //nolint:unused
 	colorCardBG    = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1F2937"}
 	colorBorder    = lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#374151"}
 	colorHighlight = lipgloss.AdaptiveColor{Light: "#111827", Dark: "#F9FAFB"}
@@ -35,7 +35,7 @@ var (
 			Bold(true)
 
 	// Input / form
-	inputLabelStyle = lipgloss.NewStyle().Foreground(colorSubtle).Width(20)
+	inputLabelStyle = lipgloss.NewStyle().Foreground(colorSubtle).Width(20) //nolint:unused
 	inputValueStyle = lipgloss.NewStyle().Foreground(colorHighlight)
 	helpStyle       = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).MarginTop(1)
 
@@ -46,7 +46,7 @@ var (
 
 	// Status
 	errStyle     = lipgloss.NewStyle().Foreground(colorCritical).Bold(true)
-	warnStyle    = lipgloss.NewStyle().Foreground(colorWarning)
+	warnStyle    = lipgloss.NewStyle().Foreground(colorWarning) //nolint:unused
 	infoStyle    = lipgloss.NewStyle().Foreground(colorNeutral)
 	successStyle = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
 
@@ -60,7 +60,7 @@ var (
 
 	// Summary table
 	summaryKeyStyle     = lipgloss.NewStyle().Foreground(colorMuted).Width(24)
-	summaryValueStyle   = lipgloss.NewStyle().Foreground(colorHighlight)
+	summaryValueStyle   = lipgloss.NewStyle().Foreground(colorHighlight) //nolint:unused
 	summarySectionStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorAccent).
@@ -75,5 +75,5 @@ var (
 			Foreground(colorPrimary).
 			Bold(true)
 
-	buttonDimStyle = lipgloss.NewStyle().Foreground(colorMuted)
+	buttonDimStyle = lipgloss.NewStyle().Foreground(colorMuted) //nolint:unused
 )

@@ -91,19 +91,19 @@ type Rule interface {
 func ValidateResult(r RuleResult) []error {
 	var errs []error
 	if r.RuleName == "" {
-		errs = append(errs, fmt.Errorf("RuleName is empty"))
+		errs = append(errs, fmt.Errorf("ruleName is empty"))
 	}
 	if r.Action == "" {
-		errs = append(errs, fmt.Errorf("Action is empty"))
+		errs = append(errs, fmt.Errorf("action is empty"))
 	}
 	if r.Confidence < 0 || r.Confidence > 1 {
-		errs = append(errs, fmt.Errorf("Confidence %.2f out of range [0,1]", r.Confidence))
+		errs = append(errs, fmt.Errorf("confidence %.2f out of range [0,1]", r.Confidence))
 	}
 	if r.Target == "" && r.Action != "noop" && r.Action != "escalate" {
-		errs = append(errs, fmt.Errorf("Target is empty for action %q", r.Action))
+		errs = append(errs, fmt.Errorf("target is empty for action %q", r.Action))
 	}
 	if len(r.Evidence) == 0 {
-		errs = append(errs, fmt.Errorf("Evidence is empty"))
+		errs = append(errs, fmt.Errorf("evidence is empty"))
 	}
 	return errs
 }

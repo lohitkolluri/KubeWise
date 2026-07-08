@@ -46,7 +46,7 @@ func fetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since
 	if err != nil {
 		return nil, fmt.Errorf("query loki: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

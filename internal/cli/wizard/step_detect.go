@@ -24,6 +24,8 @@ type ClusterInfo struct {
 
 // detectCluster performs auto-detection of the Kubernetes environment.
 // All errors are non-fatal — best-effort detection with graceful fallbacks.
+//
+//nolint:unused
 func detectCluster(ctx context.Context) (ClusterInfo, error) {
 	info := ClusterInfo{DetectedAt: time.Now()}
 
@@ -73,7 +75,7 @@ func detectCluster(ctx context.Context) (ClusterInfo, error) {
 				info.Type = "minikube"
 			default:
 				// Check kubeconfig server for managed-k8s indicators.
-				if strings.Contains(info.Context, "eks") || strings.Contains(info.Context, "eks") {
+				if strings.Contains(info.Context, "eks") {
 					info.Type = "eks"
 				} else if strings.Contains(info.Context, "gke") {
 					info.Type = "gke"
