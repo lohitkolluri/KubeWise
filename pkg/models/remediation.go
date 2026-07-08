@@ -2,6 +2,34 @@ package models
 
 import "time"
 
+// ToolCapability describes what a tool can do.
+type ToolCapability string
+
+const (
+	CapRead             ToolCapability = "read"
+	CapWrite            ToolCapability = "write"
+	CapDestructive      ToolCapability = "destructive"
+	CapRequiresApproval ToolCapability = "requires_approval"
+)
+
+// ToolAction is a request to execute a specific tool operation.
+// Used by the tool plugin system and serialized in audit/API responses.
+type ToolAction struct {
+	Tool    string            `json:"tool"`
+	Command string            `json:"command"`
+	Args    map[string]string `json:"args,omitempty"`
+	Timeout DurationValue     `json:"timeout,omitempty"`
+}
+
+// ToolResult is what the tool returned after execution.
+type ToolResult struct {
+	Success  bool              `json:"success"`
+	Stdout   string            `json:"stdout"`
+	Stderr   string            `json:"stderr"`
+	Duration time.Duration     `json:"duration"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
 // RiskTier represents the severity/risk level of a remediation action.
 type RiskTier string
 
