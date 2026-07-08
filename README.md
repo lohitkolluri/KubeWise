@@ -21,6 +21,15 @@ KubeWise lives in your cluster. It pulls metrics from Prometheus, watches your w
 
 Roughly every 30 seconds the agent scrapes, scores predictions, filters noise, and writes to a local store. If remediation is enabled, it digs into describe/events/logs, asks an LLM for a runbook, runs it, and checks that the fix actually stuck.
 
+### Feature-gated capabilities (opt-in)
+
+Deterministic rule detection, semantic incident caching, multi-model LLM
+routing, prompt compression, Kubernetes event correlation, tool plugins, and an
+optional Loki/Tempo observability stack — all gated behind feature flags that
+default to `false`.
+
+See the [migration guide](docs/MIGRATION.md) for a flag-by-flag upgrade path.
+
 ## Install
 
 You need `kubectl` and a cluster with Prometheus. The installer looks for Prometheus on its own.

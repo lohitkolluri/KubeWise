@@ -10,8 +10,16 @@ This document covers repo layout, development workflow, and quality expectations
 cmd/                    # Binaries: agent (in-cluster), kwctl (CLI)
 internal/
   agent/                # Agent pipeline: collect → predict → gate → remediate
+    featureflags/       # feature gates (env-var-based, all default false)
+    notify/             # Slack, PagerDuty, Alertmanager notifier
   api/                  # Agent HTTP API
-  cli/                  # kwctl commands and TUI
+  cache/                # Semantic incident cache for LLM dedup
+  cli/                  # kwctl commands, TUI, and install wizard
+    wizard/             # Interactive bubbletea setup wizard (9-step)
+  engine/               # Deterministic rule engine (v2 fast-path)
+  llmrouter/            # Multi-model LLM router (cheap vs capable models)
+  promptctx/            # Context builder: prompt compression for token reduction
+  tools/                # Tool plugin system (kubectl, helm, argocd, github, terraform)
   version/              # Release version (ldflags at build time)
 charts/kubewise/        # Production Helm chart (preferred for installs)
 manifests/              # Kustomize bases + overlays (dev, install, prod)
@@ -22,7 +30,7 @@ proto/                  # gRPC/protobuf definitions
 scripts/                # Build/install helpers (sourced by Makefile)
 hack/                   # Local dev bootstrap (kind, test workloads)
 npm/                    # npm wrapper scripts (published via GoReleaser)
-docs/                   # Architecture and roadmap
+docs/                   # Architecture, roadmap, and migration guides
 ```
 
 **Install paths:** use `kwctl install --helm` or `helm install` for production; Kustomize overlays remain for dev and one-click remote apply.
@@ -59,6 +67,15 @@ KUBEWISE_DATA_DIR=/tmp/kw go run ./cmd/agent
 - Use `pkg/namespace.InScope` for namespace filtering — do not duplicate.
 - API probe endpoints: `/health` (liveness), `/readyz` (store ready), `/metrics` (Prometheus).
 - Version strings come from `internal/version` only.
+- Feature-gated packages follow these conventions:
+  - `internal/engine/` — deterministic rule engine (no LLM deps).
+  - `internal/promptctx/` — context builder for prompt compression (not `internal/context/`).
+  - `internal/llmrouter/` — multi-model LLM routing layer.
+  - `internal/cache/` — semantic incident cache (hash-based, stores LLM responses).
+  - `internal/tools/` — tool plugin system (kubectl, helm, argocd, github, terraform).
+  - `internal/cli/wizard/` — interactive setup wizard (bubbletea TUI).
+  - All feature gates are in `internal/agent/featureflags.Flags`, default off.
+  - New API routes for feature-gated capabilities are registered conditionally based on flag state.
 
 ## Integrating external APIs and libraries
 
