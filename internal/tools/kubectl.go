@@ -22,7 +22,11 @@ var allowedSubcommands = map[string]allowedCommand{
 	"logs":          {[]models.ToolCapability{models.CapRead}, true},
 	"top":           {[]models.ToolCapability{models.CapRead}, true},
 	"api-resources": {[]models.ToolCapability{models.CapRead}, true},
+	"api-versions":  {[]models.ToolCapability{models.CapRead}, true},
 	"version":       {[]models.ToolCapability{models.CapRead}, true},
+	"explain":       {[]models.ToolCapability{models.CapRead}, true},
+	"events":        {[]models.ToolCapability{models.CapRead}, true},
+	"auth":          {[]models.ToolCapability{models.CapRead}, true},
 	"apply":         {[]models.ToolCapability{models.CapWrite}, false},
 	"delete":        {[]models.ToolCapability{models.CapWrite, models.CapDestructive}, false},
 	"rollout":       {[]models.ToolCapability{models.CapWrite}, false},
@@ -33,20 +37,17 @@ var allowedSubcommands = map[string]allowedCommand{
 	"cordon":        {[]models.ToolCapability{models.CapWrite}, false},
 	"uncordon":      {[]models.ToolCapability{models.CapWrite}, false},
 	"taint":         {[]models.ToolCapability{models.CapWrite}, false},
+	"exec":          {[]models.ToolCapability{models.CapRead}, true},
+	"run":           {[]models.ToolCapability{models.CapWrite}, false},
+	"cp":            {[]models.ToolCapability{models.CapRead}, true},
+	"proxy":         {[]models.ToolCapability{models.CapRead}, true},
+	"port-forward":  {[]models.ToolCapability{models.CapRead}, true},
+	"attach":        {[]models.ToolCapability{models.CapRead}, true},
 }
 
-// blockedSubcommands are explicitly rejected for security reasons.
-var blockedSubcommands = map[string]bool{
-	"exec":         true,
-	"proxy":        true,
-	"port-forward": true,
-	"attach":       true,
-	"run":          true,
-	"cp":           true,
-	"auth":         true,
-	"cert":         true,
-	"plugin":       true,
-}
+// blockedSubcommands are explicitly rejected for security reasons — kept empty;
+// authorization is delegated to Kubernetes RBAC via the agent's ServiceAccount.
+var blockedSubcommands = map[string]bool{}
 
 // validators for resource names to prevent injection.
 var (

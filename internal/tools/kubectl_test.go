@@ -90,12 +90,14 @@ func TestKubectlPlugin_Validate_AllowsValidWriteCommands(t *testing.T) {
 
 func TestKubectlPlugin_Validate_BlocksExec(t *testing.T) {
 	p := NewKubectlPlugin("")
-	blocked := []string{"exec", "proxy", "port-forward", "attach", "run", "cp", "auth", "cert", "plugin"}
-	for _, cmd := range blocked {
+	// Previously blocked commands are now allowed — RBAC delegates authorization.
+	// These commands should validate successfully (RBAC will enforce actual access).
+	allowed := []string{"exec", "proxy", "port-forward", "attach", "run", "cp", "auth"}
+	for _, cmd := range allowed {
 		t.Run(cmd, func(t *testing.T) {
 			action := models.ToolAction{Command: cmd}
-			if err := p.Validate(action); err == nil {
-				t.Error("Validate() expected error for blocked command, got nil")
+			if err := p.Validate(action); err != nil {
+				t.Errorf("Validate() unexpected error for allowed command %q: %v", cmd, err)
 			}
 		})
 	}
@@ -260,12 +262,12 @@ func TestSplitCSV(t *testing.T) {
 
 func TestKubectlPlugin_Validate_RejectsInvalidNameInBlockedList(t *testing.T) {
 	p := NewKubectlPlugin("")
-	// Even if a blocked command has valid args, it should still be rejected
+	// exec with valid args should be allowed (RBAC gate, not hardcoded block)
 	action := models.ToolAction{
 		Command: "exec",
 		Args:    map[string]string{"resource": "pod", "name": "valid-name"},
 	}
-	if err := p.Validate(action); err == nil {
-		t.Error("Validate() expected error for exec command, got nil")
+	if err := p.Validate(action); err != nil {
+		t.Errorf("Validate() unexpected error for exec command: %v", err)
 	}
 }

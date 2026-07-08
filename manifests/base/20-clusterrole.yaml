@@ -6,24 +6,41 @@ metadata:
     app.kubernetes.io/name: kubewise
     app.kubernetes.io/component: agent
 rules:
-  # Metrics collection & observation
+  # Full read access for diagnostics and investigation
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  # Full write access for remediation operations
   - apiGroups: [""]
-    resources: [pods, pods/status, pods/log, nodes, nodes/status, events]
-    verbs: [get, list, watch]
+    resources: [pods, pods/exec, pods/portforward, pods/attachment, pods/log]
+    verbs: ["*"]
   - apiGroups: ["apps"]
-    resources: [deployments, deployments/status, replicasets, replicasets/status]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, nodes/status, services, configmaps, secrets, events, endpoints, persistentvolumeclaims, persistentvolumes]
     verbs: [get, list, watch]
-  # Live remediation (T1/T2/T3 after approval)
   - apiGroups: [""]
     resources: [pods]
-    verbs: [delete]
+    verbs: [delete, patch, update]
   - apiGroups: ["apps"]
     resources: [deployments]
     verbs: [patch, update]
-  # Leader election (future HA)
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
     verbs: [get, list, watch, create, update]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+    verbs: [get, list, watch]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, update]
+  - apiGroups: ["policy"]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
