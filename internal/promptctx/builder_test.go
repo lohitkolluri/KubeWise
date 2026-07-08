@@ -117,9 +117,9 @@ func TestBuildMetricSummaryTrends(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		pts    []Sample
-		want   string
+		name string
+		pts  []Sample
+		want string
 	}{
 		{
 			name: "rising",
@@ -154,9 +154,9 @@ func TestBuildMetricSummaryTrends(t *testing.T) {
 			want: "stable",
 		},
 		{
-			name:   "empty",
-			pts:    nil,
-			want:   "unknown",
+			name: "empty",
+			pts:  nil,
+			want: "unknown",
 		},
 	}
 

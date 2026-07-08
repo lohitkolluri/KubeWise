@@ -66,14 +66,14 @@ type Correlator struct {
 
 // RemediationConfig controls correlator behavior.
 type RemediationConfig struct {
-	Mode                  string   // "dry-run", "auto", "off"
-	DryRun                bool     // when true, log actions but don't execute
-	Allowlist             []string // allowed action types (empty = all)
-	Denylist              []string // denied namespaces
-	MinConfidence         float64  // minimum LLM confidence to execute
-	RateLimit             int      // max anomalies per LLM call (0 = unlimited)
-	WatchNamespaces       []string // empty = all namespaces (minus denylist)
-	RuleConfidenceThreshold float64 // minimum confidence for rule engine to auto-remediate (default 0.9)
+	Mode                    string   // "dry-run", "auto", "off"
+	DryRun                  bool     // when true, log actions but don't execute
+	Allowlist               []string // allowed action types (empty = all)
+	Denylist                []string // denied namespaces
+	MinConfidence           float64  // minimum LLM confidence to execute
+	RateLimit               int      // max anomalies per LLM call (0 = unlimited)
+	WatchNamespaces         []string // empty = all namespaces (minus denylist)
+	RuleConfidenceThreshold float64  // minimum confidence for rule engine to auto-remediate (default 0.9)
 }
 
 // NewCorrelator creates the remediation pipeline.

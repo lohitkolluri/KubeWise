@@ -124,7 +124,25 @@ data:
             regex: kube-system;kube-dns;metrics
             action: keep
 
-      # kube-state-metrics (deployed below)
+      # Loki
+      - job_name: loki
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_service_port_name]
+            regex: kubewise;kubewise-loki;http-metrics
+            action: keep
+
+      # Tempo
+      - job_name: tempo
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_service_port_name]
+            regex: kubewise;kubewise-tempo;tempo-prom-metrics
+            action: keep
+
+      # kube-state-metrics
       - job_name: kube-state-metrics
         kubernetes_sd_configs:
           - role: endpoints

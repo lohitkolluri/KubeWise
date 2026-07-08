@@ -110,13 +110,13 @@ func TestAny_TrueWhenOneOn(t *testing.T) {
 
 func TestEnabled_ByName(t *testing.T) {
 	f := Flags{
-		RuleEngine:    true,
+		RuleEngine:     true,
 		ContextBuilder: true,
 	}
 
 	cases := []struct {
-		key     string
-		want    bool
+		key  string
+		want bool
 	}{
 		{"rule_engine", true},
 		{"context_builder", true},

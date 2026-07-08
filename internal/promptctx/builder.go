@@ -12,14 +12,14 @@ import (
 
 // CompactContext is the structured, token-efficient input for LLM prompts.
 type CompactContext struct {
-	Anomaly     AnomalyContext     `json:"anomaly"`
-	Metrics     []MetricSummary    `json:"metrics,omitempty"`
-	Events      []EventSummary     `json:"events,omitempty"`
-	Logs        []LogSnippet       `json:"logs,omitempty"`          // populated when Loki is configured
-	Traces      []TraceSummary     `json:"traces,omitempty"`        // populated when Tempo is configured
-	K8sState    *K8sState          `json:"k8s_state,omitempty"`     // omitted when unchanged since last Build()
-	K8sHash     string             `json:"k8s_state_hash"`          // always populated; receiver compares for change detection
-	BuiltAt     time.Time          `json:"built_at"`
+	Anomaly  AnomalyContext  `json:"anomaly"`
+	Metrics  []MetricSummary `json:"metrics,omitempty"`
+	Events   []EventSummary  `json:"events,omitempty"`
+	Logs     []LogSnippet    `json:"logs,omitempty"`      // populated when Loki is configured
+	Traces   []TraceSummary  `json:"traces,omitempty"`    // populated when Tempo is configured
+	K8sState *K8sState       `json:"k8s_state,omitempty"` // omitted when unchanged since last Build()
+	K8sHash  string          `json:"k8s_state_hash"`      // always populated; receiver compares for change detection
+	BuiltAt  time.Time       `json:"built_at"`
 }
 
 // LogSnippet is a single log line from Loki.
@@ -49,10 +49,10 @@ type MetricSummary struct {
 
 // EventSummary is a deduplicated K8s event grouped by reason.
 type EventSummary struct {
-	Reason     string `json:"reason"`
-	Count      int    `json:"count"`
-	LastSeen   string `json:"last_seen"`  // relative time like "2m ago"
-	Involved   string `json:"involved"`
+	Reason   string `json:"reason"`
+	Count    int    `json:"count"`
+	LastSeen string `json:"last_seen"` // relative time like "2m ago"
+	Involved string `json:"involved"`
 }
 
 // K8sState holds the current resource state relevant to the anomaly.
@@ -74,16 +74,16 @@ type DeploymentState struct {
 
 // NodeState summarizes a node's status.
 type NodeState struct {
-	Name       string `json:"name"`
-	Ready      bool   `json:"ready"`
+	Name       string      `json:"name"`
+	Ready      bool        `json:"ready"`
 	Conditions []Condition `json:"conditions,omitempty"`
 }
 
 // PodState summarizes a pod's status.
 type PodState struct {
-	Name      string   `json:"name"`
-	Phase     string   `json:"phase"`
-	Restarts  int32    `json:"restarts"`
+	Name      string           `json:"name"`
+	Phase     string           `json:"phase"`
+	Restarts  int32            `json:"restarts"`
 	Container []ContainerState `json:"containers,omitempty"`
 }
 

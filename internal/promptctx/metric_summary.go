@@ -25,14 +25,14 @@ func BuildMetricSummary(s DataSource, metricName, entity, namespace string, fall
 		}
 	}
 
-		pts, err := s.GetMetricSamples(metricName, labels, 30)
+	pts, err := s.GetMetricSamples(metricName, labels, 30)
 	if err != nil || len(pts) == 0 {
 		// No time series available — report the anomaly score as a single point.
 		return []MetricSummary{{
-			Name:    metricName + "@" + entity,
-			Current: fallbackScore,
-			Trend:   "unknown",
-			Max:     fallbackScore,
+			Name:        metricName + "@" + entity,
+			Current:     fallbackScore,
+			Trend:       "unknown",
+			Max:         fallbackScore,
 			SampleCount: 0,
 		}}
 	}

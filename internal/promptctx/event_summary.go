@@ -60,7 +60,7 @@ func SummarizeEvents(events []K8sEvent, now time.Time) []EventSummary {
 // K8sEvent is a lightweight representation of a Kubernetes event.
 type K8sEvent struct {
 	Reason        string
-	Involved      string    // namespace/name
+	Involved      string // namespace/name
 	LastTimestamp time.Time
 }
 

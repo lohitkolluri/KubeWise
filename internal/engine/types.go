@@ -40,14 +40,14 @@ func (s Severity) String() string {
 // RuleResult describes a single rule match.
 type RuleResult struct {
 	RuleName   string            `json:"rule_name"`
-	Action     string            `json:"action"`               // restart_pod, scale_replicas, etc.
-	Target     string            `json:"target"`               // pod name, deployment name
+	Action     string            `json:"action"` // restart_pod, scale_replicas, etc.
+	Target     string            `json:"target"` // pod name, deployment name
 	Namespace  string            `json:"namespace"`
 	Severity   Severity          `json:"severity"`
-	Confidence float64           `json:"confidence"`            // 0.0 - 1.0
-	Evidence   []string          `json:"evidence"`              // why this rule fired (human-readable)
-	NeedsLLM   bool              `json:"needs_llm"`             // false = deterministic, skip LLM
-	Parameters map[string]string `json:"parameters,omitempty"`  // action-specific params
+	Confidence float64           `json:"confidence"`           // 0.0 - 1.0
+	Evidence   []string          `json:"evidence"`             // why this rule fired (human-readable)
+	NeedsLLM   bool              `json:"needs_llm"`            // false = deterministic, skip LLM
+	Parameters map[string]string `json:"parameters,omitempty"` // action-specific params
 }
 
 // EngineInput is the input passed to each rule for evaluation.
@@ -70,11 +70,11 @@ type MetricSummary struct {
 
 // ResourceSnapshot captures the K8s resource state at evaluation time.
 type ResourceSnapshot struct {
-	PodStatus            string // "Running", "CrashLoopBackOff", etc.
-	RestartCount         int
-	NodeReady            bool
-	DeploymentAvailable  int32
-	DeploymentReplicas   int32
+	PodStatus           string // "Running", "CrashLoopBackOff", etc.
+	RestartCount        int
+	NodeReady           bool
+	DeploymentAvailable int32
+	DeploymentReplicas  int32
 }
 
 // Rule is the interface every deterministic rule must implement.

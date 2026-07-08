@@ -288,7 +288,7 @@ func (m Model) viewLLM() string {
 		"",
 		fmt.Sprintf("  Ollama URL: %s", inputValueStyle.Render(ollama)),
 		"",
-		successStyle.Render("✓ OpenRouter configured") + "  " + mutedStyle("(no key = observe-only mode)"),
+		successStyle.Render("✓ OpenRouter configured")+"  "+mutedStyle("(no key = observe-only mode)"),
 		"",
 		buttonStyle.Render("Press Enter to continue ▶"),
 	))

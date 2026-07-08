@@ -9,11 +9,11 @@ import (
 
 // ruleTestCase describes one rule evaluation expectation.
 type ruleTestCase struct {
-	name   string
-	rule   Rule
-	input  EngineInput
-	match  bool         // true = expect exactly one result
-	check  func(*testing.T, RuleResult) // optional extra assertions
+	name  string
+	rule  Rule
+	input EngineInput
+	match bool                         // true = expect exactly one result
+	check func(*testing.T, RuleResult) // optional extra assertions
 }
 
 func runRuleTests(t *testing.T, cases []ruleTestCase) {

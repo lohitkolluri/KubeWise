@@ -12,19 +12,19 @@ import (
 
 // LLMInput bundles the prompts sent to the LLM for every task type.
 type LLMInput struct {
-	SystemPrompt string
-	UserContent  string
+	SystemPrompt   string
+	UserContent    string
 	ResponseSchema json.RawMessage
 }
 
 // LLMResponse holds the raw result and token usage from an LLM call.
 type LLMResponse struct {
-	Data        json.RawMessage
-	Model       string
+	Data         json.RawMessage
+	Model        string
 	InputTokens  int64
 	OutputTokens int64
 	CachedTokens int64
-	Duration    time.Duration
+	Duration     time.Duration
 }
 
 // LLMRouter wraps an llm.Client and dispatches requests to the model tier
@@ -105,7 +105,7 @@ func (r *LLMRouter) callModel(ctx context.Context, model string, input LLMInput)
 	estimatedOutput := estimateTokens(string(respData))
 
 	return &LLMResponse{
-		Data:        respData,
+		Data:         respData,
 		InputTokens:  estimatedInput,
 		OutputTokens: estimatedOutput,
 	}, nil

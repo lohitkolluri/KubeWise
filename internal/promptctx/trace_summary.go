@@ -122,10 +122,10 @@ type tempoSearchResponse struct {
 }
 
 type tempoTrace struct {
-	TraceID        string   `json:"traceID"`
-	RootServiceName string  `json:"rootServiceName"`
-	DurationMs     int64    `json:"durationMs"`
-	SpanCount      int      `json:"spanCount"`
-	StartTime      int64    `json:"startTime"` // Unix ms
-	Services       []string `json:"services"`
+	TraceID         string   `json:"traceID"`
+	RootServiceName string   `json:"rootServiceName"`
+	DurationMs      int64    `json:"durationMs"`
+	SpanCount       int      `json:"spanCount"`
+	StartTime       int64    `json:"startTime"` // Unix ms
+	Services        []string `json:"services"`
 }

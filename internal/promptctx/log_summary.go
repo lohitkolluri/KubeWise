@@ -142,8 +142,8 @@ func truncateLine(line string, maxLen int) string {
 // --- Loki API response types ---
 
 type lokiQueryResponse struct {
-	Status string           `json:"status"`
-	Data   lokiQueryData    `json:"data"`
+	Status string        `json:"status"`
+	Data   lokiQueryData `json:"data"`
 }
 
 type lokiQueryData struct {

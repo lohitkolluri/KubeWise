@@ -29,7 +29,7 @@ var (
 			MarginBottom(1)
 
 	// Step indicator
-	stepStyle = lipgloss.NewStyle().Foreground(colorMuted).MarginBottom(1)
+	stepStyle       = lipgloss.NewStyle().Foreground(colorMuted).MarginBottom(1)
 	activeStepStyle = lipgloss.NewStyle().
 			Foreground(colorPrimary).
 			Bold(true)
@@ -37,7 +37,7 @@ var (
 	// Input / form
 	inputLabelStyle = lipgloss.NewStyle().Foreground(colorSubtle).Width(20)
 	inputValueStyle = lipgloss.NewStyle().Foreground(colorHighlight)
-	helpStyle      = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).MarginTop(1)
+	helpStyle       = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).MarginTop(1)
 
 	// Progress
 	progressDoneStyle    = lipgloss.NewStyle().Foreground(colorSuccess).SetString("✓")
@@ -59,8 +59,8 @@ var (
 			Width(72)
 
 	// Summary table
-	summaryKeyStyle   = lipgloss.NewStyle().Foreground(colorMuted).Width(24)
-	summaryValueStyle  = lipgloss.NewStyle().Foreground(colorHighlight)
+	summaryKeyStyle     = lipgloss.NewStyle().Foreground(colorMuted).Width(24)
+	summaryValueStyle   = lipgloss.NewStyle().Foreground(colorHighlight)
 	summarySectionStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorAccent).

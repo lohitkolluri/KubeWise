@@ -150,13 +150,13 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	apiSrv.SetRemediator(corr)
 
 	a := &Agent{
-			store:            s,
-			collector:        col,
-			predictor:        pred,
-			forecaster:       fcast,
-			correlator:       corr,
-			anomalyGate:      ag,
-			featureFlags:     ff,
+		store:            s,
+		collector:        col,
+		predictor:        pred,
+		forecaster:       fcast,
+		correlator:       corr,
+		anomalyGate:      ag,
+		featureFlags:     ff,
 		outcomeTracker:   outcome.NewTracker(s),
 		healthComputer:   outcome.NewHealthComputer(s),
 		accuracyComputer: outcome.NewAccuracyComputer(s),

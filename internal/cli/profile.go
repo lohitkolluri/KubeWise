@@ -84,8 +84,8 @@ func defaultProfileFile() *profileFile {
 				AgentURL:       defaultAgentURL,
 				AgentNamespace: "kubewise",
 				AgentService:   "kubewise",
-					Output:         "table",
-					TimeoutSeconds: 15,
+				Output:         "table",
+				TimeoutSeconds: 15,
 			},
 		},
 	}
@@ -115,9 +115,9 @@ func activeProfile() CLIProfile {
 	if p.AgentNamespace == "" {
 		p.AgentNamespace = "kubewise"
 	}
-		if p.AgentService == "" {
-			p.AgentService = "kubewise"
-		}
+	if p.AgentService == "" {
+		p.AgentService = "kubewise"
+	}
 	if p.Output == "" {
 		p.Output = "table"
 	}

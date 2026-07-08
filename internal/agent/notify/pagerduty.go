@@ -11,14 +11,14 @@ const pagerDutyEventsURL = "https://events.pagerduty.com/v2/enqueue"
 
 // pagerDutyPayload is the request body for the PagerDuty Events API v2.
 type pagerDutyPayload struct {
-	RoutingKey  string            `json:"routing_key"`
-	EventAction string            `json:"event_action"`
-	DedupKey    string            `json:"dedup_key,omitempty"`
-	Payload     pagerDutyEvent    `json:"payload"`
-	Client      string            `json:"client,omitempty"`
-	ClientURL   string            `json:"client_url,omitempty"`
-	Links       []pagerDutyLink   `json:"links,omitempty"`
-	Images      []pagerDutyImage  `json:"images,omitempty"`
+	RoutingKey  string           `json:"routing_key"`
+	EventAction string           `json:"event_action"`
+	DedupKey    string           `json:"dedup_key,omitempty"`
+	Payload     pagerDutyEvent   `json:"payload"`
+	Client      string           `json:"client,omitempty"`
+	ClientURL   string           `json:"client_url,omitempty"`
+	Links       []pagerDutyLink  `json:"links,omitempty"`
+	Images      []pagerDutyImage `json:"images,omitempty"`
 }
 
 type pagerDutyEvent struct {
@@ -140,10 +140,10 @@ func (n *Notifier) sendAlertmanager(ctx context.Context, url string, ev Event) e
 		"source":    "kubewise",
 	}
 	annotations := map[string]string{
-		"summary":   ev.Title,
-		"message":   ev.Message,
-		"type":      ev.Type,
-		"kubewise":  "true",
+		"summary":  ev.Title,
+		"message":  ev.Message,
+		"type":     ev.Type,
+		"kubewise": "true",
 	}
 
 	payload := map[string]interface{}{

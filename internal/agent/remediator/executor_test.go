@@ -18,15 +18,15 @@ import (
 // stubToolPlugin is a minimal ToolPlugin implementation that records the last
 // action it received and returns a canned result.
 type stubToolPlugin struct {
-	name      string
-	lastAction models.ToolAction
-	result    *models.ToolResult
+	name        string
+	lastAction  models.ToolAction
+	result      *models.ToolResult
 	validateErr error
 }
 
-func (p *stubToolPlugin) Name() string                            { return p.name }
-func (p *stubToolPlugin) Capabilities() []models.ToolCapability   { return nil }
-func (p *stubToolPlugin) Validate(_ models.ToolAction) error       { return p.validateErr }
+func (p *stubToolPlugin) Name() string                          { return p.name }
+func (p *stubToolPlugin) Capabilities() []models.ToolCapability { return nil }
+func (p *stubToolPlugin) Validate(_ models.ToolAction) error    { return p.validateErr }
 func (p *stubToolPlugin) Execute(_ context.Context, a models.ToolAction) (*models.ToolResult, error) {
 	p.lastAction = a
 	if p.result != nil {

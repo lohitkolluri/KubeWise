@@ -11,11 +11,11 @@ import (
 
 // mockRule matches anomalies with a specific pattern.
 type mockRule struct {
-	name      string
-	matchOn   string   // only match anomalies with this Pattern
-	action    string
+	name       string
+	matchOn    string // only match anomalies with this Pattern
+	action     string
 	confidence float64
-	needsLLM  bool
+	needsLLM   bool
 }
 
 func (r *mockRule) Name() string { return r.name }
@@ -40,7 +40,7 @@ func (r *mockRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult,
 // errRule always returns an error to test error resilience.
 type errRule struct{ name string }
 
-func (r *errRule) Name() string               { return r.name }
+func (r *errRule) Name() string { return r.name }
 func (r *errRule) Evaluate(_ context.Context, _ EngineInput) ([]RuleResult, error) {
 	return nil, errors.New("always fails")
 }
