@@ -15,9 +15,18 @@ type CompactContext struct {
 	Anomaly     AnomalyContext     `json:"anomaly"`
 	Metrics     []MetricSummary    `json:"metrics,omitempty"`
 	Events      []EventSummary     `json:"events,omitempty"`
+	Logs        []LogSnippet       `json:"logs,omitempty"`          // populated when Loki is configured
+	Traces      []TraceSummary     `json:"traces,omitempty"`        // populated when Tempo is configured
 	K8sState    *K8sState          `json:"k8s_state,omitempty"`     // omitted when unchanged since last Build()
 	K8sHash     string             `json:"k8s_state_hash"`          // always populated; receiver compares for change detection
 	BuiltAt     time.Time          `json:"built_at"`
+}
+
+// LogSnippet is a single log line from Loki.
+type LogSnippet struct {
+	Line      string `json:"line"`
+	Timestamp string `json:"timestamp"` // RFC3339 string
+	Container string `json:"container,omitempty"`
 }
 
 // AnomalyContext summarizes the triggering anomaly for the LLM.
@@ -101,7 +110,9 @@ type Sample struct {
 
 // Builder creates CompactContext from cluster data sources.
 type Builder struct {
-	store DataSource
+	store    DataSource
+	lokiURL  string
+	tempoURL string
 }
 
 // DataSource abstracts the metric store needed by the builder.
@@ -110,9 +121,32 @@ type DataSource interface {
 	GetMetricSamples(name string, labels map[string]string, limit int) ([]Sample, error)
 }
 
-// New creates a context builder.
-func New(s DataSource) *Builder {
-	return &Builder{store: s}
+// BuilderOption configures a Builder.
+type BuilderOption func(*Builder)
+
+// WithLokiURL sets the Loki HTTP API endpoint for log snippet retrieval.
+// When empty, log snippets are not fetched.
+func WithLokiURL(url string) BuilderOption {
+	return func(b *Builder) {
+		b.lokiURL = url
+	}
+}
+
+// WithTempoURL sets the Tempo HTTP API endpoint for trace context retrieval.
+// When empty, traces are not fetched.
+func WithTempoURL(url string) BuilderOption {
+	return func(b *Builder) {
+		b.tempoURL = url
+	}
+}
+
+// New creates a context builder with optional configuration.
+func New(s DataSource, opts ...BuilderOption) *Builder {
+	b := &Builder{store: s}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Build constructs a CompactContext for the given anomaly.
@@ -131,6 +165,18 @@ func (b *Builder) Build(ctx context.Context, anomaly models.AnomalyRecord) Compa
 	if anomaly.MetricName != "" {
 		if summaries := BuildMetricSummary(b.store, anomaly.MetricName, anomaly.Entity, anomaly.Namespace, anomaly.Score); summaries != nil {
 			cc.Metrics = summaries
+		}
+	}
+
+	if b.lokiURL != "" {
+		if snippets, err := fetchLogSnippets(ctx, b.lokiURL, anomaly.Namespace, anomaly.Entity, 15*time.Minute); err == nil {
+			cc.Logs = snippets
+		}
+	}
+
+	if b.tempoURL != "" {
+		if traces, err := fetchTraceContext(ctx, b.tempoURL, anomaly.Namespace, anomaly.Entity, 15*time.Minute); err == nil {
+			cc.Traces = traces
 		}
 	}
 

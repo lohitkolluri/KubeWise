@@ -3,15 +3,13 @@ package collector
 import (
 	"context"
 	"log"
-	"math"
-	"math/rand"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
@@ -49,11 +47,15 @@ type EventRecord struct {
 	LastTimestamp  time.Time `json:"last_timestamp"`
 }
 
-// EventsCollector watches K8s events and emits failure-related records.
+// EventsCollector watches K8s events using a SharedInformer and emits failure-related records.
+// The informer handles reconnection automatically with bookmark events,
+// eliminating the "resourceVersion too old" errors that the raw Watch() loop produced.
 type EventsCollector struct {
 	clientset       kubernetes.Interface
 	namespace       string
 	watchNamespaces []string
+	informer        cache.Controller
+	synced          bool
 }
 
 // NewEventsCollector creates a new events collector.
@@ -65,114 +67,90 @@ func NewEventsCollector(clientset kubernetes.Interface, namespace string, watchN
 	}
 }
 
-// WatchEvents starts watching events and returns a channel of EventRecords.
-// It handles reconnection with exponential backoff.
+// WatchEvents starts watching events using a SharedInformer and returns a channel of EventRecords.
+// The informer handles reconnection with bookmark events (no manual backoff needed).
 func (ec *EventsCollector) WatchEvents(ctx context.Context) <-chan EventRecord {
 	ch := make(chan EventRecord, 100)
-	go ec.watchLoop(ctx, ch)
+
+	lw := cache.NewListWatchFromClient(
+		ec.clientset.CoreV1().RESTClient(),
+		"events",
+		ec.namespace,
+		fields.OneTermEqualSelector("type", string(corev1.EventTypeWarning)),
+	)
+
+	_, ec.informer = cache.NewInformer(
+		lw,
+		&corev1.Event{},
+		10*time.Minute, // resync period — periodic full re-list to prevent drift
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj any) {
+				ec.filterAndSend(obj, "ADDED", ch)
+			},
+			UpdateFunc: func(oldObj, newObj any) {
+				ec.filterAndSend(newObj, "MODIFIED", ch)
+			},
+		},
+	)
+
+	go ec.informer.Run(ctx.Done())
+	go func() {
+		if cache.WaitForCacheSync(ctx.Done(), ec.informer.HasSynced) {
+			ec.synced = true
+			log.Printf("events: informer cache synced")
+		} else {
+			log.Printf("events: informer cache sync failed")
+		}
+		<-ctx.Done()
+		close(ch)
+	}()
+
 	return ch
 }
 
-func (ec *EventsCollector) watchLoop(ctx context.Context, ch chan<- EventRecord) {
-	defer close(ch)
-
-	rv := ""
-	backoff := 1 * time.Second
-	maxBackoff := 60 * time.Second
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		opts := metav1.ListOptions{
-			FieldSelector: fields.AndSelectors(
-				fields.OneTermEqualSelector("type", string(corev1.EventTypeWarning)),
-			).String(),
-			Watch: true,
-		}
-		if rv != "" {
-			opts.ResourceVersion = rv
-		}
-
-		watcher, err := ec.clientset.CoreV1().Events(ec.namespace).Watch(ctx, opts)
-		if err != nil {
-			log.Printf("events: watch failed, retrying in %v: %v", backoff, err)
-			if !sleepWithContext(ctx, backoff) {
-				return
-			}
-			backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
-			backoff += time.Duration(rand.Int63n(int64(backoff / 4)))
-			continue
-		}
-
-		backoff = 1 * time.Second
-
-		for event := range watcher.ResultChan() {
-			if event.Type == watch.Error {
-				log.Printf("events: watch error: %v", event.Object)
-				watcher.Stop()
-				break
-			}
-
-			k8sEvent, ok := event.Object.(*corev1.Event)
-			if !ok {
-				continue
-			}
-
-			if !failureReasons[k8sEvent.Reason] {
-				continue
-			}
-			if !nsutil.InScope(k8sEvent.Namespace, ec.watchNamespaces) {
-				continue
-			}
-
-			record := EventRecord{
-				Type:           string(event.Type),
-				Reason:         k8sEvent.Reason,
-				Message:        k8sEvent.Message,
-				Count:          k8sEvent.Count,
-				InvolvedObject: k8sEvent.InvolvedObject.Name,
-				Namespace:      k8sEvent.Namespace,
-				Source:         k8sEvent.Source.Component,
-				FirstTimestamp: k8sEvent.FirstTimestamp.Time,
-				LastTimestamp:  k8sEvent.LastTimestamp.Time,
-			}
-			if k8sEvent.InvolvedObject.Kind != "" {
-				record.InvolvedObject = k8sEvent.InvolvedObject.Kind + "/" + k8sEvent.InvolvedObject.Name
-			}
-
-			timer := time.NewTimer(5 * time.Second)
-			select {
-			case ch <- record:
-				if !timer.Stop() {
-					<-timer.C
-				}
-			case <-timer.C:
-				log.Printf("events: channel full, timed out sending %s event for %s", record.Reason, record.InvolvedObject)
-			}
-
-			if event.Type == watch.Deleted || event.Type == watch.Modified {
-				rv = k8sEvent.ResourceVersion
-			}
-		}
-
-		if !sleepWithContext(ctx, backoff) {
-			return
-		}
-		backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
-		backoff += time.Duration(rand.Int63n(int64(backoff / 4)))
-	}
+// HasSynced returns true once the informer has completed its initial list.
+func (ec *EventsCollector) HasSynced() bool {
+	return ec.synced
 }
 
-func sleepWithContext(ctx context.Context, d time.Duration) bool {
+// filterAndSend converts a K8s event to an EventRecord, filters by failure reasons and
+// namespace scope, then sends it to the channel with backpressure.
+func (ec *EventsCollector) filterAndSend(obj any, eventType string, ch chan<- EventRecord) {
+	k8sEvent, ok := obj.(*corev1.Event)
+	if !ok {
+		return
+	}
+	if !failureReasons[k8sEvent.Reason] {
+		return
+	}
+	if !nsutil.InScope(k8sEvent.Namespace, ec.watchNamespaces) {
+		return
+	}
+
+	record := EventRecord{
+		Type:           eventType,
+		Reason:         k8sEvent.Reason,
+		Message:        k8sEvent.Message,
+		Count:          k8sEvent.Count,
+		InvolvedObject: k8sEvent.InvolvedObject.Name,
+		Namespace:      k8sEvent.Namespace,
+		Source:         k8sEvent.Source.Component,
+		FirstTimestamp: k8sEvent.FirstTimestamp.Time,
+		LastTimestamp:  k8sEvent.LastTimestamp.Time,
+	}
+	if k8sEvent.InvolvedObject.Kind != "" {
+		record.InvolvedObject = k8sEvent.InvolvedObject.Kind + "/" + k8sEvent.InvolvedObject.Name
+	}
+
+	// Send with backpressure — drop if channel full after 5s
+	timer := time.NewTimer(5 * time.Second)
 	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(d):
-		return true
+	case ch <- record:
+		if !timer.Stop() {
+			<-timer.C
+		}
+	case <-timer.C:
+		log.Printf("events: channel full, timed out sending %s event for %s", record.Reason, record.InvolvedObject)
 	}
 }
 

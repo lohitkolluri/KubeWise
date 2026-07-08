@@ -1,0 +1,92 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "title": "KubeWise — Cluster Health",
+  "uid": "kubewise-cluster-health",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["kubewise", "kubernetes"],
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "title": "Node CPU Utilisation",
+      "type": "timeseries",
+      "uid": "panel-cpu",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        "legendFormat": "{{ instance }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Node Memory Usage",
+      "type": "timeseries",
+      "uid": "panel-mem",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [{
+        "expr": "100 - ((node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100)",
+        "legendFormat": "{{ instance }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Pod Restarts (Last 6h)",
+      "type": "timeseries",
+      "uid": "panel-restarts",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [{
+        "expr": "sum by(pod) (rate(kube_pod_container_status_restarts_total[5m])) > 0",
+        "legendFormat": "{{ pod }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Pod Status Breakdown",
+      "type": "stat",
+      "uid": "panel-pod-status",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+      "targets": [{
+        "expr": "count(kube_pod_status_phase{phase=\"Running\"})",
+        "legendFormat": "Running",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }, {
+        "expr": "count(kube_pod_status_phase{phase=\"Pending\"})",
+        "legendFormat": "Pending",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }, {
+        "expr": "count(kube_pod_status_phase{phase=\"Failed\"})",
+        "legendFormat": "Failed",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }, {
+        "expr": "count(kube_pod_status_phase{phase=\"Unknown\"})",
+        "legendFormat": "Unknown",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Node Disk Usage",
+      "type": "gauge",
+      "uid": "panel-disk",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 },
+      "targets": [{
+        "expr": "100 - ((node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100)",
+        "legendFormat": "Disk Usage %",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "KubeWise Anomaly Score",
+      "type": "timeseries",
+      "uid": "panel-anomaly-score",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 8 },
+      "targets": [{
+        "expr": "kubewise_anomaly_score",
+        "legendFormat": "{{ entity }} — {{ pattern }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    }
+  ]
+}

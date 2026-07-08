@@ -1,0 +1,17 @@
+{{- if .Values.agent.features.observability }}
+{{- $files := .Files }}
+{{- range $path, $_ := $files.Glob "dashboards/*.json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubewise.fullname" $ }}-{{ regexReplaceAll "dashboards/(.*)\\.json$" $path "${1}" | replace "_" "-" }}
+  namespace: {{ include "kubewise.namespace" $ }}
+  labels:
+    {{- include "kubewise.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  {{ base $path }}: |
+{{ $files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

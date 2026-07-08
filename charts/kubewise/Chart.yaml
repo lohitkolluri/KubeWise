@@ -12,3 +12,13 @@ keywords:
 home: https://github.com/lohitkolluri/KubeWise
 sources:
   - https://github.com/lohitkolluri/KubeWise
+
+dependencies:
+  - name: loki
+    version: ">=13.0.0 <14.0.0"
+    repository: oci://ghcr.io/grafana-community/helm-charts
+    condition: agent.observability.loki.enabled
+  - name: tempo
+    version: ">=1.0.0 <2.0.0"
+    repository: oci://ghcr.io/grafana-community/helm-charts
+    condition: agent.observability.tempo.enabled

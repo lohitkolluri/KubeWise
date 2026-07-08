@@ -1,0 +1,72 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "title": "KubeWise — Incidents",
+  "uid": "kubewise-incidents",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["kubewise", "incidents"],
+  "timezone": "browser",
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "60s",
+  "panels": [
+    {
+      "title": "Active Anomalies",
+      "type": "table",
+      "uid": "panel-active",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "kubewise_anomaly_score > 0.5",
+        "format": "table",
+        "instant": true,
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true }, "indexByName": { "entity": 0, "score": 1, "pattern": 2 } } }
+      ]
+    },
+    {
+      "title": "Incident Timeline (Error Logs)",
+      "type": "logs",
+      "uid": "panel-logs",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "{namespace=~\".+\"} |= \"error|panic|OOM|fail\"",
+        "datasource": { "type": "loki", "uid": "loki" }
+      }]
+    },
+    {
+      "title": "Anomalies by Pattern",
+      "type": "piechart",
+      "uid": "panel-patterns",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "targets": [{
+        "expr": "count by(pattern) (kubewise_anomaly_score > 0)",
+        "legendFormat": "{{ pattern }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Remediation Success Rate",
+      "type": "stat",
+      "uid": "panel-remediation",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "targets": [{
+        "expr": "sum(kubewise_remediation_success) / sum(kubewise_remediation_total) * 100",
+        "legendFormat": "Success Rate %",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+    {
+      "title": "Error Rate by Namespace",
+      "type": "bargauge",
+      "uid": "panel-errors",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "targets": [{
+        "expr": "sum by(namespace) (rate(kubewise_anomaly_score{score>\"0.5\"}[15m]) > 0)",
+        "legendFormat": "{{ namespace }}",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    }
+  ]
+}
