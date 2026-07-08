@@ -13,16 +13,41 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/lohitkolluri/KubeWise/internal/tools"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
-// K8sExecutor executes remediation actions against the Kubernetes API.
+// toolRoute maps a remediation action type to a tool plugin name and command.
+type toolRoute struct {
+	tool    string
+	command string
+}
+
+// toolActionRoutes routes non-k8s action types to the tool plugin system.
+// These are checked in execute() before the k8s API switch.
+var toolActionRoutes = map[string]toolRoute{
+	"helm_upgrade":     {tool: "helm", command: "upgrade"},
+	"helm_rollback":    {tool: "helm", command: "rollback"},
+	"argocd_sync":      {tool: "argocd", command: "app sync"},
+	"argocd_rollback":  {tool: "argocd", command: "app rollback"},
+	"github_create_pr": {tool: "github", command: "create pr"},
+	"github_merge_pr":  {tool: "github", command: "merge pr"},
+	"terraform_apply":  {tool: "terraform", command: "apply"},
+}
+
+// K8sExecutor executes remediation actions against the Kubernetes API
+// and dispatches external tool actions (helm, argocd, github, terraform)
+// through the tool plugin registry.
 type K8sExecutor struct {
-	clientset kubernetes.Interface
-	dryRun    bool
+	clientset    kubernetes.Interface
+	dryRun       bool
+	toolRegistry *tools.Registry
 }
 
 // NewK8sExecutor creates an executor using in-cluster config.
+// It also initialises the tool plugin registry with in-cluster tools
+// (kubectl, helm). Tools requiring external auth (argocd, github, terraform)
+// must be registered separately via RegisterToolPlugin.
 func NewK8sExecutor(dryRun bool) (*K8sExecutor, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -32,12 +57,37 @@ func NewK8sExecutor(dryRun bool) (*K8sExecutor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create clientset: %w", err)
 	}
-	return &K8sExecutor{clientset: clientset, dryRun: dryRun}, nil
+
+	reg := tools.NewRegistry()
+	// kubectl and helm detect in-cluster config automatically via
+	// KUBERNETES_SERVICE_HOST / KUBERNETES_SERVICE_PORT env vars.
+	_ = reg.Register(tools.NewKubectlPlugin(""))
+	_ = reg.Register(tools.NewHelmPlugin("", ""))
+
+	return &K8sExecutor{clientset: clientset, dryRun: dryRun, toolRegistry: reg}, nil
 }
 
 // NewK8sExecutorWithClient creates an executor with an existing clientset (for testing).
+// The tool registry is nil by default; call SetToolRegistry or RegisterToolPlugin when
+// tests need to exercise tool plugin dispatch.
 func NewK8sExecutorWithClient(clientset kubernetes.Interface, dryRun bool) *K8sExecutor {
 	return &K8sExecutor{clientset: clientset, dryRun: dryRun}
+}
+
+// SetToolRegistry sets the tool plugin registry. Used in tests and when wiring
+// external tool plugins after construction.
+func (e *K8sExecutor) SetToolRegistry(r *tools.Registry) {
+	e.toolRegistry = r
+}
+
+// RegisterToolPlugin registers a single tool plugin. Creates the registry
+// if it does not already exist. Returns an error if the plugin name is
+// already registered.
+func (e *K8sExecutor) RegisterToolPlugin(plugin tools.ToolPlugin) error {
+	if e.toolRegistry == nil {
+		e.toolRegistry = tools.NewRegistry()
+	}
+	return e.toolRegistry.Register(plugin)
 }
 
 // SetDryRun updates the dry-run mode.
@@ -64,6 +114,11 @@ func (e *K8sExecutor) execute(ctx context.Context, plan models.RemediationPlan, 
 	if dryRun {
 		return fmt.Sprintf("[dry-run] would %s %s/%s with params=%v",
 			plan.Action.Type, plan.Action.Namespace, plan.Action.Target, plan.Action.Parameters), nil
+	}
+
+	// Check tool plugin route for external tool actions before the k8s API switch.
+	if route, ok := toolActionRoutes[plan.Action.Type]; ok {
+		return e.executeToolAction(ctx, plan, route)
 	}
 
 	switch plan.Action.Type {
@@ -224,6 +279,68 @@ func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string
 	}
 
 	return fmt.Sprintf("patched resources for deployment %s/%s container %s", namespace, name, container), nil
+}
+
+// executeToolAction dispatches a remediation action to the tool plugin system.
+// Returns a descriptive result string on success, or an error with a clear message.
+func (e *K8sExecutor) executeToolAction(ctx context.Context, plan models.RemediationPlan, route toolRoute) (string, error) {
+	if e.toolRegistry == nil {
+		return "", fmt.Errorf("tool plugin registry not configured — cannot dispatch %s/%s",
+			route.tool, route.command)
+	}
+	plugin := e.toolRegistry.Get(route.tool)
+	if plugin == nil {
+		return "", fmt.Errorf("tool plugin %q not registered — cannot execute %s/%s",
+			route.tool, route.tool, route.command)
+	}
+
+	action := e.buildToolAction(plan, route)
+	result, err := e.toolRegistry.Execute(ctx, action)
+	if err != nil {
+		return "", fmt.Errorf("tool %s/%s failed: %w", route.tool, route.command, err)
+	}
+	if !result.Success {
+		return "", fmt.Errorf("tool %s/%s execution unsuccessful: %s",
+			route.tool, route.command, result.Stderr)
+	}
+	return result.Stdout, nil
+}
+
+// buildToolAction converts a RemediationPlan action into a ToolAction for the
+// target tool plugin. Plan parameters become tool args; the target and namespace
+// are mapped to tool-specific keys when not already present in parameters.
+func (e *K8sExecutor) buildToolAction(plan models.RemediationPlan, route toolRoute) models.ToolAction {
+	args := make(map[string]string, len(plan.Action.Parameters)+2)
+	for k, v := range plan.Action.Parameters {
+		args[k] = v
+	}
+
+	// Map the plan target to a tool-specific field when the plan uses Target
+	// as the primary resource name (e.g. release name for helm, app for argocd).
+	if plan.Action.Target != "" {
+		switch route.tool {
+		case "helm":
+			if _, ok := args["release"]; !ok {
+				args["release"] = plan.Action.Target
+			}
+		case "argocd":
+			if _, ok := args["app"]; !ok {
+				args["app"] = plan.Action.Target
+			}
+		}
+	}
+
+	if plan.Action.Namespace != "" {
+		if _, ok := args["namespace"]; !ok {
+			args["namespace"] = plan.Action.Namespace
+		}
+	}
+
+	return models.ToolAction{
+		Tool:    route.tool,
+		Command: route.command,
+		Args:    args,
+	}
 }
 
 func resourceParams(params map[string]string) map[string]map[string]string {
