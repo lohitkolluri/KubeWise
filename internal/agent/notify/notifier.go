@@ -19,12 +19,16 @@ type Notifier struct {
 	httpClient *http.Client
 }
 
-// New creates a notifier from agent config. Returns nil when notifications are disabled.
+// New creates a notifier from agent config. Returns nil when notifications are disabled
+// and no output channel is configured.
 func New(cfg models.NotificationsConfig) *Notifier {
 	if !cfg.Enabled {
 		return nil
 	}
-	if strings.TrimSpace(cfg.SlackWebhookURL) == "" && strings.TrimSpace(cfg.WebhookURL) == "" {
+	if strings.TrimSpace(cfg.SlackWebhookURL) == "" &&
+		strings.TrimSpace(cfg.WebhookURL) == "" &&
+		strings.TrimSpace(cfg.PagerDutyRoutingKey) == "" &&
+		strings.TrimSpace(cfg.AlertmanagerURL) == "" {
 		return nil
 	}
 	return &Notifier{
@@ -140,16 +144,28 @@ func (n *Notifier) send(ctx context.Context, ev Event) {
 	if strings.TrimSpace(n.cfg.WebhookURL) != "" && n.cfg.WebhookURL != n.cfg.SlackWebhookURL {
 		_ = n.postJSON(ctx, n.cfg.WebhookURL, ev)
 	}
+	if strings.TrimSpace(n.cfg.PagerDutyRoutingKey) != "" {
+		_ = n.sendPagerDuty(ctx, n.cfg.PagerDutyRoutingKey, ev)
+	}
+	if strings.TrimSpace(n.cfg.AlertmanagerURL) != "" {
+		_ = n.sendAlertmanager(ctx, n.cfg.AlertmanagerURL, ev)
+	}
 }
 
 func (n *Notifier) postSlack(ctx context.Context, url string, ev Event) error {
 	color := "#36a64f"
+	emoji := ":white_check_mark:"
 	switch ev.Severity {
 	case "critical", "high":
 		color = "#e01e5a"
+		emoji = ":red_circle:"
 	case "warning", "medium":
 		color = "#ecb22e"
+		emoji = ":warning:"
 	}
+
+	blocks := slackBlocks(ev, emoji)
+
 	payload := map[string]interface{}{
 		"attachments": []map[string]interface{}{
 			{
@@ -161,8 +177,58 @@ func (n *Notifier) postSlack(ctx context.Context, url string, ev Event) error {
 				"fields": slackFields(ev),
 			},
 		},
+		"blocks": blocks,
 	}
 	return n.postJSON(ctx, url, payload)
+}
+
+// slackBlocks returns Slack Block Kit blocks for richer notifications.
+func slackBlocks(ev Event, emoji string) []map[string]interface{} {
+	blocks := []map[string]interface{}{
+		{
+			"type": "header",
+			"text": map[string]interface{}{
+				"type": "plain_text",
+				"text": fmt.Sprintf("%s %s", emoji, ev.Title),
+			},
+		},
+		{
+			"type": "section",
+			"text": map[string]interface{}{
+				"type": "mrkdwn",
+				"text": ev.Message,
+			},
+		},
+	}
+
+	fields := []map[string]interface{}{}
+	if ev.Namespace != "" {
+		fields = append(fields, map[string]interface{}{"type": "mrkdwn", "text": fmt.Sprintf("*Namespace:*\n%s", ev.Namespace)})
+	}
+	if ev.Entity != "" {
+		fields = append(fields, map[string]interface{}{"type": "mrkdwn", "text": fmt.Sprintf("*Entity:*\n%s", ev.Entity)})
+	}
+	fields = append(fields, map[string]interface{}{"type": "mrkdwn", "text": fmt.Sprintf("*Type:*\n%s", ev.Type)})
+	fields = append(fields, map[string]interface{}{"type": "mrkdwn", "text": fmt.Sprintf("*Severity:*\n%s", ev.Severity)})
+
+	if len(fields) > 0 {
+		blocks = append(blocks, map[string]interface{}{
+			"type":   "section",
+			"fields": fields,
+		})
+	}
+
+	blocks = append(blocks, map[string]interface{}{
+		"type": "context",
+		"elements": []map[string]interface{}{
+			{
+				"type": "mrkdwn",
+				"text": fmt.Sprintf("<!date^%d^KubeWise • {date_short} {time_secs}|KubeWise>", ev.Timestamp.Unix()),
+			},
+		},
+	})
+
+	return blocks
 }
 
 func slackFields(ev Event) []map[string]string {
