@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lohitkolluri/KubeWise/internal/agent/featureflags"
 	"github.com/lohitkolluri/KubeWise/internal/version"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -25,6 +26,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/audit/{id}", s.handleAuditGet)
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
 	mux.HandleFunc("GET /", s.handleRoot)
+	flags := featureflags.Load()
+	if flags.Any() {
+		mux.HandleFunc("GET /api/v1/pipeline/stats", s.handlePipelineStats)
+		mux.HandleFunc("GET /api/v1/cache/stats", s.handleCacheStats)
+	}
 	mux.HandleFunc("GET /api/v1/health", s.handleHealthScores)
 	mux.HandleFunc("GET /api/v1/health/history", s.handleHealthScoreHistory)
 	mux.HandleFunc("GET /api/v1/health/summary", s.handleClusterHealthSummary)
@@ -225,4 +231,33 @@ func (s *Server) handleAuditGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sanitizeAuditRecords([]models.AuditRecord{*rec})[0])
+}
+
+func (s *Server) handlePipelineStats(w http.ResponseWriter, r *http.Request) {
+	flags := featureflags.Load()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"features_enabled": map[string]bool{
+			"rule_engine":     flags.RuleEngine,
+			"llm_router":      flags.LLMRouter,
+			"context_builder": flags.ContextBuilder,
+			"events_v2":       flags.EventsV2,
+			"tool_plugins":    flags.ToolPlugins,
+			"observability":   flags.Observability,
+		},
+		"pipeline_active": flags.Any(),
+	})
+}
+
+func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
+	flags := featureflags.Load()
+	resp := map[string]interface{}{
+		"cache_type":   "semantic",
+		"cache_active": flags.SemanticCache,
+	}
+	if flags.SemanticCache {
+		resp["hits"] = 0
+		resp["misses"] = 0
+		resp["size"] = 0
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
