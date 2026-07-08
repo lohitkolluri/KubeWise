@@ -2,15 +2,17 @@ package models
 
 import "time"
 
-// NotificationsConfig controls outbound webhook/Slack alerts.
+// NotificationsConfig controls outbound notifications (Slack, generic webhook, PagerDuty, Alertmanager).
 type NotificationsConfig struct {
-	Enabled         bool    `json:"enabled" yaml:"enabled"`
-	WebhookURL      string  `json:"webhook_url,omitempty" yaml:"webhook_url,omitempty"`
-	SlackWebhookURL string  `json:"slack_webhook_url,omitempty" yaml:"slack_webhook_url,omitempty"`
-	MinScore        float64 `json:"min_score,omitempty" yaml:"min_score,omitempty"`
-	OnPrediction    bool    `json:"on_prediction" yaml:"on_prediction"`
-	OnRemediation   bool    `json:"on_remediation" yaml:"on_remediation"`
-	OnApproval      bool    `json:"on_approval" yaml:"on_approval"`
+	Enabled            bool    `json:"enabled" yaml:"enabled"`
+	WebhookURL         string  `json:"webhook_url,omitempty" yaml:"webhook_url,omitempty"`
+	SlackWebhookURL    string  `json:"slack_webhook_url,omitempty" yaml:"slack_webhook_url,omitempty"`
+	PagerDutyRoutingKey string `json:"pagerduty_routing_key,omitempty" yaml:"pagerduty_routing_key,omitempty"`
+	AlertmanagerURL    string  `json:"alertmanager_url,omitempty" yaml:"alertmanager_url,omitempty"`
+	MinScore           float64 `json:"min_score,omitempty" yaml:"min_score,omitempty"`
+	OnPrediction       bool    `json:"on_prediction" yaml:"on_prediction"`
+	OnRemediation      bool    `json:"on_remediation" yaml:"on_remediation"`
+	OnApproval         bool    `json:"on_approval" yaml:"on_approval"`
 }
 
 // TrackedPrediction records an open prediction awaiting outcome verification.
