@@ -13,6 +13,23 @@ const (
 	ModelGPTOSS = "openai/gpt-oss-120b"
 )
 
+// Tier-specific model constants for the LLM router (Phase 1.5).
+// These are the recommended production model IDs as of July 2026.
+const (
+	// T1: extraction / classification — cheap and fast.
+	ExtractionModel     = "mistralai/mistral-nemo"
+	ClassificationModel = "mistralai/mistral-nemo"
+
+	// T2: root cause analysis — strong reasoning at moderate cost.
+	RCAModel = "deepseek/deepseek-v4-flash"
+
+	// T3: code / YAML generation — best at structured output.
+	RemediationModel = "qwen/qwen3-coder"
+
+	// T4: universal fallback when all other tiers fail.
+	FallbackModel = "openai/gpt-oss-120b"
+)
+
 // Free OpenRouter models (zero cost, rate-limited). Good for local dev with rich prompts.
 const (
 	FreeModelGPTOSS = "openai/gpt-oss-120b:free" // 131K ctx, strong reasoning
