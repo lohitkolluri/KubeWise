@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,9 +18,10 @@ import (
 
 // OpenRouterProvider sends structured requests via the OpenRouter API.
 type OpenRouterProvider struct {
-	sdk    *openrouter.OpenRouter
-	apiKey string
-	model  string
+	sdk       *openrouter.OpenRouter
+	apiKey    string
+	model     string
+	sessionID string
 }
 
 // NewOpenRouterProvider creates an OpenRouter backend.
@@ -30,14 +32,68 @@ func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
 	}
 	var sdk *openrouter.OpenRouter
 	if apiKey != "" {
-		sdk = openrouter.New(
+		baseOpts := []openrouter.SDKOption{
 			openrouter.WithSecurity(apiKey),
 			openrouter.WithHTTPReferer(appReferer),
 			openrouter.WithXTitle(appTitle),
-			openrouter.WithTimeout(180*time.Second),
-		)
+			openrouter.WithTimeout(180 * time.Second),
+		}
+		// If the model carries a session ID (colon-separated suffix), extract it.
+		// Format: "<model>:<session-id>" — enables sticky routing for prompt caching
+		// without requiring a separate config field.
+		if parts := strings.SplitN(model, ":", 2); len(parts) == 2 && parts[1] != "free" && parts[1] != "" {
+			sessionID := parts[1]
+			model = parts[0]
+			httpClient := &http.Client{
+				Timeout:   180 * time.Second,
+				Transport: &sessionIDTransport{base: http.DefaultTransport, sessionID: sessionID},
+			}
+			sdk = openrouter.New(append(baseOpts,
+				openrouter.WithClient(httpClient),
+			)...)
+			return &OpenRouterProvider{sdk: sdk, apiKey: apiKey, model: model, sessionID: sessionID}
+		}
+
+		sdk = openrouter.New(baseOpts...)
 	}
 	return &OpenRouterProvider{sdk: sdk, apiKey: apiKey, model: model}
+}
+
+// sessionIDTransport injects the x-session-id header for OpenRouter prompt caching.
+// This enables sticky routing to the same provider, which improves cache hit rates.
+type sessionIDTransport struct {
+	base      http.RoundTripper
+	sessionID string
+}
+
+func (t *sessionIDTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.sessionID != "" {
+		req.Header.Set("x-session-id", t.sessionID)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// SetSessionID configures sticky routing for prompt caching.
+// Call this with an incident ID before making requests for that incident.
+func (p *OpenRouterProvider) SetSessionID(sessionID string) {
+	p.sessionID = sessionID
+	if p.sdk == nil || sessionID == "" {
+		return
+	}
+	httpClient := &http.Client{
+		Timeout: 180 * time.Second,
+		Transport: &sessionIDTransport{
+			base:      http.DefaultTransport,
+			sessionID: sessionID,
+		},
+	}
+	p.sdk = openrouter.New(
+		openrouter.WithSecurity(p.apiKey),
+		openrouter.WithHTTPReferer(appReferer),
+		openrouter.WithXTitle(appTitle),
+		openrouter.WithTimeout(180*time.Second),
+		openrouter.WithClient(httpClient),
+	)
 }
 
 func (p *OpenRouterProvider) Name() string { return "openrouter" }
