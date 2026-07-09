@@ -41,7 +41,7 @@ agent:
   scrapeInterval: 30s
   prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
   llmProvider: openrouter
-  llmModel: openai/gpt-oss-120b
+  llmModel: deepseek/deepseek-v4-flash
   llmBaseURL: ''
   # Empty = watch all namespaces (subject to denylist). Non-empty limits observation scope.
   watchNamespaces: []
@@ -56,13 +56,13 @@ agent:
     allowlist: []
   # Feature gates for v2 capabilities. All default false (v1-compatible).
   features:
-    ruleEngine: false
-    contextBuilder: false
-    llmRouter: false
-    semanticCache: false
-    eventsV2: false
-    toolPlugins: false
-    observability: false
+    ruleEngine: true
+    contextBuilder: true
+    llmRouter: true
+    semanticCache: true
+    eventsV2: true
+    toolPlugins: true
+    observability: true
   observability:
     # When agent.features.observability=true, Loki + Tempo + Alloy are deployed.
     loki:
@@ -129,7 +129,7 @@ secrets:
 
 security:
   # When true, agent refuses to start without KUBEWISE_API_TOKEN (fail closed).
-  requireApiToken: false
+  requireApiToken: true
   # When true, RBAC includes pod exec/port-forward/attach primitives (high risk).
   enableExecPrimitives: false
 

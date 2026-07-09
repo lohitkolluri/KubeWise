@@ -10,8 +10,10 @@ data:
   config.yaml: |
     scrape_interval: 30s
     prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+    loki_url: http://kubewise-loki-gateway.kubewise.svc.cluster.local
+    tempo_url: http://kubewise-tempo.kubewise.svc.cluster.local:3200
     llm_provider: openrouter
-    llm_model: google/gemini-2.0-flash-001
+    llm_model: deepseek/deepseek-v4-flash
     # llm_provider: ollama
     # llm_base_url: http://ollama.ollama.svc.cluster.local:11434
     # llm_model: llama3.1:8b

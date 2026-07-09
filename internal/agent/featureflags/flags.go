@@ -18,8 +18,9 @@ type Flags struct {
 }
 
 // Load reads all feature flag env vars and returns a Flags struct.
-// Missing or empty vars default to false. The canonical false value is any of:
-// "", "0", "false", "off", "no" (case-insensitive). Everything else is true.
+// Unset vars default to false. An explicitly set empty string is also false.
+// The canonical false values are: "", "0", "false", "off", "no" (case-insensitive).
+// Everything else is true.
 func Load() Flags {
 	return Flags{
 		RuleEngine:     envBool("KUBEWISE_FEATURE_RULE_ENGINE"),
@@ -63,7 +64,7 @@ func (f Flags) Enabled(key string) bool {
 }
 
 // envBool parses a KUBEWISE_FEATURE_* env var.
-// False values: "", "0", "false", "off", "no" (case-insensitive).
+// Returns false when the variable is unset or set to: "", "0", "false", "off", "no".
 // All other values are true.
 func envBool(key string) bool {
 	v, ok := os.LookupEnv(key)

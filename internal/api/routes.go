@@ -194,23 +194,6 @@ func redactParams(in map[string]string) map[string]string {
 	return out
 }
 
-func redactSensitive(s string) string {
-	if s == "" {
-		return s
-	}
-	// Simple best-effort redaction for common credential shapes.
-	s = strings.ReplaceAll(s, "Bearer ", "Bearer ***")
-	if i := strings.Index(s, "sk-"); i >= 0 {
-		// Replace any sk-* token-ish substring with a placeholder.
-		j := i
-		for j < len(s) && s[j] != ' ' && s[j] != '\n' && s[j] != '\t' && s[j] != '"' && s[j] != '\'' {
-			j++
-		}
-		s = s[:i] + "sk-***" + s[j:]
-	}
-	return s
-}
-
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseLimit(r, 20, 100)
 	if err != nil {

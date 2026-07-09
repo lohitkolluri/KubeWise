@@ -14,6 +14,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 
 	"github.com/lohitkolluri/KubeWise/internal/cli/wizard"
+	"github.com/lohitkolluri/KubeWise/internal/version"
+	"github.com/lohitkolluri/KubeWise/pkg/k8s"
 )
 
 const (
@@ -51,7 +53,7 @@ Examples:
   OPENROUTER_API_KEY=sk-... kwctl install   # optional LLM key
 
 After install, port-forward and open the UI:
-  kubectl -n kubewise port-forward svc/kubewise 8080:8080
+  kwctl up
   kwctl ui`,
 	RunE: runInstall,
 }
@@ -77,6 +79,18 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 
 	if installLocal {
 		return runLocalInstall(out)
+	}
+
+	// Dev builds (running from source) should default to local manifests + dev overlay,
+	// so "kwctl install" doesn't accidentally apply remote release overlays.
+	if version.Version == "dev" &&
+		installRef == defaultInstallRef &&
+		installOverlay == defaultInstallOverlay &&
+		installManifestsDir == "" {
+		if local := findManifestsDir(); local != "" {
+			installManifestsDir = local
+			installOverlay = "dev"
+		}
 	}
 
 	// Interactive wizard mode — no flags set.
@@ -141,7 +155,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	_, _ = fmt.Fprintln(out, "… waiting for agent deployment")
 	waitCtx, waitCancel := context.WithTimeout(ctx, installWaitTimeout)
 	defer waitCancel()
-	if err := kc.WaitForDeploymentAvailable(waitCtx, agentNS, agentSvc); err != nil {
+	if err := waitForAnyAgentDeployment(waitCtx, kc, agentNS, agentSvc); err != nil {
 		return fmt.Errorf("agent not ready: %w", err)
 	}
 	_, _ = fmt.Fprintln(out, "✓ Agent is running")
@@ -154,6 +168,32 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 
 	printInstallNextSteps(out)
 	return nil
+}
+
+func waitForAnyAgentDeployment(ctx context.Context, kc *k8s.Client, namespace, preferred string) error {
+	candidates := []string{
+		preferred,
+		"kubewise",
+		"kubewise-agent",
+	}
+	seen := map[string]bool{}
+	var lastErr error
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if err := kc.WaitForDeploymentAvailable(ctx, namespace, name); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("deployment not found")
 }
 
 func runInstallWizard(out io.Writer) error {
@@ -328,6 +368,22 @@ func findHelmChartDir() string {
 	}
 	for _, p := range candidates {
 		if _, err := os.Stat(p + "/Chart.yaml"); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func findManifestsDir() string {
+	candidates := []string{}
+	if repo := os.Getenv("KUBEWISE_REPO"); repo != "" {
+		candidates = append(candidates, repo+"/manifests")
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, wd+"/manifests")
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p + "/overlays/dev/kustomization.yaml"); err == nil {
 			return p
 		}
 	}

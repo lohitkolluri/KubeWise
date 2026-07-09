@@ -59,7 +59,7 @@ for entry in "${PLATFORMS[@]}"; do
   "name": "${pkg_name}",
   "version": "${VERSION}",
   "description": "kwctl binary for ${npm_os}/${npm_cpu}",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lohitkolluri/KubeWise.git"
@@ -84,7 +84,7 @@ cat > "${kwctl_dir}/package.json" <<EOF
   "name": "kwctl",
   "version": "${VERSION}",
   "description": "CLI for KubeWise — predictive Kubernetes monitoring and remediation",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lohitkolluri/KubeWise.git"
@@ -123,7 +123,7 @@ cat > "${cli_dir}/package.json" <<EOF
   "name": "kubewise-cli",
   "version": "${VERSION}",
   "description": "KubeWise CLI (kwctl) — install via npm",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lohitkolluri/KubeWise.git"

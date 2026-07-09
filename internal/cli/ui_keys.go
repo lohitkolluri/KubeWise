@@ -60,8 +60,8 @@ func defaultUIKeys() uiKeyMap {
 			key.WithHelp("←/h", "prev tab"),
 		),
 		TabNext: key.NewBinding(
-			key.WithKeys("right", "l"),
-			key.WithHelp("→/l", "next tab"),
+			key.WithKeys("right"),
+			key.WithHelp("→", "next tab"),
 		),
 		Tab1: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "dashboard")),
 		Tab2: key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "predictions")),
@@ -121,29 +121,29 @@ func defaultUIKeys() uiKeyMap {
 		// Config / mode
 		DryRun: key.NewBinding(
 			key.WithKeys("d"),
-			key.WithHelp("d", "toggle observe/live"),
+			key.WithHelp("d", "toggle observe/live (prompts)"),
 		),
 		Mode: key.NewBinding(
 			key.WithKeys("m"),
-			key.WithHelp("m", "cycle remediation mode"),
+			key.WithHelp("m", "cycle remediation mode (config tab)"),
 		),
 		Restart: key.NewBinding(
 			key.WithKeys("R"),
 			key.WithHelp("R", "restart agent"),
 		),
 		ToggleLive: key.NewBinding(
-			key.WithKeys("L"),
-			key.WithHelp("L", "toggle live mode"),
+			key.WithKeys("l", "L"),
+			key.WithHelp("l", "toggle live mode (prompts)"),
 		),
 
 		// Approvals
 		Approve: key.NewBinding(
 			key.WithKeys("a"),
-			key.WithHelp("a", "approve"),
+			key.WithHelp("a", "approve (approvals tab)"),
 		),
 		Reject: key.NewBinding(
 			key.WithKeys("x"),
-			key.WithHelp("x", "reject"),
+			key.WithHelp("x", "reject (approvals tab)"),
 		),
 
 		// Logs

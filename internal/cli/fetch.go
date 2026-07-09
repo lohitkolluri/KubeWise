@@ -145,58 +145,6 @@ func putAgentConfig(cfg *models.AgentConfig) error {
 	return err
 }
 
-func fetchHealthScores(namespace string) ([]models.HealthScore, error) {
-	path := "/api/v1/health"
-	if namespace != "" {
-		path += "?namespace=" + url.QueryEscape(namespace)
-	}
-	body, _, err := agentGet(context.Background(), path)
-	if err != nil {
-		return nil, err
-	}
-	var scores []models.HealthScore
-	if err := json.Unmarshal(body, &scores); err != nil {
-		return nil, fmt.Errorf("parse health scores: %w", err)
-	}
-	return scores, nil
-}
-
-func fetchHealthSummary() (*models.ClusterHealthSummary, error) {
-	body, _, err := agentGet(context.Background(), "/api/v1/health/summary")
-	if err != nil {
-		return nil, err
-	}
-	var summary models.ClusterHealthSummary
-	if err := json.Unmarshal(body, &summary); err != nil {
-		return nil, fmt.Errorf("parse health summary: %w", err)
-	}
-	return &summary, nil
-}
-
-func fetchAccuracy() (*models.AccuracySnapshot, error) {
-	body, _, err := agentGet(context.Background(), "/api/v1/accuracy")
-	if err != nil {
-		return nil, err
-	}
-	var snap models.AccuracySnapshot
-	if err := json.Unmarshal(body, &snap); err != nil {
-		return nil, fmt.Errorf("parse accuracy: %w", err)
-	}
-	return &snap, nil
-}
-
-func fetchRemediationMode() (models.RemediationModeView, error) {
-	body, _, err := agentGet(context.Background(), "/api/v1/remediation/mode")
-	if err != nil {
-		return models.RemediationModeView{}, err
-	}
-	var mode models.RemediationModeView
-	if err := json.Unmarshal(body, &mode); err != nil {
-		return models.RemediationModeView{}, fmt.Errorf("parse remediation mode: %w", err)
-	}
-	return mode, nil
-}
-
 func setRemediationLive(live bool) (models.RemediationModeView, error) {
 	body, _, err := agentWrite(context.Background(), "/api/v1/remediation/mode", map[string]bool{"live": live})
 	if err != nil {

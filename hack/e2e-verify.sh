@@ -79,7 +79,7 @@ else
   fail "agent deployment rollout"
 fi
 
-if kubectl -n kubewise get secret kubewise-agent-secret >/dev/null 2>&1; then
+if kubectl -n kubewise get secret kubewise-secret >/dev/null 2>&1; then
   pass "OpenRouter secret present"
 else
   skip "OpenRouter secret (observe-only LLM)"

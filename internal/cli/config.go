@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
+	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -48,6 +49,12 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	return writeOutput(cmd.OutOrStdout(), outputFormat, cfg, func() error {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Scrape Interval:", cfg.ScrapeInterval)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Prometheus:", cfg.PrometheusAddress)
+		if strings.TrimSpace(cfg.LokiURL) != "" {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Loki:", cfg.LokiURL)
+		}
+		if strings.TrimSpace(cfg.TempoURL) != "" {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Tempo:", cfg.TempoURL)
+		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "LLM Provider:", cfg.LLMProvider)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "LLM Model:", cfg.LLMModel)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-25s %s\n", "Remediation Mode:", cfg.Remediation.Mode)
@@ -64,7 +71,7 @@ var configSetCmd = &cobra.Command{
 	Use:   "set KEY VALUE",
 	Short: "Update a single agent config field (persisted; restart agent to apply runtime changes)",
 	Long: `Keys:
-  scrape_interval, prometheus_address, llm_provider, llm_model
+  scrape_interval, prometheus_address, loki_url, tempo_url, llm_provider, llm_model
   remediation.mode, remediation.dry_run, remediation.rate_limit, remediation.min_confidence`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -172,8 +179,10 @@ func defaultAgentConfigTemplate() *models.AgentConfig {
 	return &models.AgentConfig{
 		ScrapeInterval:    "30s",
 		PrometheusAddress: "http://prometheus-kube-prometheus-prometheus.monitoring:9090",
+		LokiURL:           "",
+		TempoURL:          "",
 		LLMProvider:       "openrouter",
-		LLMModel:          "openai/gpt-oss-120b",
+		LLMModel:          llm.DefaultModel,
 		Remediation: models.RemediationConfig{
 			Mode:          models.RemediationModeDryRun,
 			DryRun:        true,
@@ -189,6 +198,10 @@ func applyConfigField(cfg *models.AgentConfig, key, value string) error {
 		cfg.ScrapeInterval = value
 	case "prometheus_address":
 		cfg.PrometheusAddress = value
+	case "loki_url":
+		cfg.LokiURL = value
+	case "tempo_url":
+		cfg.TempoURL = value
 	case "llm_provider":
 		cfg.LLMProvider = value
 	case "llm_model":

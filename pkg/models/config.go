@@ -9,6 +9,8 @@ import (
 type AgentConfig struct {
 	ScrapeInterval    string              `json:"scrape_interval" yaml:"scrape_interval"`
 	PrometheusAddress string              `json:"prometheus_address" yaml:"prometheus_address"`
+	LokiURL           string              `json:"loki_url,omitempty" yaml:"loki_url,omitempty"`
+	TempoURL          string              `json:"tempo_url,omitempty" yaml:"tempo_url,omitempty"`
 	LLMProvider       string              `json:"llm_provider" yaml:"llm_provider"`
 	LLMModel          string              `json:"llm_model" yaml:"llm_model"`
 	LLMBaseURL        string              `json:"llm_base_url,omitempty" yaml:"llm_base_url,omitempty"`
@@ -26,13 +28,6 @@ type RemediationConfig struct {
 	Allowlist         []string `json:"allowlist,omitempty" yaml:"allowlist,omitempty"`
 	MinConfidence     float64  `json:"min_confidence,omitempty" yaml:"min_confidence,omitempty"`
 	WatchNamespaces   []string `json:"watch_namespaces,omitempty" yaml:"watch_namespaces,omitempty"`
-}
-
-// ObservabilityConfig controls integration with Loki, Tempo, and log sources.
-type ObservabilityConfig struct {
-	LokiURL      string        `json:"loki_url" yaml:"loki_url"`
-	TempoURL     string        `json:"tempo_url" yaml:"tempo_url"`
-	QueryTimeout DurationValue `json:"query_timeout" yaml:"query_timeout"`
 }
 
 // DurationValue is a duration wrapper for JSON/YAML marshaling.

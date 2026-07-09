@@ -71,6 +71,12 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return printUpHints(out)
 	}
 
+	// Resolve the agent Service name for this cluster. Helm installs default to
+	// svc/kubewise, while kustomize manifests default to svc/kubewise-agent.
+	if svc, err := resolveAgentServiceName(); err == nil && svc != "" && svc != agentSvc {
+		agentSvc = svc
+	}
+
 	if upForeground {
 		return runPortForwardForeground(out)
 	}
@@ -253,6 +259,38 @@ func portForwardArgs() []string {
 	}
 	args = append(args, "-n", agentNS, "port-forward", "svc/"+agentSvc, fmt.Sprintf("%d:%d", upLocalPort, upRemotePort))
 	return args
+}
+
+func resolveAgentServiceName() (string, error) {
+	candidates := []string{
+		agentSvc,
+		"kubewise",
+		"kubewise-agent",
+	}
+	seen := map[string]bool{}
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if serviceExists(agentNS, name) {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no agent service found")
+}
+
+func serviceExists(namespace, name string) bool {
+	args := []string{}
+	if kubeconfig != "" {
+		args = append(args, "--kubeconfig", kubeconfig)
+	}
+	if contextName != "" {
+		args = append(args, "--context", contextName)
+	}
+	args = append(args, "-n", namespace, "get", "svc", name)
+	return exec.Command("kubectl", args...).Run() == nil
 }
 
 func stopBackgroundPortForward() error {

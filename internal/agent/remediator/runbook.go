@@ -70,28 +70,6 @@ func (e *K8sExecutor) ExecuteRunbook(ctx context.Context, plan models.Remediatio
 	return strings.Join(results, "; "), nil
 }
 
-func validateRunbookSteps(plan models.RemediationPlan, anomalies []models.AnomalyRecord, cfg RemediationConfig) error {
-	steps := plan.EffectiveSteps()
-	if len(steps) > maxRunbookSteps {
-		return fmt.Errorf("runbook exceeds max %d steps", maxRunbookSteps)
-	}
-	for i, step := range steps {
-		if step.Type == waitActionType {
-			continue
-		}
-		sub := models.RemediationPlan{
-			Action:    models.StepToAction(step),
-			Diagnosis: plan.Diagnosis,
-			Risk:      plan.Risk,
-		}
-		c := &Correlator{cfg: cfg}
-		if err := c.validatePlan(sub, anomalies); err != nil {
-			return fmt.Errorf("step %d: %w", i+1, err)
-		}
-	}
-	return nil
-}
-
 func (ta *TierAssigner) AssignTierPlan(plan models.RemediationPlan) models.RiskTier {
 	steps := plan.EffectiveSteps()
 	if len(steps) == 0 {

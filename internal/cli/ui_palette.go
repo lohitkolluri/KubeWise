@@ -150,7 +150,7 @@ func (m *controlModel) initPaletteItems() []list.Item {
 		{"Set scrape interval", "Config · e.g. 30s, 1m", "Config", "scrape interval", paletteConfigPrompt("scrape_interval", "Scrape interval", "30s", applyScrapeInterval)},
 		{"Set Prometheus URL", "Config · Prometheus server address", "Config", "prometheus metrics", paletteConfigPrompt("prometheus", "Prometheus URL", "http://prometheus:9090", applyPrometheusURL)},
 		{"Set LLM provider", "Config · openrouter, ollama, …", "Config", "llm provider", paletteConfigPrompt("llm_provider", "LLM provider", "openrouter", applyLLMProvider)},
-		{"Set LLM model", "Config · model identifier", "Config", "llm model", paletteConfigPrompt("llm_model", "LLM model", "openai/gpt-oss-120b", applyLLMModel)},
+		{"Set LLM model", "Config · model identifier", "Config", "llm model", paletteConfigPrompt("llm_model", "LLM model", "deepseek/deepseek-v4-flash", applyLLMModel)},
 		{"Set rate limit", "Config · max remediations per hour", "Config", "rate limit", paletteConfigPrompt("rate_limit", "Rate limit", "10", applyRateLimit)},
 
 		{"Set agent URL", "Profile · agent HTTP base URL", "Profile", "url localhost port-forward", paletteProfilePrompt("agent-url", "Agent URL", resolveAgentURL())},

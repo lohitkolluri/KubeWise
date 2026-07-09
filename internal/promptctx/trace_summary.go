@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+var tempoHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
+// FetchTraceContext queries Tempo for recent traces matching the namespace/pod.
+// Returns nil when Tempo is not configured (empty URL).
+func FetchTraceContext(ctx context.Context, tempoURL, namespace, pod string, since time.Duration) ([]TraceSummary, error) {
+	return fetchTraceContext(ctx, tempoURL, namespace, pod, since)
+}
+
 // TraceSummary summarizes a trace from Tempo relevant to an anomaly.
 type TraceSummary struct {
 	TraceID    string `json:"trace_id"`
@@ -51,7 +59,7 @@ func fetchTraceContext(ctx context.Context, tempoURL, namespace, pod string, sin
 		return nil, fmt.Errorf("create tempo request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tempoHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("query tempo: %w", err)
 	}

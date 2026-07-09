@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -48,7 +47,7 @@ type Server struct {
 	requireToken bool
 }
 
-func NewServer(store Store, addr string) *Server {
+func NewServer(store Store, addr string) (*Server, error) {
 	mux := http.NewServeMux()
 	apiToken := os.Getenv("KUBEWISE_API_TOKEN")
 	corsOrigin := os.Getenv("KUBEWISE_CORS_ORIGIN")
@@ -57,6 +56,9 @@ func NewServer(store Store, addr string) *Server {
 	}
 	allowUnauth := os.Getenv("KUBEWISE_ALLOW_UNAUTH") == "true"
 	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" || !allowUnauth
+	if apiToken == "" && requireToken {
+		return nil, fmt.Errorf("api: KUBEWISE_API_TOKEN required but not set (set KUBEWISE_ALLOW_UNAUTH=true for local dev)")
+	}
 
 	s := &Server{
 		store:        store,
@@ -64,9 +66,6 @@ func NewServer(store Store, addr string) *Server {
 		apiToken:     apiToken,
 		corsOrigin:   corsOrigin,
 		requireToken: requireToken,
-	}
-	if apiToken == "" && requireToken {
-		log.Printf("api: ERROR: KUBEWISE_API_TOKEN is not set — refusing unauthenticated API (set KUBEWISE_ALLOW_UNAUTH=true for dev)")
 	}
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)
@@ -78,7 +77,7 @@ func NewServer(store Store, addr string) *Server {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	return s
+	return s, nil
 }
 
 // SetRemediator wires the live remediation controller (approvals, mode toggle).

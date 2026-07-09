@@ -4,7 +4,7 @@
 
 **Know before it breaks.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-in--cluster-326CE5?logo=kubernetes&logoColor=white)](manifests/base)
 [![CI](https://github.com/lohitkolluri/KubeWise/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lohitkolluri/KubeWise/actions/workflows/ci.yml)
@@ -126,7 +126,7 @@ notifications:
 ## Use it
 
 ```bash
-kwctl up          # port-forward + health check (or use manual kubectl port-forward)
+kwctl up          # port-forward + health check
 kwctl connect
 kwctl status
 kwctl             # opens the TUI
@@ -138,14 +138,20 @@ A few you'll use often: `kwctl predict`, `kwctl anomalies`, `kwctl remediation`,
 
 ## API
 
-After port-forwarding to `:8080`:
+After connecting (recommended):
 
 ```bash
+kwctl up
 curl localhost:8080/status
 curl localhost:8080/api/v1/predictions
 curl localhost:8080/api/v1/anomalies
 curl localhost:8080/api/v1/stats
 ```
+
+Manual port-forward (fallback):
+
+- Helm install: `kubectl -n kubewise port-forward svc/kubewise 8080:8080`
+- Manifests install: `kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080`
 
 Also: `/api/v1/audit`, `/api/v1/approvals`, `/api/v1/config`, `/api/v1/stats`, `/api/v1/remediation/mode` (toggle live vs observe).
 
@@ -166,7 +172,7 @@ Actions are grouped by how risky they are:
 make kind-up        # kind + prometheus + deploy
 make deploy-dev     # rebuild and rollout
 make test
-make port-forward
+make port-forward   # (fallback) manual port-forward for manifests installs
 ```
 
 Go 1.26+, Docker. Local clusters: [kind](https://kind.sigs.k8s.io/) and Helm.
@@ -175,7 +181,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for repo layout, lint targets, and PR exp
 
 ## Community
 
-[Code of Conduct](CODE_OF_CONDUCT.md) · [Governance](GOVERNANCE.md) · [Security](SECURITY.md)
+[Code of Conduct](CODE_OF_CONDUCT.md) · [Governance](GOVERNANCE.md) · [Security](SECURITY.md) · [Support](SUPPORT.md)
 
 ### Releasing
 
@@ -188,4 +194,4 @@ DRY_RUN=true ./scripts/npm-publish.sh v0.0.0-snapshot dist
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

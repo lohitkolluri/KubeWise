@@ -6,14 +6,9 @@ metadata:
 data:
   config.yaml: |
     scrape_interval: 30s
-    prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+    prometheus_address: http://prometheus.monitoring.svc.cluster.local:9090
     llm_provider: openrouter
-    # Prefer non-:free GPT-OSS in dev for reliability (user preference).
-    # Alternatives:
-    #   openai/gpt-oss-120b:free
-    #   poolside/laguna-m.1:free
-    #   google/gemini-2.0-flash-001
-    llm_model: openai/gpt-oss-120b
+    llm_model: deepseek/deepseek-v4-flash
     remediation:
       mode: dry-run
       dry_run: true

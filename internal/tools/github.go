@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -343,7 +344,8 @@ func (p *GitHubPlugin) searchPRs(ctx context.Context, action models.ToolAction) 
 	if query == "" {
 		return nil, fmt.Errorf("search query is required")
 	}
-	req, err := p.newRequest(ctx, "GET", "/search/issues?q="+query+"+type:pr&per_page=20", nil)
+	q := url.QueryEscape(query + " type:pr")
+	req, err := p.newRequest(ctx, "GET", "/search/issues?q="+q+"&per_page=20", nil)
 	if err != nil {
 		return nil, err
 	}

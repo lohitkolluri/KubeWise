@@ -84,8 +84,9 @@ apply-manifests: ## kubectl apply -k overlays/dev
 rollout: ## Restart agent deployment
 	@source scripts/lib.sh && rollout_agent
 
-port-forward: ## Forward agent API to localhost:8080
-	kubectl -n $(KUBEWISE_NAMESPACE) port-forward svc/kubewise-agent 8080:8080
+port-forward: ## (Fallback) manual port-forward to localhost:8080
+	@echo "If installed via Helm:      kubectl -n $(KUBEWISE_NAMESPACE) port-forward svc/kubewise 8080:8080"
+	@echo "If installed via manifests: kubectl -n $(KUBEWISE_NAMESPACE) port-forward svc/kubewise-agent 8080:8080"
 
 clean: ## Remove build artifacts
 	rm -rf "$(BIN_DIR)"

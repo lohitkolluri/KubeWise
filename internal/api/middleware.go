@@ -42,9 +42,20 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 		for k, v := range securityHeaders {
 			w.Header().Set(k, v)
 		}
-		if cfg.corsOrigin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", cfg.corsOrigin)
+		if origin := corsOriginForRequest(cfg.corsOrigin, r); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
+			// Minimal CORS support for browser clients.
+			if origin == "*" {
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			} else {
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
 
 		needAuth := !publicPath(r.URL.Path) && (cfg.requireToken || cfg.apiToken != "")
@@ -72,6 +83,32 @@ func secureCompare(got, want string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// corsOriginForRequest resolves the Access-Control-Allow-Origin header.
+// Supports a single origin, comma-separated allowlist, or "*" wildcard.
+func corsOriginForRequest(configured string, r *http.Request) string {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return ""
+	}
+	if configured == "*" {
+		return "*"
+	}
+	origins := strings.Split(configured, ",")
+	reqOrigin := strings.TrimSpace(r.Header.Get("Origin"))
+	if reqOrigin != "" {
+		for _, origin := range origins {
+			if strings.TrimSpace(origin) == reqOrigin {
+				return reqOrigin
+			}
+		}
+		return ""
+	}
+	if len(origins) == 1 {
+		return strings.TrimSpace(origins[0])
+	}
+	return ""
 }
 
 type logWriter struct {

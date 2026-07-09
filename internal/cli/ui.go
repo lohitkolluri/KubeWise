@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/truncate"
 	"github.com/spf13/cobra"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -45,7 +47,7 @@ anomalies, remediations, config editing, and agent logs in one screen.
     ctrl+p        command palette
     ?             toggle keybinding help
     r             refresh
-    d/L           toggle observe/live mode
+    d/l           toggle observe/live mode
     m             cycle remediation mode
     R             restart agent (confirmed)
     q             quit
@@ -113,15 +115,17 @@ type controlModel struct {
 	height   int
 
 	// Data
-	status    agentStatus
-	healthOK  bool
-	preds     []models.PredictionResult
-	anomalies []models.AnomalyRecord
-	audits    []models.AuditRecord
-	config    *models.AgentConfig
-	remMode   models.RemediationModeView
-	pending   []models.AuditRecord
-	logs      string
+	status         agentStatus
+	healthOK       bool
+	preds          []models.PredictionResult
+	anomalies      []models.AnomalyRecord
+	audits         []models.AuditRecord
+	auditGroups    []auditGroup
+	config         *models.AgentConfig
+	remMode        models.RemediationModeView
+	pending        []models.AuditRecord
+	approvalGroups []auditGroup
+	logs           string
 
 	// Health & Accuracy
 	healthScores []models.HealthScore
@@ -136,9 +140,12 @@ type controlModel struct {
 
 	// Detail view
 	detail         string
+	detailMeta     string
 	detailTitle    string
 	detailVP       viewport.Model
 	detailVPHeight int
+	detailContent  string
+	detailWrapW    int
 
 	// Status bar
 	statusMsg  string
@@ -169,6 +176,11 @@ type controlModel struct {
 	paletteQuitApp    bool
 }
 
+type auditGroup struct {
+	Key     string
+	Records []models.AuditRecord
+}
+
 func newControlModel(interval time.Duration) controlModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -187,6 +199,11 @@ func newControlModel(interval time.Duration) controlModel {
 	m.help.ShowAll = false
 	m.logsVP = viewport.New(80, 20)
 	m.logsVP.MouseWheelEnabled = true
+	m.detailVP.MouseWheelEnabled = true
+	m.detailVP.Style = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(0, 1)
 	return m
 }
 
@@ -207,6 +224,30 @@ func scheduleTick(d time.Duration) tea.Cmd {
 
 func scheduleToastClear() tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return toastClearMsg{} })
+}
+
+func (m controlModel) logsAtBottom() bool {
+	total := m.logsVP.TotalLineCount()
+	if total <= 0 {
+		return true
+	}
+	bottom := total - m.logsVP.Height
+	if bottom < 0 {
+		bottom = 0
+	}
+	return m.logsVP.YOffset >= bottom
+}
+
+func (m *controlModel) maybeDisableLogsFollowAfterScroll() tea.Cmd {
+	if m.tab != tabLogs {
+		return nil
+	}
+	if m.logsFollow && !m.logsAtBottom() {
+		m.logsFollow = false
+		m.statusMsg = "logs: follow OFF (scrolled)"
+		return scheduleToastClear()
+	}
+	return nil
 }
 
 func (m controlModel) refreshAll() tea.Cmd {
@@ -272,7 +313,7 @@ type dataMsg struct {
 }
 
 func (m controlModel) shouldPauseRefresh() bool {
-	return m.palette.phase != paletteClosed || m.detail != "" || m.confirm != confirmNone
+	return m.palette.phase != paletteClosed || m.detail != "" || m.detailMeta != "" || m.confirm != confirmNone
 }
 
 func (m controlModel) contentHeight() int {
@@ -307,7 +348,10 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logsVP.Height = vh
 		m.detailVP.Width = vw
 		m.detailVPHeight = vh
-		m.detailVP.Height = m.detailVPHeight
+		m.resizeDetailViewport()
+		if m.detail != "" || m.detailMeta != "" {
+			m.relayoutDetail()
+		}
 		m.resizePalette()
 		return m, nil
 
@@ -330,17 +374,17 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleConfirmKey(msg)
 		}
 		if m.detail != "" {
-			switch {
-			case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.Quit):
+			if key.Matches(msg, m.keys.Back) || key.Matches(msg, m.keys.Quit) {
 				m.detail = ""
+				m.detailMeta = ""
 				m.detailTitle = ""
-			case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Down),
-				key.Matches(msg, m.keys.Top), key.Matches(msg, m.keys.Bottom):
-				var cmd tea.Cmd
-				m.detailVP, cmd = m.detailVP.Update(msg)
-				return m, cmd
+				m.detailContent = ""
+				return m, nil
 			}
-			return m, nil
+			// Let the viewport handle scrolling keys (arrows, pgup/pgdn, mouse wheel, etc.)
+			var cmd tea.Cmd
+			m.detailVP, cmd = m.detailVP.Update(msg)
+			return m, cmd
 		}
 		return m.handleMainKey(msg)
 
@@ -385,9 +429,11 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preds = msg.preds
 			m.anomalies = msg.anomalies
 			m.audits = msg.audits
+			m.auditGroups = groupAuditRecords(msg.audits, false)
 			m.config = msg.config
 			m.remMode = msg.remMode
 			m.pending = msg.pending
+			m.approvalGroups = groupAuditRecords(msg.pending, true)
 			m.logs = msg.logs
 			m.healthScores = msg.healthScores
 			m.healthSum = msg.healthSum
@@ -508,7 +554,7 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.tab == tabLogs {
 			var cmd tea.Cmd
 			m.logsVP, cmd = m.logsVP.Update(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.maybeDisableLogsFollowAfterScroll())
 		}
 		if m.cursor[m.tab] < m.listLen(m.tab)-1 {
 			m.cursor[m.tab]++
@@ -517,7 +563,7 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.tab == tabLogs {
 			var cmd tea.Cmd
 			m.logsVP, cmd = m.logsVP.Update(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.maybeDisableLogsFollowAfterScroll())
 		}
 		if m.cursor[m.tab] > 0 {
 			m.cursor[m.tab]--
@@ -525,12 +571,17 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Top):
 		if m.tab == tabLogs {
 			m.logsVP.GotoTop()
-			return m, nil
+			return m, m.maybeDisableLogsFollowAfterScroll()
 		}
 		m.cursor[m.tab] = 0
 	case key.Matches(msg, m.keys.Bottom):
 		if m.tab == tabLogs {
 			m.logsVP.GotoBottom()
+			if !m.logsFollow {
+				m.logsFollow = true
+				m.statusMsg = "logs: follow ON"
+				return m, scheduleToastClear()
+			}
 			return m, nil
 		}
 		m.cursor[m.tab] = m.listLen(m.tab) - 1
@@ -544,18 +595,27 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Approve):
 		if m.tab == tabApprovals && len(m.pending) > 0 {
 			i := m.cursor[tabApprovals]
-			if i >= 0 && i < len(m.pending) {
+			groups := m.approvalGroups
+			if len(groups) == 0 {
+				groups = groupAuditRecords(m.pending, true)
+			}
+			if i >= 0 && i < len(groups) {
+				r := groups[i].Records[0]
 				// Show confirmation before approving
 				m.confirm = confirmApproveRemediation
-				m.confirmTargetID = m.pending[i].ID
+				m.confirmTargetID = r.ID
 				return m, nil
 			}
 		}
 	case key.Matches(msg, m.keys.Reject):
 		if m.tab == tabApprovals && len(m.pending) > 0 {
 			i := m.cursor[tabApprovals]
-			if i >= 0 && i < len(m.pending) {
-				id := m.pending[i].ID
+			groups := m.approvalGroups
+			if len(groups) == 0 {
+				groups = groupAuditRecords(m.pending, true)
+			}
+			if i >= 0 && i < len(groups) {
+				id := groups[i].Records[0].ID
 				return m, m.openPrompt(palettePrompt{
 					title:       "Reject remediation",
 					placeholder: "reason (required)",
@@ -601,7 +661,7 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.tab == tabLogs {
 			var cmd tea.Cmd
 			m.logsVP, cmd = m.logsVP.Update(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.maybeDisableLogsFollowAfterScroll())
 		}
 	}
 	return m, nil
@@ -626,8 +686,14 @@ func (m controlModel) listLen(tab int) int {
 	case tabAnomalies:
 		return len(m.anomalies)
 	case tabAudit:
+		if len(m.auditGroups) > 0 || len(m.audits) == 0 {
+			return len(m.auditGroups)
+		}
 		return len(m.audits)
 	case tabApprovals:
+		if len(m.approvalGroups) > 0 || len(m.pending) == 0 {
+			return len(m.approvalGroups)
+		}
 		return len(m.pending)
 	case tabHealth:
 		return len(m.healthScores)
@@ -651,6 +717,13 @@ func nextRemediationMode(current string) string {
 
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
@@ -713,7 +786,7 @@ func (m controlModel) View() string {
 	b.WriteString(m.renderTabs())
 	b.WriteString("\n")
 
-	if m.detail != "" {
+	if m.detail != "" || m.detailMeta != "" {
 		b.WriteString(m.renderDetail())
 	} else {
 		content := m.renderTabContent()
@@ -801,10 +874,67 @@ func (m controlModel) tabCounts() [tabCount]int {
 	return [tabCount]int{
 		tabPredict:   len(m.preds),
 		tabAnomalies: len(m.anomalies),
-		tabAudit:     len(m.audits),
-		tabApprovals: len(m.pending),
+		tabAudit:     m.listLen(tabAudit),
+		tabApprovals: m.listLen(tabApprovals),
 		tabHealth:    len(m.healthScores),
 	}
+}
+
+func normalizedAuditStatus(r models.AuditRecord) string {
+	status := string(r.Status)
+	if r.Status == models.AuditRejected {
+		low := strings.ToLower(strings.TrimSpace(r.Reason))
+		if !strings.Contains(low, "operator") && !strings.Contains(low, "kwctl") {
+			status = "auto_rejected"
+		}
+	}
+	return status
+}
+
+func groupAuditRecords(records []models.AuditRecord, approvals bool) []auditGroup {
+	if len(records) == 0 {
+		return nil
+	}
+	type keyParts struct {
+		status string
+		tier   string
+		action string
+		ns     string
+		target string
+	}
+	makeKey := func(r models.AuditRecord) keyParts {
+		status := normalizedAuditStatus(r)
+		if approvals {
+			// Approvals are always pending; keep status out to group by action/tier.
+			status = "pending"
+		}
+		return keyParts{
+			status: status,
+			tier:   string(r.RiskTier),
+			action: r.Plan.Action.Type,
+			ns:     r.Plan.Action.Namespace,
+			target: r.Plan.Action.Target,
+		}
+	}
+
+	gm := make(map[keyParts][]models.AuditRecord, len(records))
+	for _, r := range records {
+		k := makeKey(r)
+		gm[k] = append(gm[k], r)
+	}
+
+	groups := make([]auditGroup, 0, len(gm))
+	for k, rs := range gm {
+		sort.SliceStable(rs, func(i, j int) bool {
+			return rs[i].CreatedAt.After(rs[j].CreatedAt)
+		})
+		keyStr := fmt.Sprintf("%s | %s | %s %s/%s", k.status, k.tier, k.action, k.ns, k.target)
+		groups = append(groups, auditGroup{Key: keyStr, Records: rs})
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return groups[i].Records[0].CreatedAt.After(groups[j].Records[0].CreatedAt)
+	})
+	return groups
 }
 
 // ── Tab content ──
@@ -833,12 +963,12 @@ func (m controlModel) renderTabContent() string {
 		if m.errTab[tabAudit] != nil {
 			return m.renderTabError("audit", m.errTab[tabAudit])
 		}
-		return m.renderList(m.auditLines(), m.cursor[tabAudit], len(m.audits))
+		return m.renderList(m.auditLines(), m.cursor[tabAudit], m.listLen(tabAudit))
 	case tabApprovals:
 		if m.errTab[tabApprovals] != nil {
 			return m.renderTabError("approvals", m.errTab[tabApprovals])
 		}
-		return m.renderList(m.approvalLines(), m.cursor[tabApprovals], len(m.pending))
+		return m.renderList(m.approvalLines(), m.cursor[tabApprovals], m.listLen(tabApprovals))
 	case tabConfig:
 		if m.errTab[tabConfig] != nil {
 			return m.renderTabError("config", m.errTab[tabConfig])
@@ -853,13 +983,20 @@ func (m controlModel) renderTabContent() string {
 				mutedStyle.Render("Ensure kubeconfig can reach the cluster and the agent pod is running.") + "\n" +
 				mutedStyle.Render("Check: kubectl get pods -n ") + keyStyle.Render(agentNS)
 		}
+		lines := strings.Count(m.logs, "\n") + 1
 		follow := "follow=ON"
+		followSty := successStyle
 		if !m.logsFollow {
 			follow = "follow=OFF"
+			followSty = mutedStyle
 		}
-		lines := strings.Count(m.logs, "\n") + 1
-		scroll := mutedStyle.Render(fmt.Sprintf("lines %d", lines))
-		return scroll + mutedStyle.Render(" · "+follow+" (f)") + "\n" + m.logsVP.View()
+		pos := fmt.Sprintf("%d/%d", min(m.logsVP.YOffset+m.logsVP.Height, m.logsVP.TotalLineCount()), max(1, m.logsVP.TotalLineCount()))
+		header := mutedStyle.Render(fmt.Sprintf("lines %d", lines)) +
+			mutedStyle.Render(" · ") +
+			followSty.Render(follow) +
+			mutedStyle.Render(" (f) · ") +
+			mutedStyle.Render("pos "+pos)
+		return header + "\n" + m.logsVP.View()
 	case tabHealth:
 		if m.errTab[tabHealth] != nil {
 			return m.renderTabError("health scores", m.errTab[tabHealth])
@@ -1078,6 +1215,20 @@ func trendStyle(trend string) lipgloss.Style {
 	}
 }
 
+// col renders a fixed-width table column with ANSI/Unicode-safe truncation.
+func col(text string, width int, style lipgloss.Style) string {
+	if width <= 0 {
+		return style.Render(text)
+	}
+	// Truncate by display width, not bytes/runes, before styling.
+	t := truncate.StringWithTail(text, uint(width), "…")
+	return style.Width(width).MaxWidth(width).Render(t)
+}
+
+func joinCols(cols ...string) string {
+	return strings.Join(cols, " ")
+}
+
 // ── List views ──
 
 func (m controlModel) predsLines() []string {
@@ -1086,12 +1237,22 @@ func (m controlModel) predsLines() []string {
 			mutedStyle.Render("  Predictions appear when the agent detects upcoming issues")}
 	}
 	var lines []string
-	lines = append(lines, listHeaderStyle.Render(fmt.Sprintf("%-14s %-24s %-8s %-8s %s", "TYPE", "ENTITY", "SCORE", "ETA", "ACTION")))
+	lines = append(lines, joinCols(
+		col("TYPE", 14, listHeaderStyle),
+		col("ENTITY", 24, listHeaderStyle),
+		col("SCORE", 8, listHeaderStyle),
+		col("ETA", 8, listHeaderStyle),
+		col("ACTION", 20, listHeaderStyle),
+	))
 	for _, p := range m.preds {
 		style := scoreStyle(p.Score)
-		lines = append(lines, style.Render(
-			fmt.Sprintf("%-14s %-24s %-8.0f %-8.0f %s",
-				trunc(p.Type, 14), trunc(p.Entity, 24), p.Score*100, p.ETASeconds, trunc(p.Action, 20))))
+		lines = append(lines, joinCols(
+			col(p.Type, 14, style),
+			col(p.Entity, 24, mutedStyle),
+			col(fmt.Sprintf("%.0f", p.Score*100), 8, style),
+			col(fmt.Sprintf("%.0f", p.ETASeconds), 8, mutedStyle),
+			col(p.Action, 20, mutedStyle),
+		))
 	}
 	return lines
 }
@@ -1102,7 +1263,12 @@ func (m controlModel) anomalyLines() []string {
 			mutedStyle.Render("  Anomalies appear when metrics deviate from expected patterns")}
 	}
 	var lines []string
-	lines = append(lines, listHeaderStyle.Render(fmt.Sprintf("%-10s %-24s %-8s %s", "PATTERN", "ENTITY", "SCORE", "STATUS")))
+	lines = append(lines, joinCols(
+		col("PATTERN", 10, listHeaderStyle),
+		col("ENTITY", 24, listHeaderStyle),
+		col("SCORE", 8, listHeaderStyle),
+		col("STATUS", 12, listHeaderStyle),
+	))
 	for _, a := range m.anomalies {
 		pat := a.Pattern
 		if pat == "" {
@@ -1110,11 +1276,12 @@ func (m controlModel) anomalyLines() []string {
 		}
 		scoreSty := scoreStyle(a.Score)
 		statSty := statusStyle(a.Status)
-		lines = append(lines, fmt.Sprintf("%s %s %s %s",
-			scoreSty.Render(trunc(pat, 10)),
-			mutedStyle.Render(trunc(a.Entity, 24)),
-			scoreSty.Render(fmt.Sprintf("%.2f", a.Score)),
-			statSty.Render(a.Status)))
+		lines = append(lines, joinCols(
+			col(pat, 10, scoreSty),
+			col(a.Entity, 24, mutedStyle),
+			col(fmt.Sprintf("%.2f", a.Score), 8, scoreSty),
+			col(a.Status, 12, statSty),
+		))
 	}
 	return lines
 }
@@ -1125,23 +1292,34 @@ func (m controlModel) auditLines() []string {
 			mutedStyle.Render("  Audit records appear after remediations are attempted")}
 	}
 	var lines []string
-	lines = append(lines, listHeaderStyle.Render(fmt.Sprintf("%-14s %-28s %-8s %s", "STATUS", "ACTION", "TIER", "REASON")))
-	for _, r := range m.audits {
+	groups := m.auditGroups
+	if len(groups) == 0 {
+		groups = groupAuditRecords(m.audits, false)
+	}
+	lines = append(lines, joinCols(
+		col("STATUS", 14, listHeaderStyle),
+		col("ACTION", 28, listHeaderStyle),
+		col("COUNT", 7, listHeaderStyle),
+		col("TIER", 8, listHeaderStyle),
+		col("REASON", 33, listHeaderStyle),
+	))
+	for _, g := range groups {
+		r := g.Records[0]
 		action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
-		status := string(r.Status)
-		if r.Status == models.AuditRejected {
-			low := strings.ToLower(strings.TrimSpace(r.Reason))
-			if !strings.Contains(low, "operator") && !strings.Contains(low, "kwctl") {
-				status = "auto_rejected"
-			}
-		}
+		status := normalizedAuditStatus(r)
 		statSty := statusStyle(status)
 		tierSty := riskTierStyle(string(r.RiskTier))
-		lines = append(lines, fmt.Sprintf("%s %s %s %s",
-			statSty.Render(trunc(status, 14)),
-			mutedStyle.Render(trunc(action, 26)),
-			tierSty.Render(string(r.RiskTier)),
-			mutedStyle.Render(trunc(r.Reason, 40))))
+		count := ""
+		if len(g.Records) > 1 {
+			count = fmt.Sprintf("%dx", len(g.Records))
+		}
+		lines = append(lines, joinCols(
+			col(status, 14, statSty),
+			col(action, 28, mutedStyle),
+			col(count, 7, mutedStyle),
+			col(string(r.RiskTier), 8, tierSty),
+			col(r.Reason, 33, mutedStyle),
+		))
 	}
 	return lines
 }
@@ -1152,16 +1330,39 @@ func (m controlModel) approvalLines() []string {
 			mutedStyle.Render("  T3 actions appear here when live mode is enabled and need your approval")}
 	}
 	var lines []string
-	lines = append(lines, listHeaderStyle.Render(fmt.Sprintf("%-10s %-28s %-8s %s", "TIER", "ACTION", "CONF", "REASON")))
-	for _, r := range m.pending {
+	groups := m.approvalGroups
+	if len(groups) == 0 {
+		groups = groupAuditRecords(m.pending, true)
+	}
+	lines = append(lines, joinCols(
+		col("TIER", 10, listHeaderStyle),
+		col("ACTION", 28, listHeaderStyle),
+		col("COUNT", 7, listHeaderStyle),
+		col("CONF", 8, listHeaderStyle),
+		col("REASON", 33, listHeaderStyle),
+	))
+	for _, g := range groups {
+		r := g.Records[0]
 		action := fmt.Sprintf("%s %s/%s", r.Plan.Action.Type, r.Plan.Action.Namespace, r.Plan.Action.Target)
 		tierSty := riskTierStyle(string(r.RiskTier))
-		confSty := scoreStyle(r.Plan.Diagnosis.Confidence)
-		lines = append(lines, fmt.Sprintf("%s %s %s %s",
-			tierSty.Render(string(r.RiskTier)),
-			mutedStyle.Render(trunc(action, 26)),
-			confSty.Render(fmt.Sprintf("%.0f%%", r.Plan.Diagnosis.Confidence*100)),
-			mutedStyle.Render(trunc(r.Reason, 40))))
+		maxConf := 0.0
+		for _, rr := range g.Records {
+			if rr.Plan.Diagnosis.Confidence > maxConf {
+				maxConf = rr.Plan.Diagnosis.Confidence
+			}
+		}
+		confSty := scoreStyle(maxConf)
+		count := ""
+		if len(g.Records) > 1 {
+			count = fmt.Sprintf("%dx", len(g.Records))
+		}
+		lines = append(lines, joinCols(
+			col(string(r.RiskTier), 10, tierSty),
+			col(action, 28, mutedStyle),
+			col(count, 7, mutedStyle),
+			col(fmt.Sprintf("%.0f%%", maxConf*100), 8, confSty),
+			col(r.Reason, 33, mutedStyle),
+		))
 	}
 	return lines
 }
@@ -1172,7 +1373,12 @@ func (m controlModel) healthScoreLines() []string {
 			mutedStyle.Render("  Health scores appear after the agent computes them during scrape cycles")}
 	}
 	var lines []string
-	lines = append(lines, listHeaderStyle.Render(fmt.Sprintf("%-24s %-16s %-8s %s", "ENTITY", "NAMESPACE", "SCORE", "FACTORS")))
+	lines = append(lines, joinCols(
+		col("ENTITY", 24, listHeaderStyle),
+		col("NAMESPACE", 16, listHeaderStyle),
+		col("SCORE", 8, listHeaderStyle),
+		col("FACTORS", 40, listHeaderStyle),
+	))
 	for _, hs := range m.healthScores {
 		sty := scoreStyle(hs.Score / 100.0)
 		var factors []string
@@ -1188,9 +1394,12 @@ func (m controlModel) healthScoreLines() []string {
 		if len(factors) > 0 {
 			factorStr = strings.Join(factors, " ")
 		}
-		lines = append(lines, sty.Render(
-			fmt.Sprintf("%-24s %-16s %-8.0f %s",
-				trunc(hs.Entity, 24), trunc(hs.Namespace, 16), hs.Score, factorStr)))
+		lines = append(lines, joinCols(
+			col(hs.Entity, 24, mutedStyle),
+			col(hs.Namespace, 16, mutedStyle),
+			col(fmt.Sprintf("%.0f", hs.Score), 8, sty),
+			col(factorStr, 40, mutedStyle),
+		))
 	}
 	return lines
 }
@@ -1295,7 +1504,6 @@ func (m controlModel) renderConfig() string {
 
 func (m controlModel) renderDetail() string {
 	title := brandStyle.Render(m.detailTitle)
-	m.detailVP.SetContent(m.detail)
 	content := m.detailVP.View()
 	total := m.detailVP.TotalLineCount()
 	shown := m.detailVP.VisibleLineCount()
@@ -1312,16 +1520,65 @@ func (m controlModel) renderDetail() string {
 	}
 	help := mutedStyle.Render("esc back · q quit") + scrollInfo
 
-	bw := m.width - 6
-	if bw < 1 {
-		bw = 1
+	var b strings.Builder
+	b.WriteString(title)
+	b.WriteByte('\n')
+	if meta := strings.TrimRight(m.detailMeta, "\n"); meta != "" {
+		b.WriteString(meta)
+		b.WriteByte('\n')
 	}
-	bh := m.detailVPHeight - 2
-	if bh < 1 {
-		bh = 1
+	b.WriteString(content)
+	b.WriteByte('\n')
+	b.WriteString(help)
+	return b.String()
+}
+
+func (m *controlModel) resizeDetailViewport() {
+	metaH := detailMetaLines(m.detailMeta)
+	innerH := m.detailVPHeight - metaH
+	if innerH < 1 {
+		innerH = 1
 	}
-	body := detailBorderActiveStyle.Width(bw).Height(bh).Render(content)
-	return title + "\n" + body + "\n" + help
+	m.detailVP.Height = innerH
+}
+
+func (m *controlModel) relayoutDetail() {
+	m.showDetailForSelection()
+}
+
+func (m *controlModel) refreshDetailViewport() {
+	w := m.detailContentWidth()
+	cacheKey := fmt.Sprintf("%d\n%s\n%s", w, m.detailMeta, m.detail)
+	if m.detailWrapW == w && m.detailContent == cacheKey {
+		return
+	}
+	m.detailWrapW = w
+	m.detailContent = cacheKey
+
+	total := m.detailVP.TotalLineCount()
+	shown := m.detailVP.VisibleLineCount()
+	den := total - shown
+	pct := 0.0
+	if den > 0 {
+		pct = float64(m.detailVP.YOffset) / float64(den)
+	}
+
+	m.detailVP.SetContent(m.detail)
+
+	newTotal := m.detailVP.TotalLineCount()
+	newShown := m.detailVP.VisibleLineCount()
+	newDen := newTotal - newShown
+	if newDen > 0 {
+		m.detailVP.YOffset = int(pct * float64(newDen))
+		if m.detailVP.YOffset < 0 {
+			m.detailVP.YOffset = 0
+		}
+		if m.detailVP.YOffset > newDen {
+			m.detailVP.YOffset = newDen
+		}
+	} else {
+		m.detailVP.YOffset = 0
+	}
 }
 
 // ── Footer ──
@@ -1471,6 +1728,9 @@ func (m controlModel) renderStructuredHelp() string {
 // ── showDetailForSelection ──
 
 func (m *controlModel) showDetailForSelection() {
+	w := m.detailContentWidth()
+	m.detailMeta = ""
+
 	switch m.tab {
 	case tabPredict:
 		i := m.cursor[tabPredict]
@@ -1481,16 +1741,18 @@ func (m *controlModel) showDetailForSelection() {
 		m.detailTitle = fmt.Sprintf("Prediction  %s/%s", trunc(p.Namespace, 12), trunc(p.Entity, 24))
 		b := new(strings.Builder)
 		style := scoreStyle(p.Score)
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Type:"), detailValueStyle.Render(p.Type))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Entity:"), detailValueStyle.Render(p.Entity))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Namespace:"), detailValueStyle.Render(p.Namespace))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Score:"), style.Render(fmt.Sprintf("%.2f", p.Score)))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Confidence:"), style.Render(fmt.Sprintf("%.0f%%", p.Confidence*100)))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("ETA:"), detailValueStyle.Render(fmt.Sprintf("%s (%.0fs)", p.ETA(), p.ETASeconds)))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Action:"), detailValueStyle.Render(p.Action))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Metric:"), detailValueStyle.Render(p.MetricName))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Timestamp:"), detailValueStyle.Render(p.Timestamp.Format(time.RFC3339)))
+		writeDetailKV(b, w, "Type:", p.Type)
+		writeDetailKV(b, w, "Entity:", p.Entity)
+		writeDetailKV(b, w, "Namespace:", p.Namespace)
+		writeDetailKVStyled(b, w, "Score:", style, fmt.Sprintf("%.2f", p.Score))
+		writeDetailKVStyled(b, w, "Confidence:", style, fmt.Sprintf("%.0f%%", p.Confidence*100))
+		writeDetailKV(b, w, "ETA:", fmt.Sprintf("%s (%.0fs)", p.ETA(), p.ETASeconds))
+		writeDetailKV(b, w, "Action:", p.Action)
+		writeDetailKV(b, w, "Metric:", p.MetricName)
+		writeDetailKV(b, w, "Timestamp:", p.Timestamp.Format(time.RFC3339))
 		m.detail = b.String()
+		m.resizeDetailViewport()
+		m.refreshDetailViewport()
 
 	case tabAnomalies:
 		i := m.cursor[tabAnomalies]
@@ -1500,46 +1762,101 @@ func (m *controlModel) showDetailForSelection() {
 		a := m.anomalies[i]
 		m.detailTitle = fmt.Sprintf("Anomaly  %s", trunc(a.ID, 12))
 		b := new(strings.Builder)
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("ID:"), detailValueStyle.Render(a.ID))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Entity:"), detailValueStyle.Render(a.Entity))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Namespace:"), detailValueStyle.Render(a.Namespace))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Pattern:"), detailValueStyle.Render(a.Pattern))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Metric:"), detailValueStyle.Render(a.MetricName))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Score:"), scoreStyle(a.Score).Render(fmt.Sprintf("%.2f", a.Score)))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Status:"), statusStyle(a.Status).Render(a.Status))
+		writeDetailKV(b, w, "ID:", a.ID)
+		writeDetailKV(b, w, "Entity:", a.Entity)
+		writeDetailKV(b, w, "Namespace:", a.Namespace)
+		writeDetailKV(b, w, "Pattern:", a.Pattern)
+		writeDetailKV(b, w, "Metric:", a.MetricName)
+		writeDetailKVStyled(b, w, "Score:", scoreStyle(a.Score), fmt.Sprintf("%.2f", a.Score))
+		writeDetailKVStyled(b, w, "Status:", statusStyle(a.Status), a.Status)
 		if a.DetectedAt != nil {
-			fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Detected:"), detailValueStyle.Render(a.DetectedAt.Format(time.RFC3339)))
+			writeDetailKV(b, w, "Detected:", a.DetectedAt.Format(time.RFC3339))
 		}
 		if a.RemediatedAt != nil {
-			fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Remediated:"), detailValueStyle.Render(a.RemediatedAt.Format(time.RFC3339)))
+			writeDetailKV(b, w, "Remediated:", a.RemediatedAt.Format(time.RFC3339))
 		}
 		m.detail = b.String()
+		m.resizeDetailViewport()
+		m.refreshDetailViewport()
 
 	case tabAudit:
 		i := m.cursor[tabAudit]
-		if i < 0 || i >= len(m.audits) {
+		groups := m.auditGroups
+		if len(groups) == 0 {
+			groups = groupAuditRecords(m.audits, false)
+		}
+		if i < 0 || i >= len(groups) {
 			return
 		}
-		r := m.audits[i]
-		m.detailTitle = fmt.Sprintf("Remediation  %s", trunc(r.ID, 12))
-		b := new(strings.Builder)
-		buildAuditDetail(b, r, false)
-		m.detail = b.String()
+		g := groups[i]
+		r := g.Records[0]
+		title := fmt.Sprintf("Remediation  %s", trunc(r.ID, 12))
+		if len(g.Records) > 1 {
+			title = fmt.Sprintf("Remediation  %s  (%dx)", trunc(r.ID, 12), len(g.Records))
+		}
+		m.detailTitle = title
+		meta := new(strings.Builder)
+		body := new(strings.Builder)
+		if len(g.Records) > 1 {
+			writeDetailKV(meta, w, "Grouped:", fmt.Sprintf("%d records", len(g.Records)))
+			writeDetailKV(meta, w, "Key:", g.Key)
+			writeDetailSection(meta, "Latest record")
+		}
+		buildAuditDetailMeta(meta, w, r)
+		buildAuditDetailBody(body, w, r, false)
+		if len(g.Records) > 1 {
+			writeDetailSection(body, "Record IDs")
+			for _, rr := range g.Records {
+				body.WriteString(formatDetailKVRendered(w, mutedStyle.Render(rr.CreatedAt.Format(time.RFC3339)), detailValueStyle.Render(rr.ID)))
+				body.WriteByte('\n')
+			}
+		}
+		m.detailMeta = meta.String()
+		m.detail = body.String()
+		m.resizeDetailViewport()
+		m.refreshDetailViewport()
 
 	case tabApprovals:
 		i := m.cursor[tabApprovals]
-		if i < 0 || i >= len(m.pending) {
+		groups := m.approvalGroups
+		if len(groups) == 0 {
+			groups = groupAuditRecords(m.pending, true)
+		}
+		if i < 0 || i >= len(groups) {
 			return
 		}
-		r := m.pending[i]
-		m.detailTitle = fmt.Sprintf("Approval  %s", trunc(r.ID, 12))
-		b := new(strings.Builder)
-		b.WriteString(detailSectionStyle.Render("─── PENDING HUMAN APPROVAL ───") + "\n\n")
-		buildAuditDetail(b, r, true)
-		b.WriteString("\n" + keyStyle.Render("a") + mutedStyle.Render(" approve  ") +
+		g := groups[i]
+		r := g.Records[0]
+		title := fmt.Sprintf("Approval  %s", trunc(r.ID, 12))
+		if len(g.Records) > 1 {
+			title = fmt.Sprintf("Approval  %s  (%dx)", trunc(r.ID, 12), len(g.Records))
+		}
+		m.detailTitle = title
+		meta := new(strings.Builder)
+		body := new(strings.Builder)
+		meta.WriteString(warnStyle.Render("PENDING HUMAN APPROVAL"))
+		meta.WriteByte('\n')
+		if len(g.Records) > 1 {
+			writeDetailKV(meta, w, "Grouped:", fmt.Sprintf("%d records", len(g.Records)))
+			writeDetailKV(meta, w, "Key:", g.Key)
+		}
+		buildAuditDetailMeta(meta, w, r)
+		buildAuditDetailBody(body, w, r, true)
+		if len(g.Records) > 1 {
+			writeDetailSection(body, "Record IDs")
+			for _, rr := range g.Records {
+				body.WriteString(formatDetailKVRendered(w, mutedStyle.Render(rr.CreatedAt.Format(time.RFC3339)), detailValueStyle.Render(rr.ID)))
+				body.WriteByte('\n')
+			}
+		}
+		body.WriteByte('\n')
+		body.WriteString(keyStyle.Render("a") + mutedStyle.Render(" approve  ") +
 			keyStyle.Render("x") + mutedStyle.Render(" reject  ") +
-			keyStyle.Render("esc") + mutedStyle.Render(" back\n"))
-		m.detail = b.String()
+			keyStyle.Render("esc") + mutedStyle.Render(" back"))
+		m.detailMeta = meta.String()
+		m.detail = body.String()
+		m.resizeDetailViewport()
+		m.refreshDetailViewport()
 
 	case tabHealth:
 		i := m.cursor[tabHealth]
@@ -1549,162 +1866,60 @@ func (m *controlModel) showDetailForSelection() {
 		hs := m.healthScores[i]
 		m.detailTitle = fmt.Sprintf("Health Score  %s/%s", trunc(hs.Namespace, 12), trunc(hs.Entity, 24))
 		b := new(strings.Builder)
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Entity:"), detailValueStyle.Render(hs.Entity))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Namespace:"), detailValueStyle.Render(hs.Namespace))
-
+		writeDetailKV(b, w, "Entity:", hs.Entity)
+		writeDetailKV(b, w, "Namespace:", hs.Namespace)
 		sty := scoreStyle(hs.Score / 100.0)
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Score:"), sty.Render(fmt.Sprintf("%.1f/100", hs.Score)))
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Generated:"), detailValueStyle.Render(hs.GeneratedAt.Format(time.RFC3339)))
-
+		writeDetailKVStyled(b, w, "Score:", sty, fmt.Sprintf("%.1f/100", hs.Score))
+		writeDetailKV(b, w, "Generated:", hs.GeneratedAt.Format(time.RFC3339))
 		if len(hs.Factors) > 0 {
-			b.WriteString(detailSectionStyle.Render("\n── Factors ──\n"))
+			writeDetailSection(b, "Factors")
 			for _, f := range hs.Factors {
 				fSty := scoreStyle(f.Score)
 				contrib := f.Score * f.Weight * 100
-				fmt.Fprintf(b, "  %s %s weight=%.2f value=%s contribution=%.1f\n",
+				line := fmt.Sprintf("%s %s weight=%.2f value=%s contribution=%.1f",
 					fSty.Render(trunc(f.Name, 20)),
 					mutedStyle.Render(trunc(f.Detail, 40)),
 					f.Weight,
 					fSty.Render(fmt.Sprintf("%.2f", f.Score)),
 					contrib)
+				b.WriteString(line)
+				b.WriteByte('\n')
 			}
 		}
 		m.detail = b.String()
+		m.resizeDetailViewport()
+		m.refreshDetailViewport()
 	}
 }
 
-// ── buildAuditDetail (structure unchanged from before) ──
+// ── buildAuditDetail ──
 
-func buildAuditDetail(b *strings.Builder, r models.AuditRecord, isApproval bool) {
-	fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("ID:"), detailValueStyle.Render(r.ID))
-	fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Status:"), statusStyle(string(r.Status)).Render(string(r.Status)))
-	fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Tier:"), riskTierStyle(string(r.RiskTier)).Render(string(r.RiskTier)))
-	fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Created:"), detailValueStyle.Render(r.CreatedAt.Format(time.RFC3339)))
+func buildAuditDetailMeta(b *strings.Builder, width int, r models.AuditRecord) {
+	writeDetailKV(b, width, "ID:", r.ID)
+	writeDetailKVStyled(b, width, "Status:", statusStyle(string(r.Status)), string(r.Status))
+	writeDetailKVStyled(b, width, "Tier:", riskTierStyle(string(r.RiskTier)), string(r.RiskTier))
+	writeDetailKV(b, width, "Created:", r.CreatedAt.Format(time.RFC3339))
 	if r.ExecutedAt != nil {
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Executed:"), detailValueStyle.Render(r.ExecutedAt.Format(time.RFC3339)))
+		writeDetailKV(b, width, "Executed:", r.ExecutedAt.Format(time.RFC3339))
 	}
 	if r.VerifiedAt != nil {
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Verified:"), detailValueStyle.Render(r.VerifiedAt.Format(time.RFC3339)))
+		writeDetailKV(b, width, "Verified:", r.VerifiedAt.Format(time.RFC3339))
 	}
 	if r.AnomalyID != "" {
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Anomaly ID:"), detailValueStyle.Render(r.AnomalyID))
+		writeDetailKV(b, width, "Anomaly ID:", r.AnomalyID)
 	}
 	if len(r.AnomalyIDs) > 0 {
-		fmt.Fprintf(b, "%s %v\n", detailLabelStyle.Render("Anomaly IDs:"), mutedStyle.Render(fmt.Sprintf("%v", r.AnomalyIDs)))
+		writeDetailKVStyled(b, width, "Anomaly IDs:", mutedStyle, fmt.Sprintf("%v", r.AnomalyIDs))
 	}
 	if r.Reason != "" {
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Reason:"), detailValueStyle.Render(r.Reason))
+		writeDetailKV(b, width, "Reason:", r.Reason)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(b, "%s %s\n", detailLabelStyle.Render("Error:"), errStyle.Render(r.Error))
-	}
-
-	b.WriteString(detailSectionStyle.Render("\n── Diagnosis ──\n"))
-	d := r.Plan.Diagnosis
-	fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Root cause:"), detailValueStyle.Render(d.RootCause))
-	fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Severity:"), scoreStyle(severityScore(d.Severity)).Render(d.Severity))
-	fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Confidence:"), scoreStyle(d.Confidence).Render(fmt.Sprintf("%.0f%%", d.Confidence*100)))
-	if len(d.Evidence) > 0 {
-		b.WriteString("  Evidence:\n")
-		for _, ev := range d.Evidence {
-			if strings.TrimSpace(ev) != "" {
-				fmt.Fprintf(b, "    · %s\n", mutedStyle.Render(ev))
-			}
-		}
-	}
-
-	b.WriteString(detailSectionStyle.Render("── Action ──\n"))
-	act := r.Plan.Action
-	fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Type:"), detailValueStyle.Render(act.Type))
-	fmt.Fprintf(b, "  %s %s/%s\n", detailLabelStyle.Render("Target:"), detailValueStyle.Render(act.Namespace), detailValueStyle.Render(act.Target))
-	if act.Rationale != "" {
-		fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Rationale:"), detailValueStyle.Render(act.Rationale))
-	}
-	if len(act.Parameters) > 0 {
-		b.WriteString("  Parameters:\n")
-		for k, v := range act.Parameters {
-			fmt.Fprintf(b, "    %s=%s\n", k, v)
-		}
-	}
-
-	if len(r.Plan.Steps) > 0 {
-		b.WriteString(detailSectionStyle.Render("── Runbook Steps ──\n"))
-		for _, s := range r.Plan.Steps {
-			fmt.Fprintf(b, "  %d. %s %s/%s", s.Order, s.Type, s.Namespace, s.Target)
-			if s.Rationale != "" {
-				fmt.Fprintf(b, " (%s)", mutedStyle.Render(s.Rationale))
-			}
-			if s.WaitSeconds > 0 {
-				fmt.Fprintf(b, " wait=%ds", s.WaitSeconds)
-			}
-			b.WriteString("\n")
-			if len(s.Parameters) > 0 {
-				for k, v := range s.Parameters {
-					fmt.Fprintf(b, "     %s=%s\n", k, v)
-				}
-			}
-		}
-	}
-
-	b.WriteString(detailSectionStyle.Render("── Risk ──\n"))
-	risk := r.Plan.Risk
-	fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Blast radius:"), riskTierStyle(risk.BlastRadius).Render(risk.BlastRadius))
-	fmt.Fprintf(b, "  %s %v\n", detailLabelStyle.Render("Reversible:"), severitySymbol(risk.Reversible))
-	if risk.EstimatedTimeToResolve != "" {
-		fmt.Fprintf(b, "  %s %s\n", detailLabelStyle.Render("Est. resolve:"), detailValueStyle.Render(risk.EstimatedTimeToResolve))
-	}
-
-	if len(r.Plan.Verification.Checks) > 0 {
-		b.WriteString(detailSectionStyle.Render("── Verification ──\n"))
-		for _, c := range r.Plan.Verification.Checks {
-			fmt.Fprintf(b, "  · %s %s/%s\n", c.Type, c.Namespace, c.Target)
-		}
-		if r.Plan.Verification.WaitSeconds > 0 {
-			fmt.Fprintf(b, "  wait=%ds before verify\n", r.Plan.Verification.WaitSeconds)
-		}
-	}
-
-	if r.Plan.Investigation.Summary != "" {
-		b.WriteString(detailSectionStyle.Render("── Investigation ──\n"))
-		fmt.Fprintf(b, "  %s\n", mutedStyle.Render(r.Plan.Investigation.Summary))
-	}
-
-	if !isApproval {
-		if r.Prompt != "" {
-			b.WriteString(detailSectionStyle.Render("── LLM Prompt ──\n"))
-			fmt.Fprintf(b, "  %s\n", mutedStyle.Render(r.Prompt))
-		}
-		if r.LLMResponse != "" {
-			b.WriteString(detailSectionStyle.Render("── LLM Response ──\n"))
-			fmt.Fprintf(b, "  %s\n", mutedStyle.Render(r.LLMResponse))
-		}
-		if r.K8sResult != "" {
-			b.WriteString(detailSectionStyle.Render("── K8s Result ──\n"))
-			fmt.Fprintf(b, "  %s\n", mutedStyle.Render(r.K8sResult))
-		}
-		if r.VerificationNote != "" {
-			b.WriteString(detailSectionStyle.Render("── Verification Note ──\n"))
-			fmt.Fprintf(b, "  %s\n", mutedStyle.Render(r.VerificationNote))
-		}
+		writeDetailKVStyled(b, width, "Error:", errStyle, r.Error)
 	}
 }
 
 // ── Utility helpers ──
-
-func severityScore(severity string) float64 {
-	switch strings.ToLower(severity) {
-	case "critical":
-		return 1.0
-	case "high":
-		return 0.8
-	case "medium":
-		return 0.5
-	case "low":
-		return 0.2
-	default:
-		return 0.0
-	}
-}
 
 func severitySymbol(reversible bool) string {
 	if reversible {

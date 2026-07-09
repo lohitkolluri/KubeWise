@@ -21,6 +21,14 @@ const DefaultMaxEntries = 1000
 type Config struct {
 	TTL        time.Duration // entry time-to-live (default 1h)
 	MaxEntries int           // max cached entries before GC (default 1000)
+	Persist    PersistBackend
+}
+
+// PersistBackend optionally persists cache entries across agent restarts.
+type PersistBackend interface {
+	LoadAll() (map[string]*Entry, error)
+	Save(entry *Entry) error
+	Delete(fp string) error
 }
 
 // Entry is a single cached remediation result.
@@ -35,13 +43,15 @@ type Entry struct {
 // Cache is an in-memory hash-based semantic cache.
 // Thread-safe: all exported methods are safe for concurrent use.
 type Cache struct {
-	mu    sync.RWMutex
-	store map[string]*Entry
-	cfg   Config
+	mu      sync.RWMutex
+	store   map[string]*Entry
+	cfg     Config
+	persist PersistBackend
 }
 
 // New creates a cache with the given config.
-// Zero-value config uses sensible defaults.
+// Zero-value config uses sensible defaults. When Persist is configured, existing
+// non-expired entries are loaded on startup.
 func New(cfg Config) *Cache {
 	if cfg.TTL <= 0 {
 		cfg.TTL = DefaultTTL
@@ -49,26 +59,33 @@ func New(cfg Config) *Cache {
 	if cfg.MaxEntries <= 0 {
 		cfg.MaxEntries = DefaultMaxEntries
 	}
-	return &Cache{
-		store: make(map[string]*Entry, 64),
-		cfg:   cfg,
+	c := &Cache{
+		store:   make(map[string]*Entry, 64),
+		cfg:     cfg,
+		persist: cfg.Persist,
 	}
+	if c.persist != nil {
+		if loaded, err := c.persist.LoadAll(); err == nil {
+			now := time.Now()
+			for fp, e := range loaded {
+				if e != nil && now.Before(e.ExpiresAt) {
+					c.store[fp] = e
+				}
+			}
+		}
+	}
+	return c
 }
 
 // Fingerprint computes a content hash of an anomaly's distinguishing fields:
-// entity, namespace, metric name, pattern, and score (rounded to 1 decimal).
-// Returns a hex-encoded SHA256 string.
-func Fingerprint(entity, namespace, metricName, pattern string, score float64) string {
-	// Round score to 1 decimal for fuzzy matching within same severity bucket.
-	rounded := fmt.Sprintf("%.1f", score)
-
+// entity, namespace, metric name, and pattern. Score is intentionally excluded
+// so semantically identical incidents hit the cache across scrapes.
+func Fingerprint(entity, namespace, metricName, pattern string, _ float64) string {
 	h := sha256.New()
-	// Sort-stable fields so the order is deterministic.
 	h.Write([]byte(entity))
 	h.Write([]byte(namespace))
 	h.Write([]byte(metricName))
 	h.Write([]byte(pattern))
-	h.Write([]byte(rounded))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -84,6 +101,9 @@ func (c *Cache) Get(fp string) *Entry {
 	}
 	if time.Now().After(e.ExpiresAt) {
 		delete(c.store, fp)
+		if c.persist != nil {
+			_ = c.persist.Delete(fp)
+		}
 		return nil
 	}
 	e.HitCount++
@@ -110,12 +130,16 @@ func (c *Cache) Set(fp, planJSON string) {
 	}
 
 	now := time.Now()
-	c.store[fp] = &Entry{
+	entry := &Entry{
 		Fingerprint: fp,
 		PlanJSON:    planJSON,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(c.cfg.TTL),
 		HitCount:    0,
+	}
+	c.store[fp] = entry
+	if c.persist != nil {
+		_ = c.persist.Save(entry)
 	}
 }
 
@@ -129,6 +153,9 @@ func (c *Cache) Prune() int {
 	for k, v := range c.store {
 		if now.After(v.ExpiresAt) {
 			delete(c.store, k)
+			if c.persist != nil {
+				_ = c.persist.Delete(k)
+			}
 			removed++
 		}
 	}

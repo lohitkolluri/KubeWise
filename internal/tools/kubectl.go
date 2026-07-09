@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -27,7 +28,6 @@ var allowedSubcommands = map[string]allowedCommand{
 	"version":       {[]models.ToolCapability{models.CapRead}, true},
 	"explain":       {[]models.ToolCapability{models.CapRead}, true},
 	"events":        {[]models.ToolCapability{models.CapRead}, true},
-	"auth":          {[]models.ToolCapability{models.CapRead}, true},
 	"apply":         {[]models.ToolCapability{models.CapWrite}, false},
 	"delete":        {[]models.ToolCapability{models.CapWrite, models.CapDestructive}, false},
 	"rollout":       {[]models.ToolCapability{models.CapWrite}, false},
@@ -39,7 +39,6 @@ var allowedSubcommands = map[string]allowedCommand{
 	"uncordon":      {[]models.ToolCapability{models.CapWrite}, false},
 	"taint":         {[]models.ToolCapability{models.CapWrite}, false},
 	"exec":          {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
-	"run":           {[]models.ToolCapability{models.CapWrite}, false},
 	"cp":            {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
 	"proxy":         {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
 	"port-forward":  {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
@@ -56,14 +55,6 @@ var blockedSubcommands = map[string]bool{
 	"cp":           true,
 	"run":          true,
 	"auth":         true,
-}
-
-func init() {
-	if os.Getenv("KUBEWISE_ALLOW_KUBECTL_DANGEROUS") == "true" {
-		for k := range blockedSubcommands {
-			delete(blockedSubcommands, k)
-		}
-	}
 }
 
 // validators for resource names to prevent injection.
@@ -107,7 +98,11 @@ func (p *KubectlPlugin) Validate(action models.ToolAction) error {
 	cmd := action.Command
 
 	if blockedSubcommands[cmd] {
-		return fmt.Errorf("kubectl %q is blocked for security reasons", cmd)
+		if os.Getenv("KUBEWISE_ALLOW_KUBECTL_DANGEROUS") == "true" {
+			// allowed explicitly
+		} else {
+			return fmt.Errorf("kubectl %q is blocked for security reasons", cmd)
+		}
 	}
 
 	if _, ok := allowedSubcommands[cmd]; !ok {
@@ -146,7 +141,7 @@ func (p *KubectlPlugin) Validate(action models.ToolAction) error {
 		}
 	}
 
-	return nil
+	return validateToolArgKeys(action.Args, kubectlPositionalArgs, kubectlAllowedFlags(cmd), blockedKubectlFlags)
 }
 
 // Execute runs the kubectl command with the given action. It validates the
@@ -196,6 +191,10 @@ func (p *KubectlPlugin) buildArgs(action models.ToolAction) []string {
 			continue
 		default:
 			if value != "" {
+				allowed := kubectlAllowedFlags(action.Command)
+				if allowed == nil || !allowed[key] {
+					continue
+				}
 				args = append(args, "--"+key, value)
 			}
 		}
@@ -218,35 +217,13 @@ func splitCSV(s string) []string {
 	if s == "" {
 		return nil
 	}
-	var parts []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == ',' {
-			part := s[start:i]
-			start = i + 1
-			// Trim leading/trailing whitespace
-			part = trimSpace(part)
-			if part != "" {
-				parts = append(parts, part)
-			}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
 		}
 	}
-	// Last part
-	part := trimSpace(s[start:])
-	if part != "" {
-		parts = append(parts, part)
-	}
-	return parts
-}
-
-// trimSpace removes leading and trailing whitespace.
-func trimSpace(s string) string {
-	left, right := 0, len(s)
-	for left < right && (s[left] == ' ' || s[left] == '\t') {
-		left++
-	}
-	for right > left && (s[right-1] == ' ' || s[right-1] == '\t') {
-		right--
-	}
-	return s[left:right]
+	return out
 }

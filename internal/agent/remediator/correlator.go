@@ -2,12 +2,11 @@ package remediator
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/big"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +21,6 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 	nsutil "github.com/lohitkolluri/KubeWise/pkg/namespace"
 )
-
-var protectedNamespaces = map[string]bool{
-	"kube-system":     true,
-	"kube-public":     true,
-	"kube-node-lease": true,
-}
 
 var validBlastRadii = map[string]bool{
 	"single_pod":    true,
@@ -77,7 +70,7 @@ type RemediationConfig struct {
 }
 
 // NewCorrelator creates the remediation pipeline.
-func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig, ff featureflags.Flags, ruleEngine *engine.RuleEngine, llmRouter *llmrouter.LLMRouter) *Correlator {
+func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store, cfg RemediationConfig, lokiURL, tempoURL string, ff featureflags.Flags, ruleEngine *engine.RuleEngine, llmRouter *llmrouter.LLMRouter) *Correlator {
 	if cfg.Mode == "" {
 		cfg.Mode = "dry-run"
 	}
@@ -92,19 +85,24 @@ func NewCorrelator(llmClient *llm.Client, executor *K8sExecutor, s *store.Store,
 		llmRouter:    llmRouter,
 		tierAssigner: NewTierAssigner(5 * time.Minute),
 		executor:     executor,
-		investigator: newInvestigatorFromExecutor(executor),
+		investigator: newInvestigatorFromExecutor(executor, lokiURL, tempoURL),
 		verifier:     newVerifierFromExecutor(executor),
 		store:        s,
 		cfg:          cfg,
 		featureFlags: ff,
 		ruleEngine:   ruleEngine,
-		semCache:     semcache.New(semcache.Config{}),
+		semCache: semcache.New(semcache.Config{
+			Persist: store.NewSemCacheBackend(s),
+		}),
 	}
 }
 
-func newInvestigatorFromExecutor(exec *K8sExecutor) *Investigator {
+func newInvestigatorFromExecutor(exec *K8sExecutor, lokiURL, tempoURL string) *Investigator {
 	if exec == nil {
 		return nil
+	}
+	if strings.TrimSpace(lokiURL) != "" || strings.TrimSpace(tempoURL) != "" {
+		return NewInvestigatorWithObservability(exec.Clientset(), lokiURL, tempoURL)
 	}
 	return NewInvestigator(exec.Clientset())
 }
@@ -242,7 +240,8 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 			var repaired models.RemediationPlan
 			repairSystem := systemPrompt + "\n\nREPAIR INSTRUCTIONS:\n" +
 				"- If you choose patch_resources, you MUST include at least one of cpu_request,cpu_limit,memory_request,memory_limit.\n" +
-				"- If you cannot supply required parameters, choose restart_pod for CrashLoop/BackOff, otherwise choose noop or escalate.\n" +
+				"- If you cannot supply required parameters for patch_resources, choose escalate (not noop) so the operator can patch manually.\n" +
+				"- If you cannot supply required parameters for scale_replicas, choose escalate or restart_pod when appropriate.\n" +
 				"- Never output empty parameters for patch_resources or scale_replicas.\n"
 			if c.llmRouter != nil && c.featureFlags.LLMRouter {
 				llmInput := llmrouter.LLMInput{
@@ -272,10 +271,29 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 			}
 		}
 
+		if err != nil && (isIncompletePatchError(err) || isIncompletePatchPlan(plan)) {
+			escalateForIncompletePatch(&plan)
+			if verr := validateRunbookSteps(plan, correlatable, cfg); verr == nil {
+				err = nil
+			} else {
+				err = verr
+			}
+		}
+
 		if err != nil {
 			// Validation failures are not operator actions; treat as an internal failure
 			// and keep anomalies in a correlatable state (so a future cycle can retry
 			// with new context / different plan).
+			c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
+			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
+			log.Printf("remediator: plan validation failed: %v", err)
+			return nil
+		}
+	}
+
+	if isIncompletePatchPlan(plan) {
+		escalateForIncompletePatch(&plan)
+		if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
 			c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
 			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
 			log.Printf("remediator: plan validation failed: %v", err)
@@ -303,24 +321,28 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	if tier == models.RiskTier3 {
+	if plan.Action.Type == "escalate" {
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
-		msg := "awaiting human approval (T3)"
+		escalateReason := plan.Action.Rationale
+		if escalateReason == "" {
+			escalateReason = "escalated to human operator"
+		}
+		c.logAudit(&plan, matched, tier, models.AuditEscalated, escalateReason, userPrompt, "")
+		log.Printf("remediator: escalated %s/%s to human operator: %s", plan.Action.Namespace, plan.Action.Target, escalateReason)
+		return nil
+	}
+
+	if tier == models.RiskTier3 || tier == models.RiskTier4 {
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		msg := "awaiting human approval (" + string(tier) + ")"
 		if cfg.DryRun {
-			msg = "dry-run: would require human approval (T3)"
-			log.Printf("remediator: [dry-run] T3 %s %s/%s — needs approval when live", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+			msg = "dry-run: would require human approval (" + string(tier) + ")"
+			log.Printf("remediator: [dry-run] %s %s %s/%s — needs approval when live", tier, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
 			c.logAudit(&plan, matched, tier, models.AuditDryRun, msg, userPrompt, "")
 			return nil
 		}
 		c.logAudit(&plan, matched, tier, models.AuditPending, msg, userPrompt, "")
-		log.Printf("remediator: pending approval T3 %s %s/%s", plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
-		return nil
-	}
-
-	if plan.Action.Type == "escalate" {
-		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
-		c.logAudit(&plan, matched, tier, models.AuditEscalated, "escalated to human operator", userPrompt, "")
-		log.Printf("remediator: escalated %s/%s to human operator", plan.Action.Namespace, plan.Action.Target)
+		log.Printf("remediator: pending approval %s %s %s/%s", tier, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
 		return nil
 	}
 
@@ -338,33 +360,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	result, err := c.executor.Execute(ctx, plan)
-	if err != nil {
-		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), userPrompt, result)
-		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
-		return fmt.Errorf("execute runbook: %w", err)
-	}
-
-	if tier == models.RiskTier2 {
-		for _, step := range steps {
-			if step.Type != waitActionType {
-				c.tierAssigner.SetCooldown(step.Namespace, step.Type)
-			}
-		}
-	}
-
-	now := time.Now()
-	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
-	if verifyNote == "" {
-		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
-		c.logAuditVerified(&plan, matched, tier, reason, userPrompt, result, verifyNote, &now)
-		log.Printf("remediator: executed and verified %d-step runbook %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
-	} else {
-		c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
-		c.logAudit(&plan, matched, tier, models.AuditVerifyFailed, verifyNote, userPrompt, result)
-		log.Printf("remediator: executed runbook but verification failed: %s", verifyNote)
-	}
-	return nil
+	return c.executePlanAndVerify(ctx, plan, tier, matched, userPrompt, reason)
 }
 
 func (c *Correlator) dryRunSummary(plan models.RemediationPlan) string {
@@ -466,12 +462,7 @@ func (c *Correlator) buildMetricSummaries(anomalies []models.AnomalyRecord) []en
 				maxVal = p.Value
 			}
 		}
-		trend := "stable"
-		if len(pts) >= 2 && last.Value > pts[0].Value*1.1 {
-			trend = "rising"
-		} else if len(pts) >= 2 && last.Value < pts[0].Value*0.9 {
-			trend = "falling"
-		}
+		trend := metricTrendDirection(pts)
 		summaries = append(summaries, engine.MetricSummary{
 			Name:        a.MetricName + "@" + a.Entity,
 			Current:     last.Value,
@@ -573,33 +564,11 @@ func (c *Correlator) processRuleResult(ctx context.Context, cfg RemediationConfi
 		return false
 	}
 
-	result, err := c.executor.Execute(ctx, plan)
-	if err != nil {
-		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), "rule_engine:"+rr.RuleName, result)
-		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+	if err := c.executePlanAndVerify(ctx, plan, tier, matched, "rule_engine:"+rr.RuleName, ""); err != nil {
 		log.Printf("remediator: rule %s execution failed: %v", rr.RuleName, err)
 		return false
 	}
-
-	if tier == models.RiskTier2 {
-		for _, step := range plan.EffectiveSteps() {
-			if step.Type != waitActionType {
-				c.tierAssigner.SetCooldown(step.Namespace, step.Type)
-			}
-		}
-	}
-
-	now := time.Now()
-	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
-	if verifyNote == "" {
-		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
-		c.logAuditVerified(&plan, matched, tier, "", "rule_engine:"+rr.RuleName, result, verifyNote, &now)
-		log.Printf("remediator: rule %s executed and verified %s/%s", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
-	} else {
-		c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
-		c.logAudit(&plan, matched, tier, models.AuditVerifyFailed, verifyNote, "rule_engine:"+rr.RuleName, result)
-		log.Printf("remediator: rule %s executed but verification failed: %s", rr.RuleName, verifyNote)
-	}
+	log.Printf("remediator: rule %s executed %s/%s", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
 	return true
 }
 
@@ -642,90 +611,7 @@ func (c *Correlator) markAnomalyStatus(records []models.AnomalyRecord, status st
 }
 
 func (c *Correlator) validatePlan(plan models.RemediationPlan, anomalies []models.AnomalyRecord) error {
-	if plan.Action.Type == "" {
-		return fmt.Errorf("action type is empty")
-	}
-	if !knownActionTypes[plan.Action.Type] {
-		return fmt.Errorf("unknown action type %q", plan.Action.Type)
-	}
-	if plan.Action.Namespace == "" {
-		return fmt.Errorf("namespace is empty")
-	}
-	if protectedNamespaces[plan.Action.Namespace] {
-		return fmt.Errorf("namespace %s is protected", plan.Action.Namespace)
-	}
-	for _, d := range c.cfg.Denylist {
-		if plan.Action.Namespace == d {
-			return fmt.Errorf("namespace %s is denied", plan.Action.Namespace)
-		}
-	}
-	if plan.Action.Target == "" && plan.Action.Type != "noop" && plan.Action.Type != "escalate" {
-		return fmt.Errorf("target is empty for action type %s", plan.Action.Type)
-	}
-	if plan.Diagnosis.Confidence < 0 || plan.Diagnosis.Confidence > 1 {
-		return fmt.Errorf("confidence out of range: %f", plan.Diagnosis.Confidence)
-	}
-	// Only enforce MinConfidence for actions that would actually change the cluster.
-	// Low-confidence outcomes should be able to return noop/escalate safely.
-	if plan.Action.Type != "noop" && plan.Action.Type != "escalate" {
-		if plan.Diagnosis.Confidence < c.cfg.MinConfidence {
-			return fmt.Errorf("confidence %.2f below minimum %.2f", plan.Diagnosis.Confidence, c.cfg.MinConfidence)
-		}
-	}
-	if plan.Action.Type != "noop" && plan.Action.Type != "escalate" {
-		if !validBlastRadii[plan.Risk.BlastRadius] {
-			return fmt.Errorf("invalid blast_radius %q", plan.Risk.BlastRadius)
-		}
-		if !c.planMatchesAnomalies(plan, anomalies) {
-			return fmt.Errorf("plan target %s/%s does not match any input anomaly", plan.Action.Namespace, plan.Action.Target)
-		}
-	}
-	if len(c.cfg.Allowlist) > 0 {
-		allowed := false
-		for _, a := range c.cfg.Allowlist {
-			if a == plan.Action.Type {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return fmt.Errorf("action type %q not in allowlist", plan.Action.Type)
-		}
-	}
-	if plan.Action.Rationale == "" {
-		return fmt.Errorf("rationale is empty")
-	}
-	switch plan.Action.Type {
-	case "scale_replicas":
-		if _, ok := plan.Action.Parameters["replicas"]; !ok {
-			return fmt.Errorf("scale_replicas requires replicas parameter")
-		}
-	case "patch_resources":
-		hasResource := false
-		for k := range plan.Action.Parameters {
-			switch k {
-			case "cpu_request", "cpu_limit", "memory_request", "memory_limit":
-				hasResource = true
-			}
-		}
-		if !hasResource {
-			return fmt.Errorf("patch_resources requires at least one resource parameter")
-		}
-	}
-	return nil
-}
-
-func (c *Correlator) planMatchesAnomalies(plan models.RemediationPlan, anomalies []models.AnomalyRecord) bool {
-	target := plan.Action.Target
-	if deploymentActions[plan.Action.Type] {
-		target = deploymentFromPlan(plan)
-	}
-	for _, a := range anomalies {
-		if matchTarget(a, plan.Action.Namespace, target, plan.Action.Type) {
-			return true
-		}
-	}
-	return false
+	return validateRemediationPlan(c.cfg, plan, anomalies)
 }
 
 func (c *Correlator) anomaliesMatchingPlan(anomalies []models.AnomalyRecord, plan models.RemediationPlan) []models.AnomalyRecord {
@@ -777,7 +663,13 @@ func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPla
 		}
 		return "" // queued for human approval after tier gate
 	case models.RiskTier4:
-		return fmt.Sprintf("T4 action rejected: %s %s/%s (blast radius: %s)", plan.Action.Type, plan.Action.Namespace, plan.Action.Target, plan.Risk.BlastRadius)
+		// T4 should never auto-execute, but it also shouldn't be auto-rejected
+		// when the action type is known. Instead, require explicit operator approval.
+		if !knownActionTypes[plan.Action.Type] {
+			return fmt.Sprintf("T4 action rejected (unknown action): %s %s/%s (blast radius: %s)",
+				plan.Action.Type, plan.Action.Namespace, plan.Action.Target, plan.Risk.BlastRadius)
+		}
+		return ""
 	default:
 		return fmt.Sprintf("unknown tier: %s", tier)
 	}
@@ -802,12 +694,7 @@ func (c *Correlator) buildMetricsSummary(anomalies []models.AnomalyRecord) strin
 			continue
 		}
 		last := pts[len(pts)-1]
-		trend := "stable"
-		if len(pts) >= 2 && pts[len(pts)-1].Value > pts[0].Value*1.1 {
-			trend = "rising"
-		} else if len(pts) >= 2 && pts[len(pts)-1].Value < pts[0].Value*0.9 {
-			trend = "falling"
-		}
+		trend := metricTrendDirection(pts)
 		summaries = append(summaries, llm.MetricSummary{
 			Name:        a.MetricName + "@" + a.Entity,
 			SampleCount: len(pts),
@@ -854,12 +741,7 @@ func shortID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 12)
 	for i := range b {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		if err != nil {
-			b[i] = chars[i%len(chars)]
-			continue
-		}
-		b[i] = chars[n.Int64()]
+		b[i] = chars[rand.IntN(len(chars))]
 	}
 	now := time.Now().UnixMilli()
 	return fmt.Sprintf("%x-%s", now, string(b))

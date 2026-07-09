@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+var lokiHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
+// FetchLogSnippets queries Loki for recent log lines matching the namespace/pod.
+// Returns nil when Loki is not configured (empty URL).
+func FetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since time.Duration) ([]LogSnippet, error) {
+	return fetchLogSnippets(ctx, lokiURL, namespace, pod, since)
+}
+
 // fetchLogSnippets queries Loki for recent log lines matching the namespace
 // and pod. Returns nil gracefully when lokiURL is empty (Loki not configured).
 // Queries the last 15 minutes, max 50 lines, truncated to 500 chars per line.
@@ -42,7 +50,7 @@ func fetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since
 		return nil, fmt.Errorf("create loki request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := lokiHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("query loki: %w", err)
 	}

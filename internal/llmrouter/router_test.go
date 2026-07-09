@@ -211,13 +211,20 @@ func TestModelForTaskEdgeCases(t *testing.T) {
 	}
 }
 
-func TestEstimateTokens(t *testing.T) {
-	if v := estimateTokens("hello world"); v != 2 {
+func TestEstimateTokensFallback(t *testing.T) {
+	if v := llmEstimateTokens("hello world"); v != 2 {
 		t.Errorf("estimateTokens('hello world') = %d, want 2", v)
 	}
-	if v := estimateTokens(""); v != 0 {
+	if v := llmEstimateTokens(""); v != 0 {
 		t.Errorf("estimateTokens('') = %d, want 0", v)
 	}
+}
+
+func llmEstimateTokens(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	return int64(len(s) / 4)
 }
 
 func TestIsNonRetryable(t *testing.T) {

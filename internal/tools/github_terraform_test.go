@@ -275,6 +275,7 @@ func TestTerraformPlugin_Validate_AllowsReadCommands(t *testing.T) {
 }
 
 func TestTerraformPlugin_Validate_AllowsWriteCommands(t *testing.T) {
+	t.Setenv("KUBEWISE_ALLOW_TERRAFORM_INIT", "true")
 	p := NewTerraformPlugin("")
 	tests := []struct {
 		cmd  string

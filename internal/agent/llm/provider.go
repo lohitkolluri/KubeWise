@@ -19,10 +19,10 @@ type Provider interface {
 
 // Config selects and configures an LLM provider.
 type Config struct {
-	Provider string // openrouter, ollama
+	Provider string // openrouter, ollama, openapi
 	APIKey   string
 	Model    string
-	BaseURL  string // Ollama base URL (default http://127.0.0.1:11434)
+	BaseURL  string // Provider base URL (Ollama default http://127.0.0.1:11434; OpenAPI-compatible default https://api.openai.com)
 }
 
 // NewProvider returns the configured LLM backend.
@@ -40,7 +40,9 @@ func NewProvider(cfg Config) (Provider, error) {
 		return NewOpenRouterProvider(cfg.APIKey, cfg.Model), nil
 	case "ollama":
 		return NewOllamaProvider(cfg.BaseURL, cfg.Model, cfg.APIKey), nil
+	case "openapi", "openai": // "openai" kept as a backward-compatible alias
+		return NewOpenAICompatibleProvider(cfg.BaseURL, cfg.Model, cfg.APIKey), nil
 	default:
-		return nil, fmt.Errorf("unknown llm provider %q (supported: openrouter, ollama)", provider)
+		return nil, fmt.Errorf("unknown llm provider %q (supported: openrouter, ollama, openapi)", provider)
 	}
 }

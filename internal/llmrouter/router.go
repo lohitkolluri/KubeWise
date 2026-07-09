@@ -96,18 +96,16 @@ func (r *LLMRouter) Route(ctx context.Context, task TaskType, input LLMInput) (*
 func (r *LLMRouter) callModel(ctx context.Context, model string, input LLMInput) (*LLMResponse, error) {
 	r.client.SetModel(model)
 	var respData json.RawMessage
-	err := r.client.StructuredOutput(ctx, input.SystemPrompt, input.UserContent, input.ResponseSchema, &respData)
+	usage, err := r.client.StructuredOutputWithUsage(ctx, input.SystemPrompt, input.UserContent, input.ResponseSchema, &respData)
 	if err != nil {
 		return nil, err
 	}
 
-	estimatedInput := estimateTokens(input.SystemPrompt + input.UserContent)
-	estimatedOutput := estimateTokens(string(respData))
-
 	return &LLMResponse{
 		Data:         respData,
-		InputTokens:  estimatedInput,
-		OutputTokens: estimatedOutput,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		CachedTokens: usage.CachedTokens,
 	}, nil
 }
 
@@ -123,12 +121,6 @@ func (r *LLMRouter) RouteStructured(ctx context.Context, task TaskType, input LL
 		return nil, fmt.Errorf("llmrouter: unmarshal response: %w", err)
 	}
 	return resp, nil
-}
-
-// estimateTokens provides a rough token estimate using 4 chars per token ratio.
-// This is a placeholder until the LLM provider exposes actual usage counters.
-func estimateTokens(s string) int64 {
-	return int64(len(s) / 4)
 }
 
 // isNonRetryable returns true for errors that should not trigger a fallback.

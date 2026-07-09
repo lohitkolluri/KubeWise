@@ -60,7 +60,7 @@ func TestHelmPlugin_Validate_AllowsReadCommands(t *testing.T) {
 		{"get hooks", map[string]string{"release": "my-app"}},
 		{"show chart", map[string]string{"chart": "stable/nginx"}},
 		{"show values", map[string]string{"chart": "bitnami/redis"}},
-		{"show all", map[string]string{"chart": "oci://registry.example.com/chart"}},
+		{"show all", map[string]string{"chart": "stable/nginx"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
@@ -147,6 +147,36 @@ func TestHelmPlugin_Validate_RejectsUnknownCommand(t *testing.T) {
 	action := models.ToolAction{Command: "unknown"}
 	if err := p.Validate(action); err == nil {
 		t.Error("Validate() expected error for unknown command, got nil")
+	}
+}
+
+func TestHelmPlugin_Validate_RejectsRemoteChartURL(t *testing.T) {
+	p := NewHelmPlugin("", "")
+	action := models.ToolAction{
+		Command: "upgrade",
+		Args: map[string]string{
+			"release":   "my-app",
+			"chart":     "https://evil.example/malicious.tgz",
+			"namespace": "prod",
+		},
+	}
+	if err := p.Validate(action); err == nil {
+		t.Fatal("expected rejection of remote chart URL")
+	}
+}
+
+func TestHelmPlugin_Validate_RejectsInjectedGlobalFlags(t *testing.T) {
+	p := NewHelmPlugin("", "")
+	action := models.ToolAction{
+		Command: "list",
+		Args: map[string]string{
+			"namespace":    "default",
+			"kubeconfig":   "/tmp/evil",
+			"kube-context": "attacker",
+		},
+	}
+	if err := p.Validate(action); err == nil {
+		t.Fatal("expected rejection of injected helm global flags")
 	}
 }
 
@@ -291,6 +321,7 @@ func TestArgoCDPlugin_Validate_AllowsReadCommands(t *testing.T) {
 }
 
 func TestArgoCDPlugin_Validate_AllowsWriteCommands(t *testing.T) {
+	t.Setenv("KUBEWISE_ALLOW_ARGOCD_APP_SET", "true")
 	p := NewArgoCDPlugin("", "", false)
 	tests := []struct {
 		cmd  string

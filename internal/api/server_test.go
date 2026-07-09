@@ -96,7 +96,19 @@ func (m *mockStore) GetAccuracyHistory(limit int) ([]models.AccuracySnapshot, er
 	return []models.AccuracySnapshot{}, nil
 }
 
-func setupTestServer() *httptest.Server {
+func mustNewTestServer(t *testing.T, store Store, addr string) *Server {
+	t.Helper()
+	t.Setenv("KUBEWISE_ALLOW_UNAUTH", "true")
+	t.Setenv("KUBEWISE_REQUIRE_API_TOKEN", "false")
+	s, err := NewServer(store, addr)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return s
+}
+
+func setupTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
 	store := &mockStore{
 		anomalies: []models.AnomalyRecord{
 			{ID: "1", Entity: "pod-a", Pattern: "OOMKilled", Score: 0.8},
@@ -108,13 +120,23 @@ func setupTestServer() *httptest.Server {
 		},
 	}
 	mux := http.NewServeMux()
-	s := NewServer(store, ":0")
+	s := mustNewTestServer(t, store, ":0")
 	s.registerRoutes(mux)
 	return httptest.NewServer(withMiddleware(mux, middlewareConfig{corsOrigin: "*"}))
 }
 
+func TestNewServerRequiresAPIToken(t *testing.T) {
+	t.Setenv("KUBEWISE_ALLOW_UNAUTH", "false")
+	t.Setenv("KUBEWISE_REQUIRE_API_TOKEN", "true")
+	t.Setenv("KUBEWISE_API_TOKEN", "")
+	_, err := NewServer(&mockStore{}, ":0")
+	if err == nil {
+		t.Fatal("expected error when API token is required but missing")
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/health")
@@ -137,7 +159,7 @@ func TestHealthEndpoint(t *testing.T) {
 }
 
 func TestHealthContentType(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/health")
@@ -151,7 +173,7 @@ func TestHealthContentType(t *testing.T) {
 }
 
 func TestStatusEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/status")
@@ -174,7 +196,7 @@ func TestStatusEndpoint(t *testing.T) {
 }
 
 func TestAnomaliesEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/v1/anomalies")
@@ -197,7 +219,7 @@ func TestAnomaliesEndpoint(t *testing.T) {
 }
 
 func TestAnomaliesLimitParam(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, _ := http.Get(ts.URL + "/api/v1/anomalies?limit=1")
@@ -213,7 +235,7 @@ func TestAnomaliesLimitParam(t *testing.T) {
 func TestAnomaliesEmptyStore(t *testing.T) {
 	store := &mockStore{anomalies: nil}
 	mux := http.NewServeMux()
-	s := NewServer(store, ":0")
+	s := mustNewTestServer(t, store, ":0")
 	s.registerRoutes(mux)
 	ts := httptest.NewServer(withMiddleware(mux, middlewareConfig{corsOrigin: "*"}))
 	defer ts.Close()
@@ -229,7 +251,7 @@ func TestAnomaliesEmptyStore(t *testing.T) {
 }
 
 func TestConfigEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/v1/config")
@@ -252,7 +274,7 @@ func TestConfigEndpoint(t *testing.T) {
 }
 
 func TestConfigPutEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	body := `{"scrape_interval":"60s","prometheus_address":"http://prom:9090"}`
@@ -281,7 +303,7 @@ func TestConfigPutEndpoint(t *testing.T) {
 func TestConfigNoConfig(t *testing.T) {
 	store := &mockStore{config: nil}
 	mux := http.NewServeMux()
-	s := NewServer(store, ":0")
+	s := mustNewTestServer(t, store, ":0")
 	s.registerRoutes(mux)
 	ts := httptest.NewServer(withMiddleware(mux, middlewareConfig{corsOrigin: "*"}))
 	defer ts.Close()
@@ -297,7 +319,7 @@ func TestConfigNoConfig(t *testing.T) {
 }
 
 func TestPredictionsEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/v1/predictions")
@@ -320,7 +342,7 @@ func TestPredictionsEndpoint(t *testing.T) {
 }
 
 func TestStatsEndpoint(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/v1/stats")
@@ -341,7 +363,7 @@ func TestStatsEndpoint(t *testing.T) {
 }
 
 func TestNotFound(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/nonexistent")
@@ -362,7 +384,7 @@ func TestNotFound(t *testing.T) {
 }
 
 func TestCORSHeaders(t *testing.T) {
-	ts := setupTestServer()
+	ts := setupTestServer(t)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/health")
@@ -379,7 +401,7 @@ func TestCORSHeaders(t *testing.T) {
 func TestServerScrapes(t *testing.T) {
 	store := &mockStore{}
 	mux := http.NewServeMux()
-	s := NewServer(store, ":0")
+	s := mustNewTestServer(t, store, ":0")
 	s.IncrementScrapes()
 	s.IncrementScrapes()
 	s.IncrementScrapes()

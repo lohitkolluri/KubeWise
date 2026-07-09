@@ -22,6 +22,7 @@ var (
 	bucketAccuracySnaps = []byte("accuracy_snapshots")
 	bucketEvents        = []byte("events")
 	bucketEventIndex    = []byte("event_idx")
+	bucketSemCache      = []byte("semcache")
 )
 
 // Init ensures all required buckets exist.
@@ -44,6 +45,7 @@ func (s *Store) Init() error {
 			bucketAccuracySnaps,
 			bucketEvents,
 			bucketEventIndex,
+			bucketSemCache,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err

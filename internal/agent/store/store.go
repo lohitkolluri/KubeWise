@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -13,7 +14,7 @@ type Store struct {
 
 // Open opens (or creates) the bbolt database at the given path.
 func Open(path string) (*Store, error) {
-	db, err := bolt.Open(path, 0o600, nil)
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}

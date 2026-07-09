@@ -114,6 +114,8 @@ func defaultConfig() *models.AgentConfig {
 	return &models.AgentConfig{
 		ScrapeInterval:    "30s",
 		PrometheusAddress: "http://localhost:9090",
+		LokiURL:           "",
+		TempoURL:          "",
 		LLMProvider:       "openrouter",
 		LLMModel:          llm.DefaultModel,
 		Remediation: models.RemediationConfig{
@@ -143,6 +145,7 @@ func normalizeConfig(cfg *models.AgentConfig) {
 	if cfg.PrometheusAddress == "" {
 		cfg.PrometheusAddress = "http://localhost:9090"
 	}
+	// Loki/Tempo are optional; leave empty unless configured.
 	if cfg.LLMProvider == "" {
 		cfg.LLMProvider = "openrouter"
 	}

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"time"
 
@@ -25,7 +26,7 @@ var allowedArgoCDSubcommands = map[string]argocdCommand{
 	"app resources tree": {[]models.ToolCapability{models.CapRead}, true},
 	"app sync":           {[]models.ToolCapability{models.CapWrite, models.CapRequiresApproval}, false},
 	"app rollback":       {[]models.ToolCapability{models.CapWrite, models.CapDestructive, models.CapRequiresApproval}, false},
-	"app set":            {[]models.ToolCapability{models.CapWrite}, false},
+	"app set":            {[]models.ToolCapability{models.CapWrite, models.CapRequiresApproval}, false},
 	"app wait":           {[]models.ToolCapability{models.CapRead}, true},
 	"proj list":          {[]models.ToolCapability{models.CapRead}, true},
 	"proj get":           {[]models.ToolCapability{models.CapRead}, true},
@@ -55,6 +56,8 @@ var blockedArgoCDSubcommands = map[string]bool{
 	"admin":                   true,
 	"db":                      true,
 	"dex":                     true,
+	// app set can change desired state; require explicit opt-in via env.
+	"app set": true,
 }
 
 var (
@@ -101,7 +104,11 @@ func (p *ArgoCDPlugin) Validate(action models.ToolAction) error {
 	cmd := action.Command
 
 	if blockedArgoCDSubcommands[cmd] {
-		return fmt.Errorf("argocd %q is blocked for security reasons", cmd)
+		if cmd == "app set" && os.Getenv("KUBEWISE_ALLOW_ARGOCD_APP_SET") == "true" {
+			// allowed explicitly
+		} else {
+			return fmt.Errorf("argocd %q is blocked for security reasons", cmd)
+		}
 	}
 
 	if _, found := allowedArgoCDSubcommands[cmd]; !found {

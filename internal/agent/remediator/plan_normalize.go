@@ -1,10 +1,13 @@
 package remediator
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
+
+const incompletePatchEscalatePrefix = "patch_resources recommended but resource limits were not specified"
 
 var actionTypeAliases = map[string]string{
 	"restart":             "restart_pod",
@@ -133,12 +136,6 @@ func normalizeRunbookSteps(plan *models.RemediationPlan, anomalies []models.Anom
 				step.Target = name
 			}
 		}
-		// patch_resources without parameters is a common LLM error.
-		// Demote to noop instead of failing the entire plan.
-		if step.Type == "patch_resources" && len(step.Parameters) == 0 {
-			step.Type = "noop"
-			step.Rationale = "demoted from patch_resources: missing resource parameters"
-		}
 		out = append(out, step)
 	}
 	// Re-number to keep sequential ordering after dropping steps.
@@ -236,4 +233,80 @@ func inferTargetFromAnomalies(anomalies []models.AnomalyRecord, preferNS string)
 		ns = a.Namespace
 	}
 	return ns, n
+}
+
+func isIncompletePatchPlan(plan models.RemediationPlan) bool {
+	if plan.Action.Type == "patch_resources" && len(plan.Action.Parameters) == 0 {
+		return true
+	}
+	for _, step := range plan.Steps {
+		if step.Type == "patch_resources" && len(step.Parameters) == 0 {
+			return true
+		}
+	}
+	if plan.Action.Type == "noop" && strings.Contains(plan.Action.Rationale, "demoted from patch_resources") {
+		return true
+	}
+	for _, step := range plan.Steps {
+		if step.Type == "noop" && strings.Contains(step.Rationale, "demoted from patch_resources") {
+			return true
+		}
+	}
+	return false
+}
+
+func isIncompletePatchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "patch_resources requires at least one resource parameter")
+}
+
+// escalateForIncompletePatch converts a patch_resources plan missing limits into an
+// operator-visible escalation instead of silently doing nothing.
+func escalateForIncompletePatch(plan *models.RemediationPlan) {
+	if plan == nil {
+		return
+	}
+	target := plan.Action.Target
+	ns := plan.Action.Namespace
+	for _, step := range plan.Steps {
+		if step.Type == "patch_resources" {
+			if step.Target != "" {
+				target = step.Target
+			}
+			if step.Namespace != "" {
+				ns = step.Namespace
+			}
+			break
+		}
+	}
+	if target == "" {
+		for _, step := range plan.Steps {
+			if step.Target != "" {
+				target = step.Target
+				if step.Namespace != "" {
+					ns = step.Namespace
+				}
+				break
+			}
+		}
+	}
+	rationale := fmt.Sprintf(
+		"%s for %s/%s — operator must apply resource limits manually (e.g. kubectl set resources deployment/%s -n %s --limits=memory=2Gi --requests=memory=1Gi)",
+		incompletePatchEscalatePrefix, ns, target, target, ns,
+	)
+	plan.Action = models.Action{
+		Type:      "escalate",
+		Target:    target,
+		Namespace: ns,
+		Rationale: rationale,
+	}
+	plan.Steps = []models.RunbookStep{{
+		Order:     1,
+		Type:      "escalate",
+		Target:    target,
+		Namespace: ns,
+		Rationale: rationale,
+	}}
 }

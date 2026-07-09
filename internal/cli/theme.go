@@ -134,9 +134,7 @@ var (
 	detailValueStyle   = lipgloss.NewStyle().Foreground(colorHighlight)
 	detailSectionStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(colorAccent).
-				PaddingTop(1).
-				PaddingBottom(0)
+				Foreground(colorAccent)
 
 	detailBorderActiveStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).

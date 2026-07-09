@@ -110,20 +110,13 @@ func TestFingerprintDifferent(t *testing.T) {
 	}
 }
 
-func TestFingerprintScoreRounding(t *testing.T) {
+func TestFingerprintIgnoresScore(t *testing.T) {
 	t.Parallel()
 
 	f1 := Fingerprint("default/nginx", "default", "cpu_usage", "Spike", 0.84)
 	f2 := Fingerprint("default/nginx", "default", "cpu_usage", "Spike", 0.81)
-	// Both round to 0.8 so fingerprints should match.
 	if f1 != f2 {
-		t.Errorf("fingerprints should match after score rounding (0.84 and 0.81 → 0.8)")
-	}
-
-	// But a different enough score should produce a different fingerprint.
-	f3 := Fingerprint("default/nginx", "default", "cpu_usage", "Spike", 0.5)
-	if f1 == f3 {
-		t.Errorf("fingerprints should differ when score rounds to different value")
+		t.Errorf("fingerprints should ignore score differences")
 	}
 }
 

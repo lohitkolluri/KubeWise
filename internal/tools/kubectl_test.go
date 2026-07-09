@@ -175,6 +175,37 @@ func TestKubectlPlugin_Validate_AllowsNamespaceForApply(t *testing.T) {
 	}
 }
 
+func TestKubectlPlugin_Validate_RejectsInjectedGlobalFlags(t *testing.T) {
+	p := NewKubectlPlugin("")
+	action := models.ToolAction{
+		Command: "get",
+		Args: map[string]string{
+			"resource":  "pods",
+			"namespace": "default",
+			"server":    "https://evil.example",
+			"as":        "system:admin",
+		},
+	}
+	if err := p.Validate(action); err == nil {
+		t.Fatal("expected rejection of injected global kubectl flags")
+	}
+}
+
+func TestKubectlPlugin_Validate_RejectsUnknownFlags(t *testing.T) {
+	p := NewKubectlPlugin("")
+	action := models.ToolAction{
+		Command: "get",
+		Args: map[string]string{
+			"resource":  "pods",
+			"namespace": "default",
+			"token":     "stolen",
+		},
+	}
+	if err := p.Validate(action); err == nil {
+		t.Fatal("expected rejection of unknown/blocked flags")
+	}
+}
+
 func TestKubectlPlugin_buildArgs(t *testing.T) {
 	p := NewKubectlPlugin("/tmp/kubeconfig")
 	tests := []struct {

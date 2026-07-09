@@ -4,23 +4,26 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/lohitkolluri/KubeWise/internal/promptctx"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 const (
 	// Token efficiency defaults: keep investigation concise.
-	// We compact logs further below (dedupe + strip timestamps), so we can keep
-	// byte/line limits modest without losing key error signals.
 	maxLogBytesPerContainer = 3072
 	maxLogTailLines         = int64(80)
 	maxEvents               = 12
+	maxSuccessorPods        = 3
+	perAPICallTimeout       = 5 * time.Second
 
 	// Hard cap across ALL targets for prompt size control.
 	maxInvestigationChars = 12000
@@ -29,11 +32,22 @@ const (
 // Investigator gathers live cluster context (describe, logs, events) for RCA.
 type Investigator struct {
 	clientset kubernetes.Interface
+	lokiURL   string
+	tempoURL  string
 }
 
 // NewInvestigator creates an investigator using in-cluster config.
 func NewInvestigator(clientset kubernetes.Interface) *Investigator {
 	return &Investigator{clientset: clientset}
+}
+
+// NewInvestigatorWithObservability enables Loki/Tempo lookups for prompt context enrichment.
+func NewInvestigatorWithObservability(clientset kubernetes.Interface, lokiURL, tempoURL string) *Investigator {
+	return &Investigator{
+		clientset: clientset,
+		lokiURL:   strings.TrimSpace(lokiURL),
+		tempoURL:  strings.TrimSpace(tempoURL),
+	}
 }
 
 // Gather collects investigation context for the given anomalies.
@@ -78,15 +92,35 @@ func (inv *Investigator) Gather(ctx context.Context, anomalies []models.AnomalyR
 func (inv *Investigator) writePodInvestigation(ctx context.Context, b *strings.Builder, namespace, name string) {
 	fmt.Fprintf(b, "WORKLOAD %s/%s\n", namespace, name)
 
-	pod, err := inv.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	apiCtx, cancel := inv.apiCallCtx(ctx)
+	pod, err := inv.clientset.CoreV1().Pods(namespace).Get(apiCtx, name, metav1.GetOptions{})
+	cancel()
 	if err != nil {
-		if node, nerr := inv.clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{}); nerr == nil {
+		apiCtx, cancel := inv.apiCallCtx(ctx)
+		node, nerr := inv.clientset.CoreV1().Nodes().Get(apiCtx, name, metav1.GetOptions{})
+		cancel()
+		if nerr == nil {
 			inv.writeNodeSummary(b, node)
 			return
 		}
-		fmt.Fprintf(b, "- describe: unavailable (%v)\n", err)
+		inv.writePodMissingSummary(b, err)
+		inv.writeEventsSection(b, inv.listPodEvents(ctx, namespace, name))
+		inv.writeObservabilitySection(ctx, b, namespace, name)
+		inv.writeWorkloadSuccessor(ctx, b, namespace, name)
+		b.WriteString("\n")
 		return
 	}
+
+	inv.writePodDescribe(b, pod)
+	inv.writeEventsSection(b, inv.listPodEvents(ctx, namespace, name))
+	for _, line := range inv.podLogs(ctx, namespace, name, pod) {
+		b.WriteString(line)
+	}
+	inv.writeObservabilitySection(ctx, b, namespace, name)
+	b.WriteString("\n")
+}
+
+func (inv *Investigator) writePodDescribe(b *strings.Builder, pod *corev1.Pod) {
 	fmt.Fprintf(b, "- phase: %s\n", pod.Status.Phase)
 	for _, cond := range pod.Status.Conditions {
 		if cond.Status != corev1.ConditionTrue {
@@ -99,19 +133,150 @@ func (inv *Investigator) writePodInvestigation(ctx context.Context, b *strings.B
 		fmt.Fprintf(b, "- container %s: ready=%v restarts=%d %s\n",
 			cs.Name, cs.Ready, cs.RestartCount, state)
 	}
+}
 
-	events := inv.listPodEvents(ctx, namespace, name)
-	if len(events) > 0 {
-		b.WriteString("- recent events:\n")
-		for _, e := range events {
-			fmt.Fprintf(b, "  - [%s] %s: %s\n", e.Reason, e.Type, truncate(e.Message, 200))
+func (inv *Investigator) writePodMissingSummary(b *strings.Builder, err error) {
+	switch {
+	case apierrors.IsNotFound(err):
+		b.WriteString("- describe: pod not found (likely deleted or replaced by a rollout)\n")
+	case apierrors.IsForbidden(err):
+		b.WriteString("- describe: forbidden (check agent RBAC for pods/get)\n")
+	default:
+		fmt.Fprintf(b, "- describe: unavailable (%v)\n", err)
+	}
+}
+
+func (inv *Investigator) writeEventsSection(b *strings.Builder, events []corev1.Event) {
+	if len(events) == 0 {
+		b.WriteString("- events: none found for this object\n")
+		return
+	}
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].LastTimestamp.After(events[j].LastTimestamp.Time)
+	})
+	b.WriteString("- recent events:\n")
+	limit := len(events)
+	if limit > maxEvents {
+		limit = maxEvents
+	}
+	for _, e := range events[:limit] {
+		fmt.Fprintf(b, "  - [%s] %s: %s\n", e.Reason, e.Type, truncate(e.Message, 200))
+	}
+}
+
+func (inv *Investigator) writeObservabilitySection(ctx context.Context, b *strings.Builder, namespace, name string) {
+	if inv.lokiURL != "" {
+		snippets, err := promptctx.FetchLogSnippets(ctx, inv.lokiURL, namespace, name, 15*time.Minute)
+		switch {
+		case err != nil:
+			fmt.Fprintf(b, "- loki: unavailable (%v)\n", err)
+		case len(snippets) > 0:
+			b.WriteString("- loki (recent error-ish lines):\n")
+			for i, s := range snippets {
+				if i >= 12 {
+					break
+				}
+				fmt.Fprintf(b, "  - [%s] %s %s\n", s.Container, s.Timestamp, truncate(s.Line, 200))
+			}
+		default:
+			b.WriteString("- loki: no matching error lines in last 15m (pod may be gone or logs not ingested)\n")
 		}
 	}
-
-	for _, line := range inv.podLogs(ctx, namespace, name, pod) {
-		b.WriteString(line)
+	if inv.tempoURL != "" {
+		traces, err := promptctx.FetchTraceContext(ctx, inv.tempoURL, namespace, name, 15*time.Minute)
+		switch {
+		case err != nil:
+			fmt.Fprintf(b, "- tempo: unavailable (%v)\n", err)
+		case len(traces) > 0:
+			b.WriteString("- tempo (recent traces):\n")
+			for i, t := range traces {
+				if i >= 8 {
+					break
+				}
+				fmt.Fprintf(b, "  - trace=%s dur=%dms spans=%d services=%d start=%s root=%s\n",
+					t.TraceID, t.DurationMs, t.SpanCount, t.Services, t.StartTime, truncate(t.RootName, 60))
+			}
+		default:
+			b.WriteString("- tempo: no traces in last 15m\n")
+		}
 	}
-	b.WriteString("\n")
+}
+
+// writeWorkloadSuccessor helps when the target pod name is ephemeral (Deployment rollouts).
+func (inv *Investigator) writeWorkloadSuccessor(ctx context.Context, b *strings.Builder, namespace, podName string) {
+	depName := inferDeploymentFromPod(podName)
+	if depName == "" {
+		return
+	}
+	apiCtx, cancel := inv.apiCallCtx(ctx)
+	dep, err := inv.clientset.AppsV1().Deployments(namespace).Get(apiCtx, depName, metav1.GetOptions{})
+	cancel()
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		fmt.Fprintf(b, "- successor workload: deployment/%s lookup failed (%v)\n", depName, err)
+		return
+	}
+
+	avail := int32(0)
+	if dep.Status.AvailableReplicas > 0 {
+		avail = dep.Status.AvailableReplicas
+	}
+	fmt.Fprintf(b, "- successor workload: deployment/%s replicas=%d/%d available=%d\n",
+		depName, dep.Status.ReadyReplicas, dep.Status.Replicas, avail)
+
+	selector := metav1.FormatLabelSelector(dep.Spec.Selector)
+	if selector == "" {
+		return
+	}
+	listCtx, listCancel := inv.apiCallCtx(ctx)
+	pods, err := inv.clientset.CoreV1().Pods(namespace).List(listCtx, metav1.ListOptions{
+		LabelSelector: selector,
+		Limit:         maxSuccessorPods,
+	})
+	listCancel()
+	if err != nil {
+		fmt.Fprintf(b, "- successor pods: list failed (%v)\n", err)
+		return
+	}
+	if len(pods.Items) == 0 {
+		b.WriteString("- successor pods: none currently scheduled\n")
+		return
+	}
+
+	b.WriteString("- successor pods:\n")
+	for _, p := range pods.Items {
+		if p.Name == podName {
+			continue
+		}
+		ready := podReadyCount(&p)
+		fmt.Fprintf(b, "  - %s phase=%s ready=%d/%d\n",
+			p.Name, p.Status.Phase, ready, len(p.Spec.Containers))
+	}
+}
+
+// inferDeploymentFromPod extracts a Deployment name from a standard pod name
+// pattern: {deployment}-{replicaset-hash}-{pod-id}.
+func inferDeploymentFromPod(podName string) string {
+	parts := strings.Split(podName, "-")
+	if len(parts) < 3 {
+		return ""
+	}
+	return strings.Join(parts[:len(parts)-2], "-")
+}
+
+func podReadyCount(pod *corev1.Pod) int {
+	if pod == nil {
+		return 0
+	}
+	ready := 0
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Ready {
+			ready++
+		}
+	}
+	return ready
 }
 
 func (inv *Investigator) writeNodeSummary(b *strings.Builder, node *corev1.Node) {
@@ -127,9 +292,11 @@ func (inv *Investigator) writeNodeSummary(b *strings.Builder, node *corev1.Node)
 
 func (inv *Investigator) listPodEvents(ctx context.Context, namespace, name string) []corev1.Event {
 	field := fmt.Sprintf("involvedObject.name=%s,involvedObject.namespace=%s", name, namespace)
-	list, err := inv.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+	apiCtx, cancel := inv.apiCallCtx(ctx)
+	defer cancel()
+	list, err := inv.clientset.CoreV1().Events(namespace).List(apiCtx, metav1.ListOptions{
 		FieldSelector: field,
-		Limit:         maxEvents,
+		Limit:         maxEvents * 2,
 	})
 	if err != nil {
 		return nil
@@ -139,17 +306,19 @@ func (inv *Investigator) listPodEvents(ctx context.Context, namespace, name stri
 
 func (inv *Investigator) podLogs(ctx context.Context, namespace, name string, pod *corev1.Pod) []string {
 	if pod == nil {
-		return nil
+		return []string{"- logs: unavailable (pod object missing)\n"}
 	}
 	var lines []string
 	for _, c := range pod.Spec.Containers {
+		apiCtx, cancel := inv.apiCallCtx(ctx)
 		req := inv.clientset.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{
 			Container: c.Name,
 			TailLines: int64Ptr(maxLogTailLines),
 		})
-		stream, err := req.Stream(ctx)
+		stream, err := req.Stream(apiCtx)
+		cancel()
 		if err != nil {
-			lines = append(lines, fmt.Sprintf("- logs %s: unavailable (%v)\n", c.Name, err))
+			lines = append(lines, fmt.Sprintf("- logs %s: unavailable (%v)\n", c.Name, friendlyLogError(err)))
 			continue
 		}
 		data, err := io.ReadAll(io.LimitReader(stream, maxLogBytesPerContainer))
@@ -168,19 +337,27 @@ func (inv *Investigator) podLogs(ctx context.Context, namespace, name string, po
 	return lines
 }
 
-// compactLog reduces token usage while keeping error signal:
-// - strips obvious RFC3339-like timestamp prefixes
-// - collapses consecutive duplicate lines
-// - keeps the last N lines, plus any recent "error-ish" lines
+func friendlyLogError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("pod/container gone (logs only exist while the pod object exists)")
+	}
+	if apierrors.IsForbidden(err) {
+		return fmt.Errorf("forbidden (check agent RBAC for pods/log)")
+	}
+	return err
+}
+
+// compactLog reduces token usage while keeping error signal.
 func compactLog(text string, keepLast int) string {
 	raw := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	raw = strings.Split(strings.TrimSpace(strings.Join(raw, "\n")), "\n")
 
 	stripTS := func(s string) string {
 		s = strings.TrimSpace(s)
-		// Heuristic timestamp strip: "2026-07-07T07:21:13Z ..." or "2026-07-07 07:21:13 ..."
 		if len(s) > 20 && s[4] == '-' && s[7] == '-' {
-			// Find first space after date/time chunk.
 			if idx := strings.IndexByte(s, ' '); idx > 0 && idx < 40 {
 				return strings.TrimSpace(s[idx+1:])
 			}
@@ -205,7 +382,6 @@ func compactLog(text string, keepLast int) string {
 		return "(empty)"
 	}
 
-	// Collect "error-ish" lines from the tail window.
 	errish := make(map[string]struct{})
 	for i := max(0, len(cleaned)-200); i < len(cleaned); i++ {
 		l := strings.ToLower(cleaned[i])
@@ -226,7 +402,6 @@ func compactLog(text string, keepLast int) string {
 		seen[ln] = struct{}{}
 		out = append(out, ln)
 	}
-	// Append err-ish lines not already included (bounded).
 	added := 0
 	for ln := range errish {
 		if _, ok := seen[ln]; ok {
@@ -281,4 +456,14 @@ func gatherTimeout(parent context.Context) (context.Context, context.CancelFunc)
 		}
 	}
 	return context.WithTimeout(parent, 45*time.Second)
+}
+
+func (inv *Investigator) apiCallCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < perAPICallTimeout {
+			return context.WithTimeout(parent, remaining)
+		}
+	}
+	return context.WithTimeout(parent, perAPICallTimeout)
 }

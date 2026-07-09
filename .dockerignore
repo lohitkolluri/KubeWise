@@ -1,6 +1,7 @@
 .git
 .github
 bin/
+!bin/agent
 *.md
 designs/
 hack/

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ type terraformCommand struct {
 
 // allowedTerraformSubcommands and their capabilities.
 var allowedTerraformSubcommands = map[string]terraformCommand{
-	"init":           {[]models.ToolCapability{models.CapWrite}, false},
+	"init":           {[]models.ToolCapability{models.CapWrite, models.CapRequiresApproval}, false},
 	"validate":       {[]models.ToolCapability{models.CapRead}, true},
 	"plan":           {[]models.ToolCapability{models.CapRead}, true},
 	"show":           {[]models.ToolCapability{models.CapRead}, true},
@@ -45,6 +46,8 @@ var blockedTerraformSubcommands = map[string]bool{
 	"workspace new":    true,
 	"workspace delete": true,
 	"console":          true,
+	// init can download providers/modules; require explicit opt-in via env.
+	"init": true,
 }
 
 var (
@@ -89,7 +92,11 @@ func (p *TerraformPlugin) Validate(action models.ToolAction) error {
 	cmd := action.Command
 
 	if blockedTerraformSubcommands[cmd] {
-		return fmt.Errorf("terraform %q is blocked for security reasons", cmd)
+		if cmd == "init" && strings.EqualFold(strings.TrimSpace(os.Getenv("KUBEWISE_ALLOW_TERRAFORM_INIT")), "true") {
+			// allowed explicitly
+		} else {
+			return fmt.Errorf("terraform %q is blocked for security reasons", cmd)
+		}
 	}
 
 	if _, found := allowedTerraformSubcommands[cmd]; !found {

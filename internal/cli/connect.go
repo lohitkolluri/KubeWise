@@ -16,9 +16,9 @@ func init() {
 var connectCmd = &cobra.Command{
 	Use:   "connect",
 	Short: "Verify agent connectivity",
-	Long: `Ping the agent health and status endpoints. Use this after port-forwarding:
+	Long: `Ping the agent health and status endpoints. Connect first:
 
-  kubectl -n kubewise port-forward svc/kubewise 8080:8080
+  kwctl up
   kwctl connect`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		url := resolveAgentURL()

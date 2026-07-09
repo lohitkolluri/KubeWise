@@ -14,33 +14,37 @@ func newKubeClient() (*k8s.Client, error) {
 	return k8s.NewFromKubeconfigContext(kubeconfig, contextName)
 }
 
+func agentDeploymentCandidates() []string {
+	candidates := []string{
+		"kubewise",
+		"kubewise-agent",
+		agentSvc,
+		strings.TrimSuffix(agentSvc, "-agent"),
+		strings.TrimSuffix(agentSvc, "-service"),
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 func findAgentPod(ctx context.Context) (podName string, err error) {
 	kc, err := newKubeClient()
 	if err != nil {
 		return "", err
 	}
-	pod, err := kc.FindRunningPod(ctx, agentNS, agentSvc)
-	if err == nil {
-		return pod.Name, nil
+	pod, err := kc.FindRunningAgentPod(ctx, agentNS, agentDeploymentCandidates())
+	if err != nil {
+		return "", err
 	}
-	// If the service name doesn't match pod prefix (e.g. Helm chart vs raw manifest naming),
-	// try common alternatives like stripping "-agent" / "-service" suffix or the release name.
-	altPrefixes := []string{
-		strings.TrimSuffix(agentSvc, "-agent"),
-		strings.TrimSuffix(agentSvc, "-service"),
-		agentSvc + "-agent",
-		agentSvc + "-service",
-	}
-	for _, pfx := range altPrefixes {
-		if pfx == agentSvc {
-			continue
-		}
-		pod, altErr := kc.FindRunningPod(ctx, agentNS, pfx)
-		if altErr == nil {
-			return pod.Name, nil
-		}
-	}
-	return "", err
+	return pod.Name, nil
 }
 
 func fetchAgentLogs(tail int64) (string, error) {
@@ -84,12 +88,18 @@ func restartAgentDeployment() error {
 	if err != nil {
 		return err
 	}
-	// Deployment name often matches service name without suffix
-	depName := agentSvc
-	if err := kc.RolloutRestart(ctx, agentNS, depName); err != nil {
-		return fmt.Errorf("restart %s/%s: %w", agentNS, depName, err)
+	var lastErr error
+	for _, depName := range agentDeploymentCandidates() {
+		if err := kc.RolloutRestart(ctx, agentNS, depName); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
 	}
-	return nil
+	if lastErr != nil {
+		return fmt.Errorf("restart agent deployment: %w", lastErr)
+	}
+	return fmt.Errorf("restart agent deployment: not found")
 }
 
 func formatConfigSummary(cfg *models.AgentConfig) string {

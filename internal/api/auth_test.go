@@ -103,3 +103,26 @@ func TestSecureCompare(t *testing.T) {
 		t.Fatal("expected false for empty got")
 	}
 }
+
+func TestCORSOriginForRequest(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+
+	if got := corsOriginForRequest("*", req); got != "*" {
+		t.Fatalf("wildcard: got %q", got)
+	}
+	if got := corsOriginForRequest("http://localhost:3000,http://127.0.0.1:3000", req); got != "http://localhost:3000" {
+		t.Fatalf("allowlist match: got %q", got)
+	}
+	req.Header.Set("Origin", "http://evil.example")
+	if got := corsOriginForRequest("http://localhost:3000", req); got != "" {
+		t.Fatalf("unexpected origin for disallowed host: %q", got)
+	}
+	if got := corsOriginForRequest("*", req); got != "*" {
+		t.Fatalf("wildcard: got %q", got)
+	}
+	req.Header.Del("Origin")
+	if got := corsOriginForRequest("http://localhost:3000", req); got != "http://localhost:3000" {
+		t.Fatalf("single configured origin without request Origin: got %q", got)
+	}
+}

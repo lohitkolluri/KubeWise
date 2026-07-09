@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -192,7 +193,8 @@ func (s *Store) CompactEvents(retention time.Duration) (int, error) {
 			return nil
 		}
 
-		var toDelete []string
+		var eventIDs []string
+		var indexKeys [][]byte
 		c := idx.Cursor()
 		for k, _ := c.Last(); k != nil; k, _ = c.Prev() {
 			parts := splitEventIndexKey(string(k))
@@ -202,6 +204,7 @@ func (s *Store) CompactEvents(retention time.Duration) (int, error) {
 			id := parts[1]
 			data := b.Get([]byte(id))
 			if data == nil {
+				indexKeys = append(indexKeys, append([]byte(nil), k...))
 				continue
 			}
 			var e StoredEvent
@@ -209,26 +212,30 @@ func (s *Store) CompactEvents(retention time.Duration) (int, error) {
 				continue
 			}
 			if e.LastSeen.Before(cutoff) {
-				toDelete = append(toDelete, id)
-				toDelete = append(toDelete, string(k))
+				eventIDs = append(eventIDs, id)
+				indexKeys = append(indexKeys, append([]byte(nil), k...))
 			}
 		}
 
-		for _, key := range toDelete {
-			if len(key) == 64 && len(key) > 17 { // event ID (UUID length check)
-				data := b.Get([]byte(key))
-				if data != nil {
-					var e StoredEvent
-					if json.Unmarshal(data, &e) == nil {
-						_ = b.Delete([]byte("dedup|" + eventDedupKey(e.Namespace, e.InvolvedObject, e.Reason)))
-					}
+		for _, id := range eventIDs {
+			data := b.Get([]byte(id))
+			if data != nil {
+				var e StoredEvent
+				if json.Unmarshal(data, &e) == nil {
+					_ = b.Delete([]byte("dedup|" + eventDedupKey(e.Namespace, e.InvolvedObject, e.Reason)))
 				}
-				_ = b.Delete([]byte(key))
 			}
-			_ = idx.Delete([]byte(key))
+			_ = b.Delete([]byte(id))
 			deleted++
+		}
+		for _, k := range indexKeys {
+			_ = idx.Delete(k)
 		}
 		return nil
 	})
 	return deleted, err
+}
+
+func isEventID(id string) bool {
+	return strings.HasPrefix(id, "evt-")
 }

@@ -171,7 +171,7 @@ func TestStatusWithFakeAgent(t *testing.T) {
 func TestConfigWithFakeAgent(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"scrape_interval":"30s","prometheus_address":"http://localhost:9090","llm_provider":"","llm_model":"","remediation":{"mode":"","dry_run":true,"rate_limit":0,"namespace_denylist":null,"allowlist":null}}`)
+		fmt.Fprintln(w, `{"scrape_interval":"30s","prometheus_address":"http://localhost:9090","loki_url":"http://loki:3100","tempo_url":"http://tempo:3200","llm_provider":"","llm_model":"","remediation":{"mode":"","dry_run":true,"rate_limit":0,"namespace_denylist":null,"allowlist":null}}`)
 	}))
 	defer ts.Close()
 
@@ -185,6 +185,9 @@ func TestConfigWithFakeAgent(t *testing.T) {
 	}
 	if !strings.Contains(output, "30s") {
 		t.Fatalf("expected scrape interval in output, got: %s", output)
+	}
+	if !strings.Contains(output, "loki") && !strings.Contains(output, "Loki") {
+		t.Fatalf("expected loki in output, got: %s", output)
 	}
 }
 

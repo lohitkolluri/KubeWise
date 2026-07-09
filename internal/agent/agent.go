@@ -30,7 +30,7 @@ import (
 const remediationTimeout = 4 * time.Minute
 const maxForecastSeriesPerScrape = 32
 
-const healthComputeInterval = 10 // compute health/accuracy every N scrape cycles
+const healthComputeEvery = 5 * time.Minute
 
 // Agent is the main orchestration loop: collect → detect → gate → store → correlate → remediate.
 type Agent struct {
@@ -53,7 +53,8 @@ type Agent struct {
 	apiAddr            string
 	minScore           float64
 	scrapes            atomic.Int64
-	healthTick         atomic.Int64
+	lastHealthCompute  time.Time
+	healthMu           sync.Mutex
 	anomalySeq         uint64
 	eventSeq           atomic.Uint64
 	stopOnce           sync.Once
@@ -138,7 +139,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		llmRouter = llmrouter.New(llmClient, llmrouter.DefaultRouterConfig())
 	}
 
-	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg, ff, ruleEngine, llmRouter)
+	corr := remediator.NewCorrelator(llmClient, exec, s, remCfg, cfg.LokiURL, cfg.TempoURL, ff, ruleEngine, llmRouter)
 	notifier := notify.New(cfg.Notifications)
 	corr.SetNotifier(notifier)
 
@@ -146,7 +147,10 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	gateCfg.ScrapeInterval = interval
 	ag := gate.NewGate(gateCfg)
 
-	apiSrv := api.NewServer(s, apiAddr)
+	apiSrv, err := api.NewServer(s, apiAddr)
+	if err != nil {
+		return nil, fmt.Errorf("create api server: %w", err)
+	}
 	apiSrv.SetRemediator(corr)
 
 	a := &Agent{
@@ -490,8 +494,13 @@ func (a *Agent) runOnce() {
 		log.Printf("agent[%d]: remediation error: %v", scrapeNum, err)
 	}
 
-	tick := a.healthTick.Add(1)
-	if tick%healthComputeInterval == 0 {
+	a.healthMu.Lock()
+	shouldCompute := a.lastHealthCompute.IsZero() || time.Since(a.lastHealthCompute) >= healthComputeEvery
+	if shouldCompute {
+		a.lastHealthCompute = time.Now()
+	}
+	a.healthMu.Unlock()
+	if shouldCompute {
 		if a.healthComputer != nil {
 			if _, err := a.healthComputer.ComputeAll(); err != nil {
 				log.Printf("agent[%d]: health compute error: %v", scrapeNum, err)

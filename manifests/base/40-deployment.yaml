@@ -66,7 +66,7 @@ spec:
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: kubewise-agent-secret
+                  name: kubewise-secret
                   key: openrouter_api_key
                   optional: true
             - name: OLLAMA_BASE_URL
@@ -74,11 +74,25 @@ spec:
             - name: KUBEWISE_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: kubewise-agent-secret
+                  name: kubewise-secret
                   key: api_token
                   optional: true
             - name: KUBEWISE_ALLOW_UNAUTH
-              value: "true"
+              value: 'false'
+            - name: KUBEWISE_FEATURE_RULE_ENGINE
+              value: 'true'
+            - name: KUBEWISE_FEATURE_CONTEXT_BUILDER
+              value: 'true'
+            - name: KUBEWISE_FEATURE_LLM_ROUTER
+              value: 'true'
+            - name: KUBEWISE_FEATURE_SEMANTIC_CACHE
+              value: 'true'
+            - name: KUBEWISE_FEATURE_EVENTS_V2
+              value: 'true'
+            - name: KUBEWISE_FEATURE_TOOL_PLUGINS
+              value: 'true'
+            - name: KUBEWISE_FEATURE_OBSERVABILITY
+              value: 'true'
           resources:
             requests:
               cpu: 100m

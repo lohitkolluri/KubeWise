@@ -1,6 +1,7 @@
 package remediator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -72,5 +73,51 @@ func TestNormalizePlan_ValidatesAfterNormalize(t *testing.T) {
 	normalizePlan(&plan, anomalies)
 	if err := c.validatePlan(plan, anomalies); err != nil {
 		t.Fatalf("expected validation pass after normalize: %v", err)
+	}
+}
+
+func TestEscalateForIncompletePatch(t *testing.T) {
+	plan := models.RemediationPlan{
+		Action: models.Action{
+			Type:      "patch_resources",
+			Namespace: "monitoring",
+			Target:    "prometheus",
+			Rationale: "increase memory",
+		},
+		Steps: []models.RunbookStep{{
+			Order:     1,
+			Type:      "patch_resources",
+			Namespace: "monitoring",
+			Target:    "prometheus",
+			Rationale: "increase memory",
+		}},
+		Diagnosis: models.Diagnosis{Confidence: 0.79, RootCause: "OOM risk"},
+	}
+	if !isIncompletePatchPlan(plan) {
+		t.Fatal("expected incomplete patch plan")
+	}
+	escalateForIncompletePatch(&plan)
+	if plan.Action.Type != "escalate" {
+		t.Fatalf("expected escalate, got %q", plan.Action.Type)
+	}
+	if !strings.Contains(plan.Action.Rationale, incompletePatchEscalatePrefix) {
+		t.Fatalf("expected operator guidance, got %q", plan.Action.Rationale)
+	}
+	if plan.Steps[0].Type != "escalate" {
+		t.Fatalf("expected escalated runbook step, got %q", plan.Steps[0].Type)
+	}
+}
+
+func TestIsIncompletePatchPlan_LegacyNoopDemotion(t *testing.T) {
+	plan := models.RemediationPlan{
+		Action: models.Action{
+			Type:      "noop",
+			Namespace: "monitoring",
+			Target:    "prometheus",
+			Rationale: "demoted from patch_resources: missing resource parameters",
+		},
+	}
+	if !isIncompletePatchPlan(plan) {
+		t.Fatal("expected legacy noop demotion to be treated as incomplete patch")
 	}
 }

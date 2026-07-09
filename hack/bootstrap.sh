@@ -161,7 +161,7 @@ install_via_helm() {
   helm "${helm_args[@]}"
 
   log "waiting for agent rollout"
-  kubectl -n "${NAMESPACE}" rollout status deployment/kubewise-agent --timeout=180s
+  kubectl -n "${NAMESPACE}" rollout status deployment/kubewise --timeout=180s
 }
 
 remote_cluster_install() {
@@ -182,7 +182,7 @@ apply_secret() {
     log "no OPENROUTER_API_KEY — observe-only mode (dry-run remediation)"
     return 0
   fi
-  local args=(create secret generic kubewise-agent-secret -n "${NAMESPACE}" --dry-run=client -o yaml)
+  local args=(create secret generic kubewise-secret -n "${NAMESPACE}" --dry-run=client -o yaml)
   [[ -n "${key}" ]] && args+=(--from-literal=openrouter_api_key="${key}")
   [[ -n "${tok}" ]] && args+=(--from-literal=api_token="${tok}")
   kubectl "${args[@]}" | kubectl apply -f -
@@ -207,7 +207,21 @@ patch_prometheus_if_found() {
     return 0
   fi
   log "patching Prometheus URL: ${url}"
-  kubectl -n "${NAMESPACE}" get configmap kubewise-agent-config -o yaml | \
+  # ConfigMap name differs between install modes:
+  # - Manifests: kubewise-agent-config
+  # - Helm:      kubewise-config (chart fullname + "-config")
+  local cm=""
+  for name in kubewise-agent-config kubewise-config; do
+    if kubectl -n "${NAMESPACE}" get configmap "${name}" >/dev/null 2>&1; then
+      cm="${name}"
+      break
+    fi
+  done
+  if [[ -z "${cm}" ]]; then
+    warn "configmap not found (expected kubewise-agent-config or kubewise-config) — skipping Prometheus patch"
+    return 0
+  fi
+  kubectl -n "${NAMESPACE}" get configmap "${cm}" -o yaml | \
     sed "s|prometheus_address:.*|prometheus_address: ${url}|" | \
     kubectl apply -f -
 }
@@ -240,7 +254,9 @@ print_done() {
 
   Or verify: kwctl connect
 
-  (Manual port-forward: kubectl -n ${NAMESPACE} port-forward svc/kubewise-agent 8080:8080)
+  Manual port-forward (fallback):
+    - Helm install:      kubectl -n ${NAMESPACE} port-forward svc/kubewise 8080:8080
+    - Manifests install: kubectl -n ${NAMESPACE} port-forward svc/kubewise-agent 8080:8080
 
 EOF
 }

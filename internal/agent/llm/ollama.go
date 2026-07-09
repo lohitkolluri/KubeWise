@@ -67,9 +67,14 @@ func (p *OllamaProvider) ValidateKey(ctx context.Context) error {
 }
 
 func (p *OllamaProvider) StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error {
+	_, err := p.StructuredOutputWithUsage(ctx, systemPrompt, userContent, schema, respPtr)
+	return err
+}
+
+func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	var schemaMap map[string]any
 	if err := json.Unmarshal(schema, &schemaMap); err != nil {
-		return fmt.Errorf("parse schema: %w", err)
+		return Usage{}, fmt.Errorf("parse schema: %w", err)
 	}
 
 	payload := map[string]any{
@@ -86,51 +91,57 @@ func (p *OllamaProvider) StructuredOutput(ctx context.Context, systemPrompt, use
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return Usage{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/api/chat", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	p.setAuth(req)
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("ollama chat: %w", err)
+		return Usage{}, fmt.Errorf("ollama chat: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return err
+		return Usage{}, err
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("ollama chat: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return Usage{}, fmt.Errorf("ollama chat: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	var chatResp struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		PromptEvalCount int64 `json:"prompt_eval_count"`
+		EvalCount       int64 `json:"eval_count"`
 	}
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return fmt.Errorf("parse ollama response: %w", err)
+		return Usage{}, fmt.Errorf("parse ollama response: %w", err)
 	}
 	content := strings.TrimSpace(chatResp.Message.Content)
 	if content == "" {
-		return fmt.Errorf("ollama: empty message content")
+		return Usage{}, fmt.Errorf("ollama: empty message content")
 	}
 	if err := json.Unmarshal([]byte(content), respPtr); err != nil {
 		if jsonBody := extractJSONObject(content); jsonBody != "" {
 			if err2 := json.Unmarshal([]byte(jsonBody), respPtr); err2 == nil {
-				return nil
+				return Usage{InputTokens: chatResp.PromptEvalCount, OutputTokens: chatResp.EvalCount}, nil
 			}
 		}
-		return fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
+		return Usage{}, fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
 	}
-	return nil
+	usage := Usage{InputTokens: chatResp.PromptEvalCount, OutputTokens: chatResp.EvalCount}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		usage = estimateUsage(systemPrompt, userContent, respPtr)
+	}
+	return usage, nil
 }
 
 func (p *OllamaProvider) setAuth(req *http.Request) {

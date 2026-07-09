@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -129,6 +130,106 @@ func (c *Client) FindRunningPod(ctx context.Context, namespace, namePrefix strin
 		}
 	}
 	return nil, fmt.Errorf("no running pod with prefix %q in namespace %s", namePrefix, namespace)
+}
+
+// FindRunningPodForDeployment returns a Running pod owned by the deployment's label selector.
+func (c *Client) FindRunningPodForDeployment(ctx context.Context, namespace, deploymentName string) (*corev1.Pod, error) {
+	dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get deployment %q: %w", deploymentName, err)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
+	if err != nil {
+		return nil, fmt.Errorf("deployment selector: %w", err)
+	}
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list pods: %w", err)
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase == corev1.PodRunning {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("no running pod for deployment %q in namespace %s", deploymentName, namespace)
+}
+
+// FindRunningAgentPod tries deployment-based lookup first, then safe name-prefix fallbacks.
+func (c *Client) FindRunningAgentPod(ctx context.Context, namespace string, deploymentCandidates []string) (*corev1.Pod, error) {
+	seen := map[string]bool{}
+	for _, dep := range deploymentCandidates {
+		dep = strings.TrimSpace(dep)
+		if dep == "" || seen[dep] {
+			continue
+		}
+		seen[dep] = true
+		pod, err := c.FindRunningPodForDeployment(ctx, namespace, dep)
+		if err == nil {
+			return pod, nil
+		}
+	}
+
+	pods, err := c.GetPods(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		if isAgentPodCandidate(p.Name, deploymentCandidates) && podHasContainer(p, "agent") {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("no running agent pod in namespace %s (tried deployments: %s)", namespace, strings.Join(keysOf(seen), ", "))
+}
+
+func isAgentPodCandidate(name string, deploymentCandidates []string) bool {
+	for _, dep := range deploymentCandidates {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		if strings.HasPrefix(name, dep+"-") && !isObservabilityPod(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func isObservabilityPod(name string) bool {
+	switch {
+	case strings.HasPrefix(name, "kubewise-loki"):
+		return true
+	case strings.HasPrefix(name, "kubewise-tempo"):
+		return true
+	case strings.HasPrefix(name, "loki-"):
+		return true
+	default:
+		return false
+	}
+}
+
+func podHasContainer(pod *corev1.Pod, container string) bool {
+	for _, c := range pod.Spec.Containers {
+		if c.Name == container {
+			return true
+		}
+	}
+	return false
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // GetPodLogs returns the tail of logs from a pod container.

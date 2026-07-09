@@ -50,3 +50,20 @@ func TestAssignTierPlan_UsesHighestStep(t *testing.T) {
 		t.Fatalf("expected T2 from rollback step, got %s", tier)
 	}
 }
+
+func TestGateByTier_T4KnownAction_NotRejected(t *testing.T) {
+	c := &Correlator{tierAssigner: NewTierAssigner(0)}
+	plan := models.RemediationPlan{
+		Diagnosis: models.Diagnosis{Confidence: 0.9, RootCause: "test", Severity: "critical"},
+		Action:    models.Action{Type: "restart_pod", Namespace: "default", Target: "pod-1", Rationale: "test"},
+		Risk:      models.Risk{BlastRadius: "cluster", Reversible: true, EstimatedTimeToResolve: "1m"},
+	}
+	// restart_pod is known, but blast radius=cluster promotes to T4.
+	tier := c.tierAssigner.AssignTierPlan(plan)
+	if tier != models.RiskTier4 {
+		t.Fatalf("expected T4, got %s", tier)
+	}
+	if reason := c.gateByTierPlan(tier, plan); reason != "" {
+		t.Fatalf("expected T4 known action to not be rejected, got reason=%q", reason)
+	}
+}

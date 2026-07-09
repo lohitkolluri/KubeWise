@@ -1,0 +1,46 @@
+name: Bug report
+description: Something isn't working
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please **don’t include secrets** (API keys, tokens, kubeconfigs).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+      placeholder: Tell us what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste relevant logs (redact secrets). For CLI: `kwctl doctor` and `kwctl logs -f`.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `kwctl version` and chart version (if applicable).
+      placeholder: kwctl vX.Y.Z, chart vX.Y.Z
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Cluster type (kind/eks/gke/aks), k8s version, OS.
+      placeholder: kind on macOS, Kubernetes v1.xx, etc.
+

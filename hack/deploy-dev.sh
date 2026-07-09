@@ -24,5 +24,5 @@ kind_load_images "${AGENT_IMAGE}" "${FCST_IMAGE}"
 kubectl_apply_manifests "${OVERLAY}"
 rollout_agent
 
-log "done — try: ${BIN_DIR}/kwctl status (after port-forward)"
-log "port-forward: kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080"
+log "done — try: ${BIN_DIR}/kwctl up && ${BIN_DIR}/kwctl ui"
+log "manual port-forward (manifests): kubectl -n kubewise port-forward svc/kubewise-agent 8080:8080"

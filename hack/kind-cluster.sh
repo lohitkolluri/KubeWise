@@ -9,6 +9,7 @@ source "${SCRIPT_DIR}/../scripts/lib.sh"
 KIND_CLUSTER="${KIND_CLUSTER:-kubewise}"
 PROMETHEUS_NAMESPACE="${PROMETHEUS_NAMESPACE:-monitoring}"
 OVERLAY="${OVERLAY:-dev}"
+INSTALL_PROMETHEUS="${INSTALL_PROMETHEUS:-true}"
 
 require_cmd kind kubectl helm
 
@@ -25,14 +26,18 @@ nodes:
 EOF
 fi
 
-log "installing kube-prometheus-stack"
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
-helm repo update
-helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
-  --namespace "${PROMETHEUS_NAMESPACE}" \
-  --create-namespace \
-  --wait \
-  --timeout 10m
+if [[ "${INSTALL_PROMETHEUS}" == "true" ]]; then
+  log "installing kube-prometheus-stack"
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo update
+  helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+    --namespace "${PROMETHEUS_NAMESPACE}" \
+    --create-namespace \
+    --wait \
+    --timeout 10m
+else
+  warn "skipping kube-prometheus-stack (INSTALL_PROMETHEUS=${INSTALL_PROMETHEUS})"
+fi
 
 kubectl_apply_manifests "${OVERLAY}"
 kubectl -n "${KUBEWISE_NAMESPACE:-kubewise}" wait --for=condition=Available deployment/kubewise-agent --timeout=180s

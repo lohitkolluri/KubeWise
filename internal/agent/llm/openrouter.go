@@ -120,13 +120,18 @@ func (p *OpenRouterProvider) ValidateKey(ctx context.Context) error {
 }
 
 func (p *OpenRouterProvider) StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error {
+	_, err := p.StructuredOutputWithUsage(ctx, systemPrompt, userContent, schema, respPtr)
+	return err
+}
+
+func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	if p.sdk == nil {
-		return fmt.Errorf("openrouter client not configured")
+		return Usage{}, fmt.Errorf("openrouter client not configured")
 	}
 
 	var schemaMap map[string]any
 	if err := json.Unmarshal(schema, &schemaMap); err != nil {
-		return fmt.Errorf("parse schema: %w", err)
+		return Usage{}, fmt.Errorf("parse schema: %w", err)
 	}
 
 	var lastErr error
@@ -141,22 +146,22 @@ func (p *OpenRouterProvider) StructuredOutput(ctx context.Context, systemPrompt,
 				Schema: schemaMap,
 			},
 		})
-		err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
+		usage, err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
 		if err == nil {
 			if i > 0 {
 				log.Printf("llm: openrouter fallback model %s succeeded", model)
 			}
-			return nil
+			return usage, nil
 		}
 		lastErr = err
 		if !isRetryableOpenRouterError(err) {
-			return err
+			return Usage{}, err
 		}
 		if i < len(chain)-1 {
 			log.Printf("llm: openrouter model %s failed (%v), trying fallback", model, err)
 		}
 	}
-	return lastErr
+	return Usage{}, lastErr
 }
 
 func (p *OpenRouterProvider) structuredOutputWithModel(
@@ -165,7 +170,7 @@ func (p *OpenRouterProvider) structuredOutputWithModel(
 	systemPrompt, userContent string,
 	responseFormat components.ResponseFormat,
 	respPtr interface{},
-) error {
+) (Usage, error) {
 	maxTok := maxTokensForModel(model)
 	res, err := p.sdk.Chat.Send(ctx, components.ChatRequest{
 		Model:          openrouter.Pointer(model),
@@ -184,17 +189,37 @@ func (p *OpenRouterProvider) structuredOutputWithModel(
 		},
 	}, nil)
 	if err != nil {
-		return fmt.Errorf("chat completion: %w", err)
+		return Usage{}, fmt.Errorf("chat completion: %w", err)
 	}
 
 	content, err := extractMessageContent(res)
 	if err != nil {
-		return err
+		return Usage{}, err
 	}
 	if err := json.Unmarshal([]byte(content), respPtr); err != nil {
-		return fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
+		return Usage{}, fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
 	}
-	return nil
+	return usageFromChatResult(res), nil
+}
+
+func usageFromChatResult(res *operations.SendChatCompletionRequestResponse) Usage {
+	if res == nil || res.ChatResult == nil {
+		return Usage{}
+	}
+	u := res.ChatResult.GetUsage()
+	if u == nil {
+		return Usage{}
+	}
+	usage := Usage{
+		InputTokens:  u.GetPromptTokens(),
+		OutputTokens: u.GetCompletionTokens(),
+	}
+	if details, ok := u.GetPromptTokensDetails().Get(); ok && details != nil {
+		if cached := details.GetCachedTokens(); cached != nil {
+			usage.CachedTokens = *cached
+		}
+	}
+	return usage
 }
 
 func isRetryableOpenRouterError(err error) bool {

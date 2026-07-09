@@ -5,13 +5,8 @@ import (
 )
 
 // DefaultModel is the primary OpenRouter model for remediation.
-// Preference: avoid :free tier models due to rate limits.
-const DefaultModel = ModelGPTOSS
-
-// Paid OpenRouter models.
-const (
-	ModelGPTOSS = "openai/gpt-oss-120b"
-)
+// Default to the RCA-optimized deepseek tier.
+const DefaultModel = RCAModel
 
 // Tier-specific model constants for the LLM router (Phase 1.5).
 // These are the recommended production model IDs as of July 2026.
@@ -27,7 +22,7 @@ const (
 	RemediationModel = "qwen/qwen3-coder"
 
 	// T4: universal fallback when all other tiers fail.
-	FallbackModel = "openai/gpt-oss-120b"
+	FallbackModel = "deepseek/deepseek-v4-flash"
 )
 
 // Free OpenRouter models (zero cost, rate-limited). Good for local dev with rich prompts.
@@ -37,12 +32,11 @@ const (
 )
 
 // DevDefaultModel is the recommended model for kind/local dev.
-// (User preference: use non-:free GPT-OSS for reliability.)
-const DevDefaultModel = ModelGPTOSS
+const DevDefaultModel = RCAModel
 
 // FallbackModels are tried when the primary model times out or returns retryable errors.
 var FallbackModels = []string{
-	ModelGPTOSS,
+	RCAModel,
 }
 
 // IsFreeModel reports OpenRouter :free tier models (relaxed JSON schema, higher token budget).

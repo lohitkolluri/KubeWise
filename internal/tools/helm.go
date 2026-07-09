@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -50,7 +51,7 @@ var blockedHelmSubcommands = map[string]bool{
 
 var (
 	validHelmRelease  = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$`)
-	validHelmChart    = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*://)?[a-zA-Z0-9]([a-zA-Z0-9\-_.\/]*[a-zA-Z0-9])?$`)
+	validHelmChartRef = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-_.\/]*[a-zA-Z0-9])?$`)
 	validHelmRevision = regexp.MustCompile(`^[1-9][0-9]*$`)
 )
 
@@ -142,11 +143,21 @@ func (p *HelmPlugin) Validate(action models.ToolAction) error {
 	}
 
 	if chart := action.Args["chart"]; chart != "" {
-		if !validHelmChart.MatchString(chart) {
-			return fmt.Errorf("invalid chart reference: %q", chart)
+		if err := validateHelmChartRef(chart); err != nil {
+			return err
 		}
 	}
 
+	return validateToolArgKeys(action.Args, helmPositionalArgs, helmAllowedFlags(cmd), blockedHelmFlags)
+}
+
+func validateHelmChartRef(chart string) error {
+	if strings.Contains(chart, "://") {
+		return fmt.Errorf("remote chart URLs are not permitted: %q", chart)
+	}
+	if !validHelmChartRef.MatchString(chart) {
+		return fmt.Errorf("invalid chart reference: %q", chart)
+	}
 	return nil
 }
 
@@ -217,16 +228,7 @@ func (p *HelmPlugin) buildArgs(action models.ToolAction) []string {
 	}
 
 	// Add remaining args as --key=value or --key value
-	for key, value := range action.Args {
-		switch key {
-		case "namespace", "release", "chart", "revision":
-			continue
-		default:
-			if value != "" {
-				args = append(args, "--"+key, value)
-			}
-		}
-	}
+	args = appendAllowedToolFlags(args, action.Args, helmPositionalArgs, helmAllowedFlags(action.Command))
 
 	return args
 }
