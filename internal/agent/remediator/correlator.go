@@ -2,11 +2,12 @@ package remediator
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"log"
-	"math/rand/v2"
+	"log/slog"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -154,19 +155,19 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 	if c.llmClient == nil || !c.llmClient.HasAPIKey() {
-		log.Printf("remediator: skipping — LLM client unavailable or no API key")
+		slog.Error("remediator: skipping — LLM client unavailable or no API key")
 		return nil
 	}
 	if cfg.RateLimit > 0 && len(correlatable) > cfg.RateLimit {
 		correlatable = correlatable[:cfg.RateLimit]
 	}
 
-	log.Printf("remediator: analyzing %d anomaly(s)", len(correlatable))
+	slog.Info("remediator: analyzing anomalies", "count", len(correlatable))
 
 	// Prune expired cache entries before any cache operations.
 	if c.featureFlags.SemanticCache && c.semCache != nil {
 		if removed := c.semCache.Prune(); removed > 0 {
-			log.Printf("remediator: pruned %d expired cache entries", removed)
+			slog.Info("remediator: pruned expired cache entries", "count", removed)
 		}
 	}
 
@@ -175,7 +176,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if c.featureFlags.RuleEngine && c.ruleEngine != nil {
 		match, err := c.evaluateRules(ctx, cfg, correlatable)
 		if err != nil {
-			log.Printf("remediator: rule engine error: %v", err)
+			slog.Error("remediator: rule engine error", "error", err)
 		}
 		if match {
 			return nil // short-circuited via rule engine path (audited inside)
@@ -188,7 +189,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if c.featureFlags.SemanticCache && c.semCache != nil {
 		if entry := c.lookupCachedPlan(correlatable); entry != nil {
 			cachedPlan = entry
-			log.Printf("remediator: semantic cache hit — reusing cached plan")
+			slog.Info("remediator: semantic cache hit — reusing cached plan")
 		}
 	}
 
@@ -209,7 +210,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 			investigation = c.investigator.Gather(invCtx, correlatable)
 			invCancel()
 			if investigation != "" {
-				log.Printf("remediator: gathered cluster investigation context (%d bytes)", len(investigation))
+				slog.Info("remediator: gathered cluster investigation context", "bytes", len(investigation))
 			}
 		}
 
@@ -286,7 +287,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 			// with new context / different plan).
 			c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
 			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
-			log.Printf("remediator: plan validation failed: %v", err)
+			slog.Error("remediator: plan validation failed", "error", err)
 			return nil
 		}
 	}
@@ -296,7 +297,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
 			c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
 			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
-			log.Printf("remediator: plan validation failed: %v", err)
+			slog.Error("remediator: plan validation failed", "error", err)
 			return nil
 		}
 	}
@@ -308,8 +309,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 
 	tier := c.tierAssigner.AssignTierPlan(plan)
 	steps := plan.EffectiveSteps()
-	log.Printf("remediator: plan steps=%d primary=%s target=%s/%s tier=%s confidence=%.2f",
-		len(steps), plan.Action.Type, plan.Action.Namespace, plan.Action.Target, tier, plan.Diagnosis.Confidence)
+	slog.Info("remediator: plan", "steps", len(steps), "action", plan.Action.Type, "target", plan.Action.Namespace+"/"+plan.Action.Target, "tier", tier, "confidence", plan.Diagnosis.Confidence)
 
 	matched := c.anomaliesMatchingPlan(correlatable, plan)
 
@@ -317,7 +317,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if reason != "" {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, reason, userPrompt, "")
 		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
-		log.Printf("remediator: rejected - %s", reason)
+		slog.Warn("remediator: rejected", "reason", reason)
 		return nil
 	}
 
@@ -328,7 +328,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 			escalateReason = "escalated to human operator"
 		}
 		c.logAudit(&plan, matched, tier, models.AuditEscalated, escalateReason, userPrompt, "")
-		log.Printf("remediator: escalated %s/%s to human operator: %s", plan.Action.Namespace, plan.Action.Target, escalateReason)
+		slog.Warn("remediator: escalated to human operator", "namespace", plan.Action.Namespace, "target", plan.Action.Target, "reason", escalateReason)
 		return nil
 	}
 
@@ -337,17 +337,17 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		msg := "awaiting human approval (" + string(tier) + ")"
 		if cfg.DryRun {
 			msg = "dry-run: would require human approval (" + string(tier) + ")"
-			log.Printf("remediator: [dry-run] %s %s %s/%s — needs approval when live", tier, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+			slog.Info("remediator: dry-run needs approval when live", "tier", tier, "action", plan.Action.Type, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 			c.logAudit(&plan, matched, tier, models.AuditDryRun, msg, userPrompt, "")
 			return nil
 		}
 		c.logAudit(&plan, matched, tier, models.AuditPending, msg, userPrompt, "")
-		log.Printf("remediator: pending approval %s %s %s/%s", tier, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+		slog.Info("remediator: pending approval", "tier", tier, "action", plan.Action.Type, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		return nil
 	}
 
 	if cfg.DryRun {
-		log.Printf("remediator: [dry-run] would execute %d-step runbook on %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
+		slog.Info("remediator: dry-run would execute runbook", "steps", len(steps), "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode", userPrompt, c.dryRunSummary(plan))
 		return nil
@@ -356,7 +356,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	if c.executor == nil {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, "k8s executor unavailable", userPrompt, "")
 		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
-		log.Printf("remediator: rejected - k8s executor unavailable")
+		slog.Error("remediator: rejected - k8s executor unavailable")
 		return nil
 	}
 
@@ -414,7 +414,7 @@ func (c *Correlator) logAuditVerified(plan *models.RemediationPlan, anomalies []
 		VerifiedAt:       verifiedAt,
 	}
 	if err := c.store.SaveAuditRecord(record); err != nil {
-		log.Printf("remediator: failed to save audit record: %v", err)
+		slog.Error("remediator: failed to save audit record", "error", err)
 		return
 	}
 	c.emitAuditNotification(record)
@@ -500,7 +500,7 @@ func (c *Correlator) evaluateRules(ctx context.Context, cfg RemediationConfig, c
 			}
 		}
 		if rr.NeedsLLM {
-			log.Printf("remediator: rule %s matched but needs LLM — falling through to LLM path", rr.RuleName)
+			slog.Info("remediator: rule matched but needs LLM", "rule", rr.RuleName)
 		}
 	}
 	return processed, nil
@@ -511,47 +511,44 @@ func (c *Correlator) evaluateRules(ctx context.Context, cfg RemediationConfig, c
 // All safety gates apply: tier assignments, cooldowns, T3 approval, dry-run.
 func (c *Correlator) processRuleResult(ctx context.Context, cfg RemediationConfig, plan models.RemediationPlan, rr engine.RuleResult, correlatable []models.AnomalyRecord) bool {
 	if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
-		log.Printf("remediator: rule %s plan validation failed: %v", rr.RuleName, err)
+		slog.Error("remediator: rule plan validation failed", "rule", rr.RuleName, "error", err)
 		return false
 	}
 	tier := c.tierAssigner.AssignTierPlan(plan)
 	matched := c.anomaliesMatchingPlan(correlatable, plan)
 
-	log.Printf("remediator: rule %s action=%s target=%s/%s tier=%s confidence=%.2f",
-		rr.RuleName, plan.Action.Type, plan.Action.Namespace, plan.Action.Target, tier, plan.Diagnosis.Confidence)
+	slog.Info("remediator: rule result", "rule", rr.RuleName, "action", plan.Action.Type, "target", plan.Action.Namespace+"/"+plan.Action.Target, "tier", tier, "confidence", plan.Diagnosis.Confidence)
 
 	reason := c.gateByTierPlan(tier, plan)
 	if reason != "" {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, reason, "rule_engine:"+rr.RuleName, "")
 		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
-		log.Printf("remediator: rule %s rejected — %s", rr.RuleName, reason)
+		slog.Warn("remediator: rule rejected", "rule", rr.RuleName, "reason", reason)
 		return false
 	}
 
 	if tier == models.RiskTier3 {
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		if cfg.DryRun {
-			log.Printf("remediator: [dry-run] rule %s T3 %s %s/%s — needs approval when live",
-				rr.RuleName, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+			slog.Info("remediator: dry-run rule T3 needs approval when live", "rule", rr.RuleName, "action", plan.Action.Type, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 			c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run T3 (rule engine)", "rule_engine:"+rr.RuleName, "")
 			return true
 		}
 		c.logAudit(&plan, matched, tier, models.AuditPending,
 			"awaiting human approval (T3, rule engine)", "rule_engine:"+rr.RuleName, "")
-		log.Printf("remediator: rule %s T3 %s %s/%s — pending approval",
-			rr.RuleName, plan.Action.Type, plan.Action.Namespace, plan.Action.Target)
+		slog.Info("remediator: rule T3 pending approval", "rule", rr.RuleName, "action", plan.Action.Type, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		return true
 	}
 
 	if plan.Action.Type == "escalate" {
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		c.logAudit(&plan, matched, tier, models.AuditEscalated, "escalated to human operator (rule engine)", "rule_engine:"+rr.RuleName, "")
-		log.Printf("remediator: rule %s escalated %s/%s to human operator", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
+		slog.Warn("remediator: rule escalated to human operator", "rule", rr.RuleName, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		return true
 	}
 
 	if cfg.DryRun {
-		log.Printf("remediator: [dry-run] rule %s would execute %s/%s", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
+		slog.Info("remediator: dry-run rule would execute", "rule", rr.RuleName, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		c.logAudit(&plan, matched, tier, models.AuditDryRun, "dry-run mode (rule engine)", "rule_engine:"+rr.RuleName, c.dryRunSummary(plan))
 		return true
@@ -560,15 +557,15 @@ func (c *Correlator) processRuleResult(ctx context.Context, cfg RemediationConfi
 	if c.executor == nil {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, "k8s executor unavailable", "rule_engine:"+rr.RuleName, "")
 		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
-		log.Printf("remediator: rule %s rejected — k8s executor unavailable", rr.RuleName)
+		slog.Error("remediator: rule rejected — k8s executor unavailable", "rule", rr.RuleName)
 		return false
 	}
 
 	if err := c.executePlanAndVerify(ctx, plan, tier, matched, "rule_engine:"+rr.RuleName, ""); err != nil {
-		log.Printf("remediator: rule %s execution failed: %v", rr.RuleName, err)
+		slog.Error("remediator: rule execution failed", "rule", rr.RuleName, "error", err)
 		return false
 	}
-	log.Printf("remediator: rule %s executed %s/%s", rr.RuleName, plan.Action.Namespace, plan.Action.Target)
+	slog.Info("remediator: rule executed", "rule", rr.RuleName, "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 	return true
 }
 
@@ -605,7 +602,7 @@ func (c *Correlator) markAnomalyStatus(records []models.AnomalyRecord, status st
 			records[i].RemediatedAt = remediatedAt
 		}
 		if err := c.store.UpdateAnomaly(&records[i]); err != nil {
-			log.Printf("remediator: update anomaly %s status=%s: %v", records[i].ID, status, err)
+			slog.Error("remediator: update anomaly status", "id", records[i].ID, "status", status, "error", err)
 		}
 	}
 }
@@ -731,7 +728,7 @@ func (c *Correlator) logAudit(plan *models.RemediationPlan, anomalies []models.A
 	}
 
 	if err := c.store.SaveAuditRecord(record); err != nil {
-		log.Printf("remediator: failed to save audit record: %v", err)
+		slog.Error("remediator: failed to save audit record", "error", err)
 		return
 	}
 	c.emitAuditNotification(record)
@@ -741,7 +738,12 @@ func shortID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 12)
 	for i := range b {
-		b[i] = chars[rand.IntN(len(chars))]
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			b[i] = chars[i%len(chars)]
+			continue
+		}
+		b[i] = chars[n.Int64()]
 	}
 	now := time.Now().UnixMilli()
 	return fmt.Sprintf("%x-%s", now, string(b))
@@ -789,7 +791,7 @@ func (c *Correlator) lookupCachedPlan(anomalies []models.AnomalyRecord) *models.
 	}
 	var plan models.RemediationPlan
 	if err := json.Unmarshal([]byte(entry.PlanJSON), &plan); err != nil {
-		log.Printf("remediator: semcache deserialize error: %v", err)
+		slog.Error("remediator: semcache deserialize error", "error", err)
 		return nil
 	}
 	return &plan
@@ -803,7 +805,7 @@ func (c *Correlator) storeCachedPlan(anomalies []models.AnomalyRecord, plan mode
 	}
 	data, err := json.Marshal(plan)
 	if err != nil {
-		log.Printf("remediator: semcache serialize error: %v", err)
+		slog.Error("remediator: semcache serialize error", "error", err)
 		return
 	}
 	c.semCache.Set(fp, string(data))

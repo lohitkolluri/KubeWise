@@ -3,7 +3,7 @@ package remediator
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -45,12 +45,12 @@ func (c *Correlator) executePlanAndVerify(
 	if verifyNote == "" {
 		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
 		c.logAuditVerified(&plan, matched, tier, auditReason, prompt, result, verifyNote, &now)
-		log.Printf("remediator: executed and verified %d-step runbook %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
+		slog.Info("remediator: executed and verified runbook", "steps", len(steps), "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		return nil
 	}
 
 	c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
 	c.logAudit(&plan, matched, tier, models.AuditVerifyFailed, verifyNote, prompt, result)
-	log.Printf("remediator: executed runbook but verification failed: %s", verifyNote)
+		slog.Warn("remediator: executed runbook but verification failed", "note", verifyNote)
 	return nil
 }

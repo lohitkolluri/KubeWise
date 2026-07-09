@@ -3,7 +3,7 @@ package remediator
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -110,7 +110,7 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 			return err
 		}
 		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
-		log.Printf("remediator: approved, executed & verified %d-step runbook %s/%s", len(steps), plan.Action.Namespace, plan.Action.Target)
+		slog.Info("remediator: approved, executed and verified runbook", "steps", len(steps), "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 		return nil
 	}
 
@@ -122,7 +122,7 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 		return err
 	}
 	c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
-	log.Printf("remediator: approved & executed but verification failed: %s", verifyNote)
+	slog.Warn("remediator: approved and executed but verification failed", "note", verifyNote)
 	return nil
 }
 
@@ -186,7 +186,7 @@ func (c *Correlator) SetLiveMode(live bool) {
 	if c.executor != nil {
 		c.executor.SetDryRun(c.cfg.DryRun)
 	}
-	log.Printf("remediator: live mode=%v (mode=%s dry_run=%v)", live, c.cfg.Mode, c.cfg.DryRun)
+	slog.Info("remediator: live mode set", "live", live, "mode", c.cfg.Mode, "dry_run", c.cfg.DryRun)
 }
 
 // UpdateRemediationConfig applies runtime config and syncs the executor dry-run flag.
@@ -200,5 +200,5 @@ func (c *Correlator) UpdateRemediationConfig(cfg RemediationConfig) {
 	if c.executor != nil {
 		c.executor.SetDryRun(cfg.DryRun)
 	}
-	log.Printf("remediator: config updated mode=%s dry_run=%v", cfg.Mode, cfg.DryRun)
+	slog.Info("remediator: config updated", "mode", cfg.Mode, "dry_run", cfg.DryRun)
 }

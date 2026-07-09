@@ -3,7 +3,7 @@ package remediator
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -38,7 +38,7 @@ func (e *K8sExecutor) ExecuteRunbook(ctx context.Context, plan models.Remediatio
 				results = append(results, "[dry-run] would "+msg)
 				continue
 			}
-			log.Printf("remediator: %s", msg)
+			slog.Info("remediator: wait step", "msg", msg)
 			select {
 			case <-ctx.Done():
 				return strings.Join(results, "; "), ctx.Err()
