@@ -3,7 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -61,7 +61,7 @@ func Init() (*Runtime, error) {
 				_ = s.Close()
 				return nil, fmt.Errorf("save seeded config: %w", err)
 			}
-			log.Printf("seeded config from %s", configPath)
+			slog.Info("seeded config from", "path", configPath)
 		} else {
 			cfg = existing
 		}
@@ -169,7 +169,7 @@ func buildRemediationConfig(cfg *models.AgentConfig) remediator.RemediationConfi
 		}
 	default:
 		if !models.ValidRemediationMode(cfg.Remediation.Mode) {
-			log.Printf("agent: unknown remediation mode %q, defaulting to dry-run", cfg.Remediation.Mode)
+			slog.Warn("unknown remediation mode", "mode", cfg.Remediation.Mode)
 			cfg.Remediation.Mode = models.RemediationModeDryRun
 			cfg.Remediation.DryRun = true
 		}
@@ -213,13 +213,13 @@ func validateLLM(llmCfg llm.Config) {
 		defer cancel()
 		client, err := llm.NewClient(llmCfg)
 		if err != nil {
-			log.Printf("agent: warning: llm client: %v", err)
+			slog.Error("llm client error", "error", err)
 			return
 		}
 		if err := client.ValidateKey(checkCtx); err != nil {
-			log.Printf("agent: warning: LLM key validation failed: %v", err)
+			slog.Error("LLM key validation failed", "error", err)
 		} else {
-			log.Printf("agent: LLM provider %s validated", client.ProviderName())
+			slog.Info("LLM provider validated", "provider", client.ProviderName())
 		}
 		return
 	}
@@ -228,20 +228,20 @@ func validateLLM(llmCfg llm.Config) {
 		defer cancel()
 		client, err := llm.NewClient(llmCfg)
 		if err != nil {
-			log.Printf("agent: warning: ollama client: %v", err)
+			slog.Error("ollama client error", "error", err)
 			return
 		}
 		if err := client.ValidateKey(checkCtx); err != nil {
-			log.Printf("agent: warning: ollama unreachable: %v", err)
+			slog.Error("ollama unreachable", "error", err)
 		} else {
-			log.Printf("agent: ollama at %s ready", llmCfg.BaseURL)
+			slog.Info("ollama ready", "url", llmCfg.BaseURL)
 		}
 	}
 }
 
 func validateAPIAuth() error {
 	if strings.TrimSpace(os.Getenv("KUBEWISE_API_TOKEN")) == "" {
-		log.Printf("agent: WARNING: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
+		slog.Warn("agent: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
 	}
 	if os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" && strings.TrimSpace(os.Getenv("KUBEWISE_API_TOKEN")) == "" {
 		return fmt.Errorf("KUBEWISE_REQUIRE_API_TOKEN is set but KUBEWISE_API_TOKEN is empty — refusing to start")

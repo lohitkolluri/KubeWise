@@ -1,7 +1,7 @@
 package predictor
 
 import (
-	"log"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -353,9 +353,14 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 		}
 	}
 	if loggedKeys > 0 {
-		log.Printf("predictor: keys=%d warmup=%d scoring=%d above_min=%.2f=%d below_min=%.2f=%d max_score=%.3f(%s)",
-			loggedKeys, warmup, loggedKeys-warmup, p.config.MinScore, aboveThreshold,
-			p.config.MinScore, belowThreshold, maxScore, maxKey)
+		slog.Info("predictor: scoring stats",
+			"keys", loggedKeys,
+			"warmup", warmup,
+			"scoring", loggedKeys-warmup,
+			"above_min", aboveThreshold,
+			"below_min", belowThreshold,
+			"max_score", maxScore,
+			"max_key", maxKey)
 	}
 
 	return results, nil

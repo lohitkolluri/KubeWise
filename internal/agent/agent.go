@@ -3,7 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,7 +74,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		apiAddr = ":8080"
 	}
 	if remCfg.Mode == "auto" && remCfg.DryRun {
-		log.Printf("agent: warning: remediation mode=auto with dry_run=true — actions will not execute")
+		slog.Warn("agent: remediation mode=auto with dry_run=true — actions will not execute")
 	}
 
 	col, err := collector.NewPrometheusCollector(cfg.PrometheusAddress, s, cfg.WatchNamespaces)
@@ -85,7 +86,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	if forecasterAddr != "" {
 		fcast, err = forecaster.NewClient(forecasterAddr, 30*time.Second)
 		if err != nil {
-			log.Printf("agent: forecaster sidecar unavailable (%s): %v", forecasterAddr, err)
+			slog.Warn("agent: forecaster sidecar unavailable", "addr", forecasterAddr, "error", err)
 			fcast = nil
 		}
 	}
@@ -105,7 +106,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 
 	exec, err := remediator.NewK8sExecutor(remCfg.DryRun)
 	if err != nil {
-		log.Printf("agent: k8s executor unavailable (not in-cluster?): %v", err)
+		slog.Warn("agent: k8s executor unavailable (not in-cluster?)", "error", err)
 		exec = nil
 	}
 
@@ -131,7 +132,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 	engine.MustRegister(ruleEngine, &engine.ReadyRatioRule{})
 	engine.MustRegister(ruleEngine, &engine.CPUThrottleRule{})
 	engine.MustRegister(ruleEngine, &engine.MemoryPressureRule{})
-	log.Printf("agent: registered %d rules", ruleEngine.RuleCount())
+	slog.Info("agent: registered rules", "count", ruleEngine.RuleCount())
 
 	// Create LLM router for multi-model dispatch (gated by feature flag).
 	var llmRouter *llmrouter.LLMRouter
@@ -183,9 +184,9 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		a.k8sCancel = k8sCancel
 		go a.resourcesCollector.Run(k8sCtx)
 		go a.watchK8sEvents(k8sCtx)
-		log.Printf("agent: k8s collectors started")
+		slog.Info("agent: k8s collectors started")
 	} else {
-		log.Printf("agent: k8s collectors unavailable: %v", kerr)
+		slog.Warn("agent: k8s collectors unavailable", "error", kerr)
 	}
 
 	return a, nil
@@ -212,7 +213,7 @@ func (a *Agent) watchK8sEvents(ctx context.Context) {
 			Count:          record.Count,
 		}
 		if err := a.store.SaveEvent(se); err != nil {
-			log.Printf("agent: save event: %v", err)
+			slog.Error("agent: save event", "error", err)
 		}
 	}
 }
@@ -228,8 +229,7 @@ func (a *Agent) persistEventAnomaly(record collector.EventRecord) {
 
 	result := a.anomalyGate.Filter(entity, "k8s_event", score, "event", now)
 	if !result.Pass {
-		log.Printf("agent: gate dropped k8s event entity=%s event=%s reason=%s",
-			entity, record.Reason, result.Reason)
+		slog.Warn("agent: gate dropped k8s event", "entity", entity, "event", record.Reason, "reason", result.Reason)
 		return
 	}
 
@@ -244,38 +244,38 @@ func (a *Agent) persistEventAnomaly(record collector.EventRecord) {
 		DetectedAt: &now,
 	}
 	if _, err := a.store.UpsertOpenAnomaly(anomaly); err != nil {
-		log.Printf("agent: save event anomaly: %v", err)
+		slog.Error("agent: save event anomaly", "error", err)
 	}
 }
 
 // Run starts the agent loop and API server. Blocks until Stop is called.
 func (a *Agent) Run() error {
 	go func() {
-		log.Printf("agent: API server listening on %s", a.apiAddr)
+		slog.Info("agent: API server listening", "addr", a.apiAddr)
 		if err := a.apiServer.Serve(); err != nil {
-			log.Printf("agent: api server error: %v", err)
+			slog.Error("agent: api server error", "error", err)
 		}
 	}()
 
 	if a.resourcesCollector != nil {
 		if a.resourcesCollector.WaitForSync() {
-			log.Printf("agent: resource informers synced")
+			slog.Info("agent: resource informers synced")
 		} else {
-			log.Printf("agent: warning: resource informers not synced before first scrape")
+			slog.Warn("agent: resource informers not synced before first scrape")
 		}
 	}
 
 	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
 
-	log.Printf("agent: started, scrape interval %s", a.interval)
+		slog.Info("agent: started", "interval", a.interval.String())
 
 	for {
 		select {
 		case <-ticker.C:
 			a.runOnceSafe()
 		case <-a.stopCh:
-			log.Println("agent: stopping")
+			slog.Info("agent: stopping")
 			return nil
 		}
 	}
@@ -285,7 +285,7 @@ func (a *Agent) Run() error {
 func (a *Agent) runOnceSafe() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("agent: recovered panic in scrape cycle: %v", r)
+			slog.Error("agent: recovered panic in scrape cycle", "panic", r, "stack", string(debug.Stack()))
 		}
 	}()
 	a.runOnce()
@@ -302,13 +302,13 @@ func (a *Agent) Stop() {
 		}
 		if a.forecaster != nil {
 			if err := a.forecaster.Close(); err != nil {
-				log.Printf("agent: forecaster close error: %v", err)
+				slog.Error("agent: forecaster close error", "error", err)
 			}
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("agent: api shutdown error: %v", err)
+			slog.Error("agent: api shutdown error", "error", err)
 		}
 		close(a.stopCh)
 	})
@@ -359,8 +359,7 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 
 	result := a.anomalyGate.Filter(entity, p.MetricName, p.Score, p.Type, now)
 	if !result.Pass {
-		log.Printf("agent[%d]: gate dropped %s anomaly entity=%s score=%.2f reason=%s",
-			scrapeNum, p.Type, entity, p.Score, result.Reason)
+		slog.Warn("agent: gate dropped anomaly", "scrape_num", scrapeNum, "type", p.Type, "entity", entity, "score", p.Score, "reason", result.Reason)
 		return
 	}
 
@@ -380,7 +379,7 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 		DetectedAt: &now,
 	}
 	if _, err := a.store.UpsertOpenAnomaly(anomaly); err != nil {
-		log.Printf("agent[%d]: save anomaly: %v", scrapeNum, err)
+		slog.Error("agent: save anomaly", "scrape_num", scrapeNum, "error", err)
 	}
 }
 
@@ -400,16 +399,16 @@ func (a *Agent) runOnce() {
 	metrics, err := a.collector.CollectMetrics(scrapeCtx)
 	if len(metrics) == 0 {
 		if err != nil {
-			log.Printf("agent[%d]: collect failed: %v", scrapeNum, err)
+			slog.Error("agent: collect failed", "scrape_num", scrapeNum, "error", err)
 		} else {
-			log.Printf("agent[%d]: no metrics collected, skipping scrape", scrapeNum)
+			slog.Warn("agent: no metrics collected, skipping scrape", "scrape_num", scrapeNum)
 		}
 		return
 	}
 	if err != nil {
-		log.Printf("agent[%d]: partial collect error: %v", scrapeNum, err)
+		slog.Warn("agent: partial collect error", "scrape_num", scrapeNum, "error", err)
 	}
-	log.Printf("agent[%d]: collected %d metrics", scrapeNum, len(metrics))
+	slog.Info("agent: collected metrics", "scrape_num", scrapeNum, "count", len(metrics))
 
 	a.apiServer.IncrementScrapes()
 	a.anomalyGate.PruneStale(time.Now(), 24*time.Hour)
@@ -418,7 +417,7 @@ func (a *Agent) runOnce() {
 
 	predictions, err := a.predictor.Run(predMetrics)
 	if err != nil {
-		log.Printf("agent[%d]: predict error: %v", scrapeNum, err)
+		slog.Error("agent: predict error", "scrape_num", scrapeNum, "error", err)
 	}
 
 	now := time.Now()
@@ -432,7 +431,7 @@ func (a *Agent) runOnce() {
 
 	events, err := a.store.ListAnomalies(20)
 	if err != nil {
-		log.Printf("agent[%d]: list anomalies error: %v — skipping pattern pass", scrapeNum, err)
+		slog.Error("agent: list anomalies error, skipping pattern pass", "scrape_num", scrapeNum, "error", err)
 	} else {
 		enrichedMetrics := a.predictor.PreparePatternMetrics(predMetrics)
 		resources := a.buildResourceSnapshot()
@@ -460,17 +459,16 @@ func (a *Agent) runOnce() {
 	// explicitly resolved.
 	if len(allPredictions) > 0 {
 		if err := a.store.SaveLatestPredictions(allPredictions); err != nil {
-			log.Printf("agent[%d]: save predictions: %v", scrapeNum, err)
+			slog.Error("agent: save predictions", "scrape_num", scrapeNum, "error", err)
 		}
 	} else if len(predictions) == 0 && patternCount == 0 {
 		// No new predictions this cycle — keep existing ones from previous cycles.
-		log.Printf("agent[%d]: no new predictions — preserving existing stored predictions", scrapeNum)
+		slog.Info("agent: no new predictions, preserving existing", "scrape_num", scrapeNum)
 	}
 
 	gateStats := a.anomalyGate.StatsSnapshot()
 	a.apiServer.SetGateStats(gateStats)
-	log.Printf("agent[%d]: predictions=%d patterns=%d gate_passed=%d gate_dropped=%d",
-		scrapeNum, len(predictions), patternCount, gateStats.Passed, gateStats.Dropped)
+	slog.Info("agent: scrape stats", "scrape_num", scrapeNum, "predictions", len(predictions), "patterns", patternCount, "gate_passed", gateStats.Passed, "gate_dropped", gateStats.Dropped)
 
 	if a.outcomeTracker != nil {
 		a.outcomeTracker.VerifyPending(a.buildResourceSnapshot(), now)
@@ -491,7 +489,7 @@ func (a *Agent) runOnce() {
 	remCtx, remCancel := context.WithTimeout(a.runCtx, remediationTimeout)
 	defer remCancel()
 	if err := a.correlator.RunOnce(remCtx); err != nil {
-		log.Printf("agent[%d]: remediation error: %v", scrapeNum, err)
+		slog.Error("agent: remediation error", "scrape_num", scrapeNum, "error", err)
 	}
 
 	a.healthMu.Lock()
@@ -503,11 +501,11 @@ func (a *Agent) runOnce() {
 	if shouldCompute {
 		if a.healthComputer != nil {
 			if _, err := a.healthComputer.ComputeAll(); err != nil {
-				log.Printf("agent[%d]: health compute error: %v", scrapeNum, err)
+				slog.Error("agent: health compute error", "scrape_num", scrapeNum, "error", err)
 			}
 			if a.accuracyComputer != nil {
 				if _, err := a.accuracyComputer.ComputeSnapshot(7 * 24 * time.Hour); err != nil {
-					log.Printf("agent[%d]: accuracy compute error: %v", scrapeNum, err)
+					slog.Error("agent: accuracy compute error", "scrape_num", scrapeNum, "error", err)
 				}
 			}
 		}
@@ -518,7 +516,7 @@ func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
 	// Instant PromQL returns cross-sectional snapshots — forecast per stored time series instead.
 	names, err := a.store.ListMetricNames()
 	if err != nil {
-		log.Printf("agent[%d]: forecast list metrics: %v", scrapeNum, err)
+		slog.Error("agent: forecast list metrics", "scrape_num", scrapeNum, "error", err)
 		return
 	}
 	forecasted := 0
@@ -558,17 +556,16 @@ func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
 			})
 			if err != nil {
 				if !benignForecastError(err.Error()) {
-					log.Printf("agent[%d]: forecast error for %s: %v", scrapeNum, metricName, err)
+					slog.Error("agent: forecast error", "scrape_num", scrapeNum, "metric", metricName, "error", err)
 				}
 				continue
 			}
 			if resp.Status == "ok" && len(resp.Points) > 0 {
 				forecasted++
 				last := resp.Points[len(resp.Points)-1]
-				log.Printf("agent[%d]: forecast %s -> %d points (last: %.2f [%.2f, %.2f])",
-					scrapeNum, metricName, len(resp.Points), last.Value, last.LowerBound, last.UpperBound)
+				slog.Info("agent: forecast result", "scrape_num", scrapeNum, "metric", metricName, "points", len(resp.Points), "last_value", last.Value, "last_lower", last.LowerBound, "last_upper", last.UpperBound)
 			} else if resp.Status != "ok" && !benignForecastError(resp.ErrorMessage) {
-				log.Printf("agent[%d]: forecast error for %s: %s", scrapeNum, metricName, resp.ErrorMessage)
+				slog.Error("agent: forecast error", "scrape_num", scrapeNum, "metric", metricName, "error_msg", resp.ErrorMessage)
 			}
 		}
 	}

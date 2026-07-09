@@ -6,7 +6,7 @@ package forecaster
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"google.golang.org/grpc"
@@ -152,6 +152,6 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	if resp.Status != "ok" {
 		return fmt.Errorf("forecaster healthcheck: %s", resp.ErrorMessage)
 	}
-	log.Printf("forecaster: sidecar at %s is healthy", c.address)
+	slog.Info("forecaster: sidecar healthy", "address", c.address)
 	return nil
 }
