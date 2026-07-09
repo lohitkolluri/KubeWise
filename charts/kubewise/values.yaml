@@ -33,8 +33,10 @@ service:
   port: 8080
 
 persistence:
-  enabled: false
-  size: 2Gi
+  # WARNING: Disabling persistence causes data loss on pod restart.
+  # All anomaly history, predictions, audit trail, and health scores are lost.
+  enabled: true
+  size: 10Gi
   storageClass: ''
 
 agent:
@@ -167,17 +169,8 @@ loki:
     auth_enabled: false
     analytics:
       reporting_enabled: false
-  singleBinary:
-    replicas: 0
-    persistence:
-      size: 10Gi
-    resources:
-      requests:
-        cpu: 200m
-        memory: 256Mi
-      limits:
-        cpu: '1'
-        memory: 1Gi
+    # NOTE: Monolithic mode is used — no singleBinary replicas needed.
+    # The singleBinary section is intentionally removed in favor of deploymentMode: Monolithic.
 
 # -- Tempo subchart values (used when agent.observability.tempo.enabled=true)
 tempo:
