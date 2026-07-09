@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
@@ -71,14 +71,15 @@ func (r *LLMRouter) Route(ctx context.Context, task TaskType, input LLMInput) (*
 			resp.Duration = duration
 			r.costTracker.RecordUsage(model, resp.InputTokens, resp.OutputTokens, resp.CachedTokens)
 			if i > 0 {
-				log.Printf("llmrouter: task=%s succeeded on fallback model=%s (after %d failures, took %v)",
-					task, model, i, duration)
+				slog.Info("llmrouter: task succeeded on fallback model",
+					"task", task, "model", model, "failures", i, "duration", duration)
 			}
 			return resp, nil
 		}
 
 		lastErr = err
-		log.Printf("llmrouter: task=%s model=%s failed: %v (took %v)", task, model, err, duration)
+		slog.Error("llmrouter: task model failed",
+			"task", task, "model", model, "error", err, "duration", duration)
 
 		if isNonRetryable(err) {
 			return nil, fmt.Errorf("llmrouter: non-retryable error on %s: %w", model, err)

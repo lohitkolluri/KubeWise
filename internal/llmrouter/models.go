@@ -7,7 +7,7 @@
 package llmrouter
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -197,7 +197,10 @@ func (ct *CostTracker) LogFallbacks() {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 	for _, f := range ct.fallbacks {
-		log.Printf("llmrouter: fallback task=%s model=%s -> %s (%s)",
-			f.Task, f.Model, f.FallbackTo, f.Reason)
+		slog.Info("llmrouter: fallback",
+			"task", f.Task,
+			"model", f.Model,
+			"fallback_to", f.FallbackTo,
+			"reason", f.Reason)
 	}
 }

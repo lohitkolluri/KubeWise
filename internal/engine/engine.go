@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"sync"
 )
@@ -45,7 +45,7 @@ func (re *RuleEngine) Evaluate(ctx context.Context, input EngineInput) ([]RuleRe
 
 		matches, err := rule.Evaluate(ctx, input)
 		if err != nil {
-			log.Printf("engine: rule %q error: %v", rule.Name(), err)
+			slog.Error("engine: rule error", "rule", rule.Name(), "error", err)
 			continue
 		}
 		results = append(results, matches...)

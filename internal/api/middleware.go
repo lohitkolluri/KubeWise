@@ -3,10 +3,11 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,10 @@ const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
 // Default is no CORS header (safer for localhost port-forward).
 const defaultCORSOrigin = ""
+
+// Rate limiting defaults.
+const rateLimitPerMinute = 60
+const rateLimitBurst = 10
 
 var securityHeaders = map[string]string{
 	"X-Content-Type-Options": "nosniff",
@@ -26,6 +31,72 @@ type middlewareConfig struct {
 	apiToken     string
 	corsOrigin   string
 	requireToken bool
+	rateLimiter  *rateLimiter
+}
+
+func (c middlewareConfig) rateLimitOrDefault() *rateLimiter {
+	if c.rateLimiter != nil {
+		return c.rateLimiter
+	}
+	return newRateLimiter(rateLimitPerMinute, rateLimitBurst)
+}
+
+// rateLimiter is a per-IP token bucket for API rate limiting.
+type rateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	rate    int
+	burst   int
+	lastGC  time.Time
+}
+
+type bucket struct {
+	tokens   float64
+	lastFill time.Time
+}
+
+func newRateLimiter(rate, burst int) *rateLimiter {
+	return &rateLimiter{
+		buckets: make(map[string]*bucket),
+		rate:    rate,
+		burst:   burst,
+		lastGC:  time.Now(),
+	}
+}
+
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	// GC stale entries every 5 minutes.
+	if time.Since(rl.lastGC) > 5*time.Minute {
+		for k, b := range rl.buckets {
+			if time.Since(b.lastFill) > 10*time.Minute {
+				delete(rl.buckets, k)
+			}
+		}
+		rl.lastGC = time.Now()
+	}
+
+	now := time.Now()
+	b, ok := rl.buckets[ip]
+	if !ok {
+		b = &bucket{tokens: float64(rl.burst), lastFill: now}
+		rl.buckets[ip] = b
+	}
+
+	elapsed := now.Sub(b.lastFill).Seconds()
+	b.tokens += elapsed * float64(rl.rate)
+	if b.tokens > float64(rl.burst) {
+		b.tokens = float64(rl.burst)
+	}
+	b.lastFill = now
+
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
 }
 
 func publicPath(path string) bool {
@@ -58,6 +129,19 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 			return
 		}
 
+		// Rate limit by IP (skip for health/readiness probes).
+		if !publicPath(r.URL.Path) {
+			ip := r.RemoteAddr
+			if idx := strings.LastIndex(ip, ":"); idx >= 0 {
+				ip = ip[:idx]
+			}
+			if !cfg.rateLimitOrDefault().allow(ip) {
+				w.Header().Set("Retry-After", "1")
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
+		}
+
 		needAuth := !publicPath(r.URL.Path) && (cfg.requireToken || cfg.apiToken != "")
 		if needAuth {
 			if cfg.apiToken == "" {
@@ -74,7 +158,7 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 		start := time.Now()
 		lw := &logWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(lw, r)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, lw.status, time.Since(start))
+		slog.Info("api: request", "method", r.Method, "path", r.URL.Path, "status", lw.status, "duration", time.Since(start))
 	})
 }
 
@@ -125,7 +209,7 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("api: json encode error: %v", err)
+		slog.Error("api: json encode error", "error", err)
 	}
 }
 
