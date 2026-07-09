@@ -3,6 +3,7 @@ version: '2'
 run:
   timeout: 5m
   tests: true
+  issues-exit-code: 1
 
 linters:
   enable:
@@ -13,6 +14,11 @@ linters:
     - unused
     - misspell
     - bodyclose
+    - gosec
+    - gocritic
+    - revive
+    - prealloc
+    - errorlint
   exclusions:
     rules:
       - path: _test\.go
