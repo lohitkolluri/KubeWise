@@ -1,7 +1,7 @@
 package outcome
 
 import (
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
@@ -24,12 +24,16 @@ func NewAccuracyComputer(s *store.Store) *AccuracyComputer {
 func (ac *AccuracyComputer) ComputeSnapshot(window time.Duration) (*models.AccuracySnapshot, error) {
 	snap, err := ac.store.ComputeAccuracySnapshot(window)
 	if err != nil {
-		log.Printf("accuracy: compute snapshot error: %v", err)
+		slog.Error("accuracy: compute snapshot error", "error", err)
 		return nil, err
 	}
-	log.Printf("accuracy: snapshot computed for window=%s overall="+
-		"precision=%.3f recall=%.3f f1=%.3f predictors=%d namespaces=%d metrics=%d",
-		window, snap.Overall.Precision, snap.Overall.Recall, snap.Overall.F1Score,
-		len(snap.ByPredictor), len(snap.ByNamespace), len(snap.ByMetric))
+	slog.Info("accuracy: snapshot computed",
+		"window", window,
+		"precision", snap.Overall.Precision,
+		"recall", snap.Overall.Recall,
+		"f1", snap.Overall.F1Score,
+		"predictors", len(snap.ByPredictor),
+		"namespaces", len(snap.ByNamespace),
+		"metrics", len(snap.ByMetric))
 	return snap, nil
 }

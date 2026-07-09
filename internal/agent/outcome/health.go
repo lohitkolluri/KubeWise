@@ -2,7 +2,7 @@ package outcome
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"time"
 
@@ -88,7 +88,7 @@ func (hc *HealthComputer) ComputeAll() ([]models.HealthScore, error) {
 
 	for _, hs := range scores {
 		if err := hc.store.SaveHealthScore(hs); err != nil {
-			log.Printf("health: save score for %s/%s: %v", hs.Namespace, hs.Entity, err)
+			slog.Error("health: save score failed", "namespace", hs.Namespace, "entity", hs.Entity, "error", err)
 		}
 	}
 

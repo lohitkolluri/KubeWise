@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -18,10 +18,11 @@ import (
 
 // OpenRouterProvider sends structured requests via the OpenRouter API.
 type OpenRouterProvider struct {
-	sdk       *openrouter.OpenRouter
-	apiKey    string
-	model     string
-	sessionID string
+	sdk            *openrouter.OpenRouter
+	apiKey         string
+	model          string
+	sessionID      string
+	circuitBreaker *CircuitBreaker
 }
 
 // NewOpenRouterProvider creates an OpenRouter backend.
@@ -31,6 +32,9 @@ func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
 		model = DefaultModel
 	}
 	var sdk *openrouter.OpenRouter
+	p := &OpenRouterProvider{
+		circuitBreaker: newCircuitBreaker(3, 30*time.Second),
+	}
 	if apiKey != "" {
 		baseOpts := []openrouter.SDKOption{
 			openrouter.WithSecurity(apiKey),
@@ -51,12 +55,15 @@ func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
 			sdk = openrouter.New(append(baseOpts,
 				openrouter.WithClient(httpClient),
 			)...)
-			return &OpenRouterProvider{sdk: sdk, apiKey: apiKey, model: model, sessionID: sessionID}
+			return &OpenRouterProvider{sdk: sdk, apiKey: apiKey, model: model, sessionID: sessionID, circuitBreaker: p.circuitBreaker}
 		}
 
 		sdk = openrouter.New(baseOpts...)
 	}
-	return &OpenRouterProvider{sdk: sdk, apiKey: apiKey, model: model}
+	p.sdk = sdk
+	p.apiKey = apiKey
+	p.model = model
+	return p
 }
 
 // sessionIDTransport injects the x-session-id header for OpenRouter prompt caching.
@@ -129,6 +136,10 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 		return Usage{}, fmt.Errorf("openrouter client not configured")
 	}
 
+	if !p.circuitBreaker.Allow() {
+		return Usage{}, fmt.Errorf("openrouter circuit breaker open")
+	}
+
 	var schemaMap map[string]any
 	if err := json.Unmarshal(schema, &schemaMap); err != nil {
 		return Usage{}, fmt.Errorf("parse schema: %w", err)
@@ -148,19 +159,22 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 		})
 		usage, err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
 		if err == nil {
+			p.circuitBreaker.Success()
 			if i > 0 {
-				log.Printf("llm: openrouter fallback model %s succeeded", model)
+				slog.Info("llm: openrouter fallback model succeeded", "model", model)
 			}
 			return usage, nil
 		}
 		lastErr = err
 		if !isRetryableOpenRouterError(err) {
+			p.circuitBreaker.Failure()
 			return Usage{}, err
 		}
 		if i < len(chain)-1 {
-			log.Printf("llm: openrouter model %s failed (%v), trying fallback", model, err)
+			slog.Warn("llm: openrouter model failed, trying fallback", "model", model, "error", err)
 		}
 	}
+	p.circuitBreaker.Failure()
 	return Usage{}, lastErr
 }
 
