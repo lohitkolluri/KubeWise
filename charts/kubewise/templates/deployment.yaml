@@ -81,6 +81,8 @@ spec:
                   optional: true
             - name: KUBEWISE_REQUIRE_API_TOKEN
               value: {{ .Values.security.requireApiToken | quote }}
+            - name: KUBEWISE_ALLOW_UNAUTH
+              value: {{ (not .Values.security.requireApiToken) | quote }}
             - name: KUBEWISE_FEATURE_RULE_ENGINE
               value: {{ .Values.agent.features.ruleEngine | quote }}
             - name: KUBEWISE_FEATURE_CONTEXT_BUILDER

@@ -4,8 +4,8 @@ namespace:
   create: true
   name: kubewise
 
-nameOverride: ""
-fullnameOverride: ""
+nameOverride: ''
+fullnameOverride: ''
 
 image:
   agent:
@@ -35,14 +35,14 @@ service:
 persistence:
   enabled: false
   size: 2Gi
-  storageClass: ""
+  storageClass: ''
 
 agent:
   scrapeInterval: 30s
   prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
   llmProvider: openrouter
   llmModel: openai/gpt-oss-120b
-  llmBaseURL: ""
+  llmBaseURL: ''
   # Empty = watch all namespaces (subject to denylist). Non-empty limits observation scope.
   watchNamespaces: []
   remediation:
@@ -72,26 +72,26 @@ agent:
       persistence:
         enabled: false
         size: 10Gi
-        storageClass: ""
+        storageClass: ''
       resources:
         requests:
           cpu: 200m
           memory: 256Mi
         limits:
-          cpu: "1"
+          cpu: '1'
           memory: 1Gi
     tempo:
       enabled: false
       persistence:
         enabled: false
         size: 10Gi
-        storageClass: ""
+        storageClass: ''
       resources:
         requests:
           cpu: 200m
           memory: 256Mi
         limits:
-          cpu: "1"
+          cpu: '1'
           memory: 1Gi
     alloy:
       # Grafana Alloy DaemonSet — scrapes pod logs and forwards to Loki.
@@ -114,8 +114,8 @@ agent:
 
   notifications:
     enabled: false
-    webhookURL: ""
-    slackWebhookURL: ""
+    webhookURL: ''
+    slackWebhookURL: ''
     minScore: 0.7
     onPrediction: true
     onRemediation: true
@@ -123,9 +123,9 @@ agent:
 
 secrets:
   # Set via --set secrets.openrouterApiKey=... or existingSecret
-  openrouterApiKey: ""
-  apiToken: ""
-  existingSecret: ""
+  openrouterApiKey: ''
+  apiToken: ''
+  existingSecret: ''
 
 security:
   # When true, agent refuses to start without KUBEWISE_API_TOKEN (fail closed).
@@ -146,7 +146,7 @@ resources:
       cpu: 200m
       memory: 256Mi
     limits:
-      cpu: "1"
+      cpu: '1'
       memory: 512Mi
 
 # -- Loki subchart values (used when agent.observability.loki.enabled=true)
@@ -176,7 +176,7 @@ loki:
         cpu: 200m
         memory: 256Mi
       limits:
-        cpu: "1"
+        cpu: '1'
         memory: 1Gi
 
 # -- Tempo subchart values (used when agent.observability.tempo.enabled=true)
@@ -202,5 +202,5 @@ tempo:
       cpu: 200m
       memory: 256Mi
     limits:
-      cpu: "1"
+      cpu: '1'
       memory: 1Gi

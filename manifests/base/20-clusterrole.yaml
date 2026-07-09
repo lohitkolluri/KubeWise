@@ -7,24 +7,25 @@ metadata:
     app.kubernetes.io/component: agent
 rules:
   # Read-only observability (no Secrets by default).
-  - apiGroups: [""]
+  - apiGroups: ['']
     resources: [pods, pods/status, pods/log, events, services, endpoints, persistentvolumeclaims]
     verbs: [get, list, watch]
-  - apiGroups: ["apps"]
-    resources: [deployments, deployments/status, replicasets, replicasets/status, statefulsets, daemonsets]
+  - apiGroups: ['apps']
+    resources:
+      [deployments, deployments/status, replicasets, replicasets/status, statefulsets, daemonsets]
     verbs: [get, list, watch]
-  - apiGroups: [""]
+  - apiGroups: ['']
     resources: [nodes, nodes/status]
     verbs: [get, list, watch]
   # Remediation writes (scoped to supported actions).
-  - apiGroups: [""]
+  - apiGroups: ['']
     resources: [pods]
     verbs: [delete, patch, update]
-  - apiGroups: ["apps"]
+  - apiGroups: ['apps']
     resources: [deployments]
     verbs: [patch, update]
   # Leader election (HA).
-  - apiGroups: ["coordination.k8s.io"]
+  - apiGroups: ['coordination.k8s.io']
     resources: [leases]
     verbs: [get, list, watch, create, update]
 ---

@@ -77,6 +77,8 @@ spec:
                   name: kubewise-agent-secret
                   key: api_token
                   optional: true
+            - name: KUBEWISE_ALLOW_UNAUTH
+              value: "true"
           resources:
             requests:
               cpu: 100m
