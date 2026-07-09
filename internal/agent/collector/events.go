@@ -2,7 +2,7 @@ package collector
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -97,9 +97,9 @@ func (ec *EventsCollector) WatchEvents(ctx context.Context) <-chan EventRecord {
 	go func() {
 		if cache.WaitForCacheSync(ctx.Done(), ec.informer.HasSynced) {
 			ec.synced = true
-			log.Printf("events: informer cache synced")
+			slog.Info("events: informer cache synced")
 		} else {
-			log.Printf("events: informer cache sync failed")
+			slog.Error("events: informer cache sync failed")
 		}
 		<-ctx.Done()
 		close(ch)
@@ -150,7 +150,7 @@ func (ec *EventsCollector) filterAndSend(obj any, eventType string, ch chan<- Ev
 			<-timer.C
 		}
 	case <-timer.C:
-		log.Printf("events: channel full, timed out sending %s event for %s", record.Reason, record.InvolvedObject)
+		slog.Warn("events: channel full, timed out sending event", "reason", record.Reason, "object", record.InvolvedObject)
 	}
 }
 

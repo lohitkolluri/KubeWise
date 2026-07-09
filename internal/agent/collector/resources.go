@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -138,11 +138,11 @@ func (rc *ResourcesCollector) Run(ctx context.Context) {
 	go rc.depInformer.Run(ctx.Done())
 
 	if !cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced) {
-		log.Printf("resources: informer cache sync timed out, retrying")
+		slog.Warn("resources: informer cache sync timed out, retrying")
 		if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, rc.syncTimeout, true, func(ctx context.Context) (bool, error) {
 			return cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced), nil
 		}); err != nil && err != context.Canceled {
-			log.Printf("resources: informer cache sync failed after retry")
+			slog.Error("resources: informer cache sync failed after retry")
 			return
 		}
 	}

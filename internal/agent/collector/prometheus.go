@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -114,14 +114,14 @@ func (c *PrometheusCollector) CollectMetrics(ctx context.Context) ([]MetricResul
 	for o := range outcomes {
 		if o.err != nil {
 			failCount++
-			log.Printf("prometheus: query %q failed: %v", o.name, o.err)
+			slog.Error("prometheus: query failed", "query", o.name, "error", o.err)
 			continue
 		}
 		filtered := c.filterResult(o.result)
 		results = append(results, filtered)
 		for _, pt := range filtered.Values {
 			if err := c.store.AppendMetricSeries(filtered.Name, pt.Labels, pt.Value, pt.Timestamp); err != nil {
-				log.Printf("store: append metric %q failed: %v", filtered.Name, err)
+				slog.Error("store: append metric failed", "metric", filtered.Name, "error", err)
 			}
 		}
 	}
@@ -172,7 +172,7 @@ func (c *PrometheusCollector) execQuery(ctx context.Context, name, query string)
 		return MetricResult{}, fmt.Errorf("promql query %q: %w", name, err)
 	}
 	if len(warnings) > 0 {
-		log.Printf("prometheus: warnings for %q: %v", name, warnings)
+		slog.Warn("prometheus: query warning", "query", name, "warnings", warnings)
 	}
 
 	switch vec := result.(type) {
