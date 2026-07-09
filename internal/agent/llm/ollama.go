@@ -15,10 +15,11 @@ const defaultOllamaBaseURL = "http://127.0.0.1:11434"
 
 // OllamaProvider calls a local or in-cluster Ollama server.
 type OllamaProvider struct {
-	baseURL    string
-	model      string
-	apiKey     string
-	httpClient *http.Client
+	baseURL        string
+	model          string
+	apiKey         string
+	httpClient     *http.Client
+	circuitBreaker *CircuitBreaker
 }
 
 // NewOllamaProvider creates an Ollama backend for air-gapped / local inference.
@@ -31,9 +32,10 @@ func NewOllamaProvider(baseURL, model, apiKey string) *OllamaProvider {
 		model = "llama3.1:8b"
 	}
 	return &OllamaProvider{
-		baseURL: baseURL,
-		model:   model,
-		apiKey:  strings.TrimSpace(apiKey),
+		baseURL:        baseURL,
+		model:          model,
+		apiKey:         strings.TrimSpace(apiKey),
+		circuitBreaker: newCircuitBreaker(3, 30*time.Second),
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -72,6 +74,10 @@ func (p *OllamaProvider) StructuredOutput(ctx context.Context, systemPrompt, use
 }
 
 func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
+	if !p.circuitBreaker.Allow() {
+		return Usage{}, fmt.Errorf("ollama circuit breaker open")
+	}
+
 	var schemaMap map[string]any
 	if err := json.Unmarshal(schema, &schemaMap); err != nil {
 		return Usage{}, fmt.Errorf("parse schema: %w", err)
@@ -103,15 +109,18 @@ func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPr
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("ollama chat: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, err
 	}
 	if resp.StatusCode >= 400 {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("ollama chat: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
@@ -123,20 +132,25 @@ func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPr
 		EvalCount       int64 `json:"eval_count"`
 	}
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("parse ollama response: %w", err)
 	}
 	content := strings.TrimSpace(chatResp.Message.Content)
 	if content == "" {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("ollama: empty message content")
 	}
 	if err := json.Unmarshal([]byte(content), respPtr); err != nil {
 		if jsonBody := extractJSONObject(content); jsonBody != "" {
 			if err2 := json.Unmarshal([]byte(jsonBody), respPtr); err2 == nil {
+				p.circuitBreaker.Success()
 				return Usage{InputTokens: chatResp.PromptEvalCount, OutputTokens: chatResp.EvalCount}, nil
 			}
 		}
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
 	}
+	p.circuitBreaker.Success()
 	usage := Usage{InputTokens: chatResp.PromptEvalCount, OutputTokens: chatResp.EvalCount}
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		usage = estimateUsage(systemPrompt, userContent, respPtr)

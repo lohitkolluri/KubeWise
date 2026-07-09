@@ -14,10 +14,11 @@ import (
 // OpenAICompatibleProvider implements an OpenAPI/OpenAI-compatible Chat Completions backend.
 // It aims for broad compatibility (OpenAI, vLLM, LM Studio, OpenAI-gateway proxies, etc.).
 type OpenAICompatibleProvider struct {
-	baseURL string
-	apiKey  string
-	model   string
-	client  *http.Client
+	baseURL        string
+	apiKey         string
+	model          string
+	client         *http.Client
+	circuitBreaker *CircuitBreaker
 }
 
 func NewOpenAICompatibleProvider(baseURL, model, apiKey string) *OpenAICompatibleProvider {
@@ -31,10 +32,11 @@ func NewOpenAICompatibleProvider(baseURL, model, apiKey string) *OpenAICompatibl
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	return &OpenAICompatibleProvider{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		model:   model,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		baseURL:        baseURL,
+		apiKey:         apiKey,
+		model:          model,
+		client:         &http.Client{Timeout: 120 * time.Second},
+		circuitBreaker: newCircuitBreaker(3, 30*time.Second),
 	}
 }
 
@@ -112,6 +114,10 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 		return Usage{}, fmt.Errorf("openapi-compatible model is empty")
 	}
 
+	if !p.circuitBreaker.Allow() {
+		return Usage{}, fmt.Errorf("openapi-compatible circuit breaker open")
+	}
+
 	// Broadest compatibility: request JSON object output, and also embed the JSON schema in the system prompt.
 	// Many providers ignore response_format; the prompt constraint is the true enforcement layer.
 	schemaHint := ""
@@ -143,23 +149,28 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("chat completion: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("chat completion failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var out openAIChatResp
 	if err := json.Unmarshal(body, &out); err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("decode response: %w", err)
 	}
 	if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("openapi-compatible: empty message content")
 	}
 
@@ -171,8 +182,10 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 	content = strings.TrimSpace(content)
 
 	if err := json.Unmarshal([]byte(content), respPtr); err != nil {
+		p.circuitBreaker.Failure()
 		return Usage{}, fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
 	}
+	p.circuitBreaker.Success()
 	usage := estimateUsage(systemPrompt, userContent, respPtr)
 	if out.Usage != nil {
 		usage.InputTokens = out.Usage.PromptTokens
