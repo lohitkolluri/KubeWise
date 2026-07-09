@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -64,6 +65,14 @@ func (s *Store) ensureAnomalyIndexes() error {
 		return s.RebuildAnomalyIndexes()
 	}
 	return nil
+}
+
+// Backup writes a consistent snapshot of the bbolt database to w.
+func (s *Store) Backup(w io.Writer) error {
+	return s.db.View(func(tx *bolt.Tx) error {
+		_, err := tx.WriteTo(w)
+		return err
+	})
 }
 
 // Ping verifies the database is readable.

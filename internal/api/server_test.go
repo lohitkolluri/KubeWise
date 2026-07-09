@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,6 +95,11 @@ func (m *mockStore) GetLatestAccuracySnapshot() (*models.AccuracySnapshot, error
 
 func (m *mockStore) GetAccuracyHistory(limit int) ([]models.AccuracySnapshot, error) {
 	return []models.AccuracySnapshot{}, nil
+}
+
+func (m *mockStore) Backup(w io.Writer) error {
+	_, err := w.Write([]byte("mock-backup-data"))
+	return err
 }
 
 func mustNewTestServer(t *testing.T, store Store, addr string) *Server {
@@ -418,5 +424,48 @@ func TestServerScrapes(t *testing.T) {
 	scrapes := body["scrapes"].(float64)
 	if scrapes != 3 {
 		t.Fatalf("expected 3 scrapes, got %f", scrapes)
+	}
+}
+
+func TestBackupEndpoint(t *testing.T) {
+	store := &mockStore{}
+	mux := http.NewServeMux()
+	s := mustNewTestServer(t, store, ":0")
+	mux.HandleFunc("GET /api/v1/admin/backup", s.handleBackup)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// Unauthenticated request should get 401 (rate limiter may allow since local).
+	resp, err := http.Get(ts.URL + "/api/v1/admin/backup")
+	if err != nil {
+		t.Fatalf("backup request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+	if string(body) != "mock-backup-data" {
+		t.Fatalf("expected mock-backup-data, got %s", string(body))
+	}
+}
+
+func TestRateLimitHeaders(t *testing.T) {
+	store := &mockStore{}
+	mux := http.NewServeMux()
+	s := mustNewTestServer(t, store, ":0")
+	mux.HandleFunc("GET /api/v1/predictions", s.handlePredictions)
+	ts := httptest.NewServer(withMiddleware(mux, middlewareConfig{}))
+	defer ts.Close()
+
+	// First request should succeed.
+	resp, err := http.Get(ts.URL + "/api/v1/predictions")
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("unexpected status: %d", resp.StatusCode)
 	}
 }

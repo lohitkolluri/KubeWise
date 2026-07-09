@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -36,6 +37,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/health/summary", s.handleClusterHealthSummary)
 	mux.HandleFunc("GET /api/v1/accuracy", s.handleAccuracyLatest)
 	mux.HandleFunc("GET /api/v1/accuracy/history", s.handleAccuracyHistory)
+	mux.HandleFunc("GET /api/v1/admin/backup", s.handleBackup)
 	s.registerMetrics(mux)
 }
 
@@ -288,4 +290,40 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 		resp["size"] = 0
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if !isLocalRequest(r) && s.apiToken == "" {
+		writeError(w, http.StatusForbidden, "backup requires authentication or local access")
+		return
+	}
+	tmp, err := os.CreateTemp("", "kubewise-backup-*.db")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create temp: %v", err))
+		return
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := s.store.Backup(tmp); err != nil {
+		_ = tmp.Close()
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("backup: %v", err))
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("close temp: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="kubewise-backup-%s.db"`, time.Now().Format("20060102T150405")))
+	http.ServeFile(w, r, tmpPath)
+}
+
+func isLocalRequest(r *http.Request) bool {
+	host := r.RemoteAddr
+	if idx := strings.LastIndex(host, ":"); idx >= 0 {
+		host = host[:idx]
+	}
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -33,6 +34,8 @@ type Store interface {
 	// Accuracy snapshots.
 	GetLatestAccuracySnapshot() (*models.AccuracySnapshot, error)
 	GetAccuracyHistory(limit int) ([]models.AccuracySnapshot, error)
+
+	Backup(w io.Writer) error
 }
 
 type Server struct {
@@ -70,8 +73,13 @@ func NewServer(store Store, addr string) (*Server, error) {
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)
 	s.server = &http.Server{
-		Addr:              addr,
-		Handler:           withMiddleware(mux, middlewareConfig{apiToken: apiToken, corsOrigin: corsOrigin, requireToken: requireToken}),
+		Addr: addr,
+		Handler: withMiddleware(mux, middlewareConfig{
+			apiToken:     apiToken,
+			corsOrigin:   corsOrigin,
+			requireToken: requireToken,
+			rateLimiter:  newRateLimiter(rateLimitPerMinute, rateLimitBurst),
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
