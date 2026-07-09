@@ -233,7 +233,8 @@ async def serve() -> None:
         ],
     )
     pb2_grpc.add_ForecasterServicer_to_server(ForecasterServicer(), server)
-    listen_addr = f"[::]:{_PORT}"
+    # Localhost-only for sidecar deployment (same pod). For cross-pod deployments, add mTLS.
+    listen_addr = f"127.0.0.1:{_PORT}"
     server.add_insecure_port(listen_addr)
 
     logging.info("starting forecaster sidecar on %s", listen_addr)
