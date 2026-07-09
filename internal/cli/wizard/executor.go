@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -110,22 +111,49 @@ func (s WizardState) helmInstall(ctx context.Context, log *stringsBuilder) error
 		return fmt.Errorf("helm not found in PATH")
 	}
 
+	// Avoid passing secrets via argv; write values to a 0600 temp file and `-f` it.
+	values := map[string]any{
+		"agent": map[string]any{
+			"remediation": map[string]any{
+				"mode": s.RemediationMode,
+			},
+		},
+	}
+	if s.OpenRouterKey != "" {
+		values["secrets"] = map[string]any{
+			"openrouterApiKey": s.OpenRouterKey,
+		}
+	}
+	if len(s.WatchNamespaces) > 0 {
+		agent := values["agent"].(map[string]any)
+		agent["watchNamespaces"] = s.WatchNamespaces
+	}
+
+	b, err := yaml.Marshal(values)
+	if err != nil {
+		return fmt.Errorf("marshal helm values: %w", err)
+	}
+	f, err := os.CreateTemp("", "kubewise-wizard-values-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp values file: %w", err)
+	}
+	tmpPath := f.Name()
+	_ = f.Chmod(0o600)
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp values file: %w", err)
+	}
+	_ = f.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
+
 	args := []string{
 		"upgrade", "--install", "kubewise",
 		"oci://ghcr.io/lohitkolluri/charts/kubewise",
 		"-n", "kubewise", "--create-namespace",
 		"--wait", "--timeout", "5m",
+		"-f", tmpPath,
 	}
-
-	if s.OpenRouterKey != "" {
-		args = append(args, "--set", "secrets.openrouterApiKey="+s.OpenRouterKey)
-	}
-	if len(s.WatchNamespaces) > 0 {
-		for _, ns := range s.WatchNamespaces {
-			args = append(args, "--set", "agent.watchNamespaces={"+ns+"}")
-		}
-	}
-	args = append(args, "--set", "agent.remediation.mode="+s.RemediationMode)
 
 	cmd := exec.CommandContext(ctx, "helm", args...)
 	cmd.Stdout = log
@@ -138,24 +166,9 @@ func (s WizardState) helmInstall(ctx context.Context, log *stringsBuilder) error
 }
 
 // stringsBuilder accumulates strings and implements io.Writer.
-type stringsBuilder struct {
-	data string
-}
+type stringsBuilder struct{ strings.Builder }
 
-func (b *stringsBuilder) WriteString(s string) (int, error) {
-	b.data += s
-	return len(s), nil
-}
-
-func (b *stringsBuilder) Write(p []byte) (int, error) {
-	n := len(p)
-	b.data += string(p)
-	return n, nil
-}
-
-func (b *stringsBuilder) String() string {
-	return b.data
-}
+func (b *stringsBuilder) String() string { return b.Builder.String() }
 
 func configDir() string {
 	if d := os.Getenv("KUBEWISE_CONFIG_DIR"); d != "" {

@@ -55,7 +55,8 @@ func NewServer(store Store, addr string) *Server {
 	if corsOrigin == "" {
 		corsOrigin = defaultCORSOrigin
 	}
-	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
+	allowUnauth := os.Getenv("KUBEWISE_ALLOW_UNAUTH") == "true"
+	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" || !allowUnauth
 
 	s := &Server{
 		store:        store,
@@ -64,8 +65,8 @@ func NewServer(store Store, addr string) *Server {
 		corsOrigin:   corsOrigin,
 		requireToken: requireToken,
 	}
-	if apiToken == "" && !requireToken {
-		log.Printf("api: WARNING: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
+	if apiToken == "" && requireToken {
+		log.Printf("api: ERROR: KUBEWISE_API_TOKEN is not set — refusing unauthenticated API (set KUBEWISE_ALLOW_UNAUTH=true for dev)")
 	}
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)

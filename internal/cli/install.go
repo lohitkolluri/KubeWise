@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	yaml "gopkg.in/yaml.v3"
 
 	"github.com/lohitkolluri/KubeWise/internal/cli/wizard"
 )
@@ -258,24 +259,57 @@ func applyHelmInstall(out io.Writer, prometheusURL string) error {
 		"-n", agentNS, "--create-namespace",
 		"--wait", "--timeout", installWaitTimeout.String(),
 	}
-	if prometheusURL != "" {
-		args = append(args, "--set", "agent.prometheusAddress="+prometheusURL)
-		_, _ = fmt.Fprintf(out, "✓ Prometheus detected: %s\n", prometheusURL)
-	}
 	key := installOpenRouterKey
 	if key == "" {
 		key = os.Getenv("OPENROUTER_API_KEY")
 	}
-	if key != "" {
-		args = append(args, "--set", "secrets.openrouterApiKey="+key)
-	} else if !installYes {
+	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
+	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
+
+	// Avoid passing secrets via argv. Write values to a 0600 temp file and `-f` it.
+	values := map[string]any{}
+	if prometheusURL != "" {
+		values["agent"] = map[string]any{"prometheusAddress": prometheusURL}
+		_, _ = fmt.Fprintf(out, "✓ Prometheus detected: %s\n", prometheusURL)
+	}
+	if key != "" || apiTok != "" {
+		secrets := map[string]any{}
+		if key != "" {
+			secrets["openrouterApiKey"] = key
+		}
+		if apiTok != "" {
+			secrets["apiToken"] = apiTok
+		}
+		values["secrets"] = secrets
+	}
+	if requireToken {
+		values["security"] = map[string]any{"requireApiToken": true}
+	}
+
+	tmpPath := ""
+	if len(values) > 0 {
+		b, err := yaml.Marshal(values)
+		if err != nil {
+			return fmt.Errorf("marshal helm values: %w", err)
+		}
+		f, err := os.CreateTemp("", "kubewise-values-*.yaml")
+		if err != nil {
+			return fmt.Errorf("create temp values file: %w", err)
+		}
+		tmpPath = f.Name()
+		_ = f.Chmod(0o600)
+		if _, err := f.Write(b); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("write temp values file: %w", err)
+		}
+		_ = f.Close()
+		defer func() { _ = os.Remove(tmpPath) }()
+		args = append(args, "-f", tmpPath)
+	}
+
+	if key == "" && !installYes {
 		_, _ = fmt.Fprintln(out, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
-	}
-	if tok := os.Getenv("KUBEWISE_API_TOKEN"); tok != "" {
-		args = append(args, "--set", "secrets.apiToken="+tok)
-	}
-	if os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" {
-		args = append(args, "--set", "security.requireApiToken=true")
 	}
 
 	c := exec.Command("helm", args...)

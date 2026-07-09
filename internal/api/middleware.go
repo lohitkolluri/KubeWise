@@ -12,7 +12,8 @@ import (
 
 const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
-const defaultCORSOrigin = "*"
+// Default is no CORS header (safer for localhost port-forward).
+const defaultCORSOrigin = ""
 
 var securityHeaders = map[string]string{
 	"X-Content-Type-Options": "nosniff",
@@ -27,10 +28,7 @@ type middlewareConfig struct {
 	requireToken bool
 }
 
-func publicPath(path string, requireToken bool) bool {
-	if requireToken {
-		return false
-	}
+func publicPath(path string) bool {
 	switch path {
 	case "/health", "/readyz", "/metrics", "/status":
 		return true
@@ -44,9 +42,17 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 		for k, v := range securityHeaders {
 			w.Header().Set(k, v)
 		}
-		w.Header().Set("Access-Control-Allow-Origin", cfg.corsOrigin)
+		if cfg.corsOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", cfg.corsOrigin)
+			w.Header().Set("Vary", "Origin")
+		}
 
-		if cfg.apiToken != "" && !publicPath(r.URL.Path, cfg.requireToken) {
+		needAuth := !publicPath(r.URL.Path) && (cfg.requireToken || cfg.apiToken != "")
+		if needAuth {
+			if cfg.apiToken == "" {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
 			auth := r.Header.Get("Authorization")
 			if !strings.HasPrefix(auth, "Bearer ") || !secureCompare(strings.TrimPrefix(auth, "Bearer "), cfg.apiToken) {
 				writeError(w, http.StatusUnauthorized, "unauthorized")

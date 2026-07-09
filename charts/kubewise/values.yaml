@@ -130,6 +130,8 @@ secrets:
 security:
   # When true, agent refuses to start without KUBEWISE_API_TOKEN (fail closed).
   requireApiToken: false
+  # When true, RBAC includes pod exec/port-forward/attach primitives (high risk).
+  enableExecPrimitives: false
 
 resources:
   agent:

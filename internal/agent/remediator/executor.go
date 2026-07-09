@@ -12,6 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -293,26 +296,64 @@ func (e *K8sExecutor) viewPodLogs(ctx context.Context, namespace, name string, p
 		}
 	}
 	container := params["container"]
-	pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=" + name,
+
+	// Prefer direct pod-name lookup when the target looks like a pod name.
+	if len(validation.IsDNS1123Subdomain(name)) == 0 {
+		if pod, err := e.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			return e.getPodLogs(ctx, namespace, pod.Name, container, tail)
+		}
+	}
+
+	// Fallback: list by common label keys. Build selectors safely (no string concat).
+	labelKeys := []string{
+		"app.kubernetes.io/name",
+		"app",
+	}
+	seen := sets.NewString()
+	for _, k := range labelKeys {
+		sel := labels.SelectorFromSet(map[string]string{k: name}).String()
+		if seen.Has(sel) {
+			continue
+		}
+		seen.Insert(sel)
+		pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil {
+			continue
+		}
+		if len(pods.Items) == 0 {
+			continue
+		}
+		best := pickBestPodForLogs(pods.Items)
+		return e.getPodLogs(ctx, namespace, best.Name, container, tail)
+	}
+
+	// Last resort: no match found.
+	return "", fmt.Errorf("no pods found for %s/%s", namespace, name)
+}
+
+func pickBestPodForLogs(pods []corev1.Pod) corev1.Pod {
+	// Prefer Running, then most recent start time, then most recent creation timestamp.
+	sort.SliceStable(pods, func(i, j int) bool {
+		pi, pj := pods[i], pods[j]
+		ri := pi.Status.Phase == corev1.PodRunning
+		rj := pj.Status.Phase == corev1.PodRunning
+		if ri != rj {
+			return ri
+		}
+		si := pi.Status.StartTime
+		sj := pj.Status.StartTime
+		if si != nil && sj != nil && !si.Equal(sj) {
+			return si.After(sj.Time)
+		}
+		if si != nil && sj == nil {
+			return true
+		}
+		if si == nil && sj != nil {
+			return false
+		}
+		return pi.CreationTimestamp.After(pj.CreationTimestamp.Time)
 	})
-	if err != nil {
-		return "", fmt.Errorf("list pods for %s/%s: %w", namespace, name, err)
-	}
-	if len(pods.Items) == 0 {
-		// Try direct pod name match
-		pod, err2 := e.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err2 != nil {
-			return "", fmt.Errorf("no pods found for %s/%s", namespace, name)
-		}
-		logs, err2 := e.getPodLogs(ctx, namespace, pod.Name, container, tail)
-		if err2 != nil {
-			return "", err2
-		}
-		return logs, nil
-	}
-	// Return logs from the first matching pod
-	return e.getPodLogs(ctx, namespace, pods.Items[0].Name, container, tail)
+	return pods[0]
 }
 
 func (e *K8sExecutor) getPodLogs(ctx context.Context, namespace, podName, container string, tail int64) (string, error) {

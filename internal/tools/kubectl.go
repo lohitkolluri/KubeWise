@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"time"
 
@@ -37,17 +38,33 @@ var allowedSubcommands = map[string]allowedCommand{
 	"cordon":        {[]models.ToolCapability{models.CapWrite}, false},
 	"uncordon":      {[]models.ToolCapability{models.CapWrite}, false},
 	"taint":         {[]models.ToolCapability{models.CapWrite}, false},
-	"exec":          {[]models.ToolCapability{models.CapRead}, true},
+	"exec":          {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
 	"run":           {[]models.ToolCapability{models.CapWrite}, false},
-	"cp":            {[]models.ToolCapability{models.CapRead}, true},
-	"proxy":         {[]models.ToolCapability{models.CapRead}, true},
-	"port-forward":  {[]models.ToolCapability{models.CapRead}, true},
-	"attach":        {[]models.ToolCapability{models.CapRead}, true},
+	"cp":            {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
+	"proxy":         {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
+	"port-forward":  {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
+	"attach":        {[]models.ToolCapability{models.CapRead, models.CapRequiresApproval}, false},
 }
 
-// blockedSubcommands are explicitly rejected for security reasons — kept empty;
-// authorization is delegated to Kubernetes RBAC via the agent's ServiceAccount.
-var blockedSubcommands = map[string]bool{}
+// blockedSubcommands are explicitly rejected for security reasons by default.
+// Set KUBEWISE_ALLOW_KUBECTL_DANGEROUS=true to allow these primitives.
+var blockedSubcommands = map[string]bool{
+	"exec":         true,
+	"proxy":        true,
+	"port-forward": true,
+	"attach":       true,
+	"cp":           true,
+	"run":          true,
+	"auth":         true,
+}
+
+func init() {
+	if os.Getenv("KUBEWISE_ALLOW_KUBECTL_DANGEROUS") == "true" {
+		for k := range blockedSubcommands {
+			delete(blockedSubcommands, k)
+		}
+	}
+}
 
 // validators for resource names to prevent injection.
 var (

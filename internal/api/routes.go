@@ -162,8 +162,53 @@ func sanitizeAuditRecords(records []models.AuditRecord) []models.AuditRecord {
 		out[i] = r
 		out[i].Prompt = ""
 		out[i].LLMResponse = ""
+		out[i].Reason = redactSensitive(out[i].Reason)
+		out[i].Error = redactSensitive(out[i].Error)
+		out[i].K8sResult = redactSensitive(out[i].K8sResult)
+		out[i].Plan = redactPlan(out[i].Plan)
 	}
 	return out
+}
+
+func redactPlan(p models.RemediationPlan) models.RemediationPlan {
+	p.Action.Parameters = redactParams(p.Action.Parameters)
+	for i := range p.Steps {
+		p.Steps[i].Parameters = redactParams(p.Steps[i].Parameters)
+	}
+	return p
+}
+
+func redactParams(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return in
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		lk := strings.ToLower(k)
+		if strings.Contains(lk, "token") || strings.Contains(lk, "key") || strings.Contains(lk, "secret") || strings.Contains(lk, "password") {
+			out[k] = "***"
+			continue
+		}
+		out[k] = redactSensitive(v)
+	}
+	return out
+}
+
+func redactSensitive(s string) string {
+	if s == "" {
+		return s
+	}
+	// Simple best-effort redaction for common credential shapes.
+	s = strings.ReplaceAll(s, "Bearer ", "Bearer ***")
+	if i := strings.Index(s, "sk-"); i >= 0 {
+		// Replace any sk-* token-ish substring with a placeholder.
+		j := i
+		for j < len(s) && s[j] != ' ' && s[j] != '\n' && s[j] != '\t' && s[j] != '"' && s[j] != '\'' {
+			j++
+		}
+		s = s[:i] + "sk-***" + s[j:]
+	}
+	return s
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

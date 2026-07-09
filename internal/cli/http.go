@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,7 +38,7 @@ func agentHTTPClient() *http.Client {
 	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
 }
 
-func agentRequest(method, path string, body any) ([]byte, int, error) {
+func agentRequest(ctx context.Context, method, path string, body any) ([]byte, int, error) {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -46,7 +47,10 @@ func agentRequest(method, path string, body any) ([]byte, int, error) {
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, resolveAgentURL()+path, reader)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, resolveAgentURL()+path, reader)
 	if err != nil {
 		return nil, 0, fmt.Errorf("building request: %w", err)
 	}
@@ -93,17 +97,17 @@ func agentRequest(method, path string, body any) ([]byte, int, error) {
 	return respBody, resp.StatusCode, nil
 }
 
-func agentGet(path string) ([]byte, int, error) {
-	return agentRequest(http.MethodGet, path, nil)
+func agentGet(ctx context.Context, path string) ([]byte, int, error) {
+	return agentRequest(ctx, http.MethodGet, path, nil)
 }
 
 // agentWrite tries common write methods; returns a deploy hint when the agent is too old.
-func agentWrite(path string, body any) ([]byte, int, error) {
+func agentWrite(ctx context.Context, path string, body any) ([]byte, int, error) {
 	var lastBody []byte
 	var lastCode int
 	var lastErr error
 	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodPatch} {
-		lastBody, lastCode, lastErr = agentRequest(method, path, body)
+		lastBody, lastCode, lastErr = agentRequest(ctx, method, path, body)
 		if lastErr == nil {
 			return lastBody, lastCode, nil
 		}

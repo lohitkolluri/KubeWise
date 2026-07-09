@@ -26,6 +26,7 @@ type ToolResult struct {
 	Success  bool              `json:"success"`
 	Stdout   string            `json:"stdout"`
 	Stderr   string            `json:"stderr"`
+	ExitCode int               `json:"exit_code,omitempty"`
 	Duration time.Duration     `json:"duration"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }

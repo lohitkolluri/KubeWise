@@ -9,20 +9,19 @@ metadata:
   labels:
     {{- include "kubewise.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["*"]
-    resources: ["*"]
+  - apiGroups: [""]
+    resources: [pods, pods/status, pods/log, events, services, endpoints, persistentvolumeclaims]
+    verbs: [get, list, watch]
+  {{- if .Values.security.enableExecPrimitives }}
+  - apiGroups: [""]
+    resources: [pods/exec, pods/portforward, pods/attachment]
+    verbs: [create, get]
+  {{- end }}
+  - apiGroups: ["apps"]
+    resources: [deployments, deployments/status, replicasets, replicasets/status, statefulsets, daemonsets]
     verbs: [get, list, watch]
   - apiGroups: [""]
-    resources: [pods, pods/exec, pods/portforward, pods/attachment, pods/log]
-    verbs: ["*"]
-  - apiGroups: ["apps"]
-    resources: [deployments, statefulsets, daemonsets, replicasets]
-    verbs: ["*"]
-  - apiGroups: ["batch"]
-    resources: [jobs, cronjobs]
-    verbs: [get, list, watch, create, delete]
-  - apiGroups: [""]
-    resources: [nodes, nodes/proxy, nodes/status, services, configmaps, secrets, events, endpoints, persistentvolumeclaims, persistentvolumes]
+    resources: [nodes, nodes/status]
     verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [pods]
@@ -33,15 +32,6 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
     verbs: [get, list, watch, create, update]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
-    verbs: [get, list, watch]
-  - apiGroups: ["autoscaling"]
-    resources: [horizontalpodautoscalers]
-    verbs: [get, list, watch, update]
-  - apiGroups: ["policy"]
-    resources: [poddisruptionbudgets]
-    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -70,23 +60,19 @@ metadata:
     {{- include "kubewise.labels" $ | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [pods, pods/exec, pods/portforward, pods/attachment, pods/log, pods/status, events, configmaps, secrets, services, endpoints, persistentvolumeclaims]
-    verbs: [get, list, watch, delete, patch, update, create]
+    resources: [pods, pods/status, pods/log, events, services, endpoints, persistentvolumeclaims]
+    verbs: [get, list, watch, delete, patch, update]
+  {{- if $.Values.security.enableExecPrimitives }}
+  - apiGroups: [""]
+    resources: [pods/exec, pods/portforward, pods/attachment]
+    verbs: [create, get]
+  {{- end }}
   - apiGroups: ["apps"]
-    resources: [deployments, deployments/status, statefulsets, daemonsets, replicasets, replicasets/status]
-    verbs: [get, list, watch, patch, update, create, delete]
-  - apiGroups: ["batch"]
-    resources: [jobs, cronjobs]
-    verbs: [get, list, watch, create, delete]
+    resources: [deployments, deployments/status, replicasets, replicasets/status, statefulsets, daemonsets]
+    verbs: [get, list, watch, patch, update]
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
     verbs: [get, list, watch, create, update]
-  - apiGroups: ["autoscaling"]
-    resources: [horizontalpodautoscalers]
-    verbs: [get, list, watch, update]
-  - apiGroups: ["policy"]
-    resources: [poddisruptionbudgets]
-    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

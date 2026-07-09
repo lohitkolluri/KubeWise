@@ -49,14 +49,14 @@ func TestAuthMiddleware_AcceptsBearerToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_HealthBypassesAuth(t *testing.T) {
-	for _, path := range []string{"/health", "/readyz", "/metrics"} {
+	for _, path := range []string{"/health", "/readyz", "/metrics", "/status"} {
 		t.Run(path, func(t *testing.T) {
 			mux := http.NewServeMux()
 			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
 
-			handler := withMiddleware(mux, middlewareConfig{apiToken: "secret-token", corsOrigin: "*"})
+			handler := withMiddleware(mux, middlewareConfig{apiToken: "secret-token", corsOrigin: "*", requireToken: true})
 			ts := httptest.NewServer(handler)
 			defer ts.Close()
 
@@ -69,6 +69,26 @@ func TestAuthMiddleware_HealthBypassesAuth(t *testing.T) {
 				t.Fatalf("%s: expected 200, got %d", path, resp.StatusCode)
 			}
 		})
+	}
+}
+
+func TestAuthMiddleware_RequireTokenFailsClosedWhenTokenMissing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := withMiddleware(mux, middlewareConfig{apiToken: "", corsOrigin: "", requireToken: true})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
 	}
 }
 

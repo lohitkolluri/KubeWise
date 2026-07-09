@@ -6,7 +6,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,13 +46,13 @@ func RunCommand(ctx context.Context, command string, args []string, timeout time
 		Duration: duration,
 		Success:  err == nil,
 	}
+	if cmd.ProcessState != nil {
+		result.ExitCode = cmd.ProcessState.ExitCode()
+	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.Stderr = Truncate(result.Stderr+"\n[timeout after "+timeout.String()+"]", OutputMaxBytes)
 	}
-
-	// Enrich metadata when available.
-	_ = fmt.Sprintf("%d", cmd.ProcessState.ExitCode()) //nolint:staticcheck
 
 	return result
 }

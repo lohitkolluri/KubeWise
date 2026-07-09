@@ -294,10 +294,19 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.help.Width = msg.Width
-		m.logsVP.Width = msg.Width - 6
-		m.logsVP.Height = m.contentHeight()
-		m.detailVP.Width = msg.Width - 6
-		m.detailVPHeight = m.contentHeight()
+		// Clamp viewport dimensions for tiny terminals.
+		vw := msg.Width - 6
+		if vw < 1 {
+			vw = 1
+		}
+		vh := m.contentHeight()
+		if vh < 1 {
+			vh = 1
+		}
+		m.logsVP.Width = vw
+		m.logsVP.Height = vh
+		m.detailVP.Width = vw
+		m.detailVPHeight = vh
 		m.detailVP.Height = m.detailVPHeight
 		m.resizePalette()
 		return m, nil
@@ -874,7 +883,8 @@ func (m controlModel) renderDashboard() string {
 
 	// Health status
 	if !m.ready {
-		emptyStateStyle.Render("Loading agent data…")
+		b.WriteString(emptyStateStyle.Render("Loading agent data…"))
+		b.WriteString("\n\n")
 	}
 
 	if m.err != nil {
@@ -1201,6 +1211,16 @@ func (m controlModel) renderList(lines []string, cursor, total int) string {
 	}
 	dataLines := lines[headerLines:]
 	dataCount := len(dataLines)
+	if dataCount == 0 {
+		// No data rows (header-only). Render header and footer safely.
+		var b strings.Builder
+		b.WriteString(lines[0])
+		b.WriteString("\n")
+		if total > 0 {
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("\n%d/%d  enter detail  g/G top/bottom", 0, total)))
+		}
+		return b.String()
+	}
 
 	// Center cursor in visible window
 	half := maxVisible / 2
@@ -1225,6 +1245,7 @@ func (m controlModel) renderList(lines []string, cursor, total int) string {
 	// Visible data items
 	for i := start; i < end; i++ {
 		line := lines[headerLines+i]
+		// i is a data index into dataLines; cursor is also data index (not absolute line index).
 		if i == cursor {
 			b.WriteString(listSelectedStyle.Render("› " + line))
 		} else {
@@ -1236,7 +1257,10 @@ func (m controlModel) renderList(lines []string, cursor, total int) string {
 	if total > 0 {
 		scrollInfo := ""
 		if dataCount > maxVisible {
-			pct := int(float64(cursor) / float64(dataCount-1) * 100)
+			pct := 0
+			if dataCount > 1 {
+				pct = int(float64(cursor) / float64(dataCount-1) * 100)
+			}
 			scrollInfo = fmt.Sprintf("  scroll %d%%", pct)
 		}
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("\n%d/%d%s  enter detail  g/G top/bottom", cursor+1, total, scrollInfo)))
@@ -1279,12 +1303,24 @@ func (m controlModel) renderDetail() string {
 
 	var scrollInfo string
 	if total > shown {
-		pct := int(float64(top) / float64(total-shown) * 100)
+		den := total - shown
+		pct := 0
+		if den > 0 {
+			pct = int(float64(top) / float64(den) * 100)
+		}
 		scrollInfo = mutedStyle.Render(fmt.Sprintf("  ↑↓ scroll %d%%", pct))
 	}
 	help := mutedStyle.Render("esc back · q quit") + scrollInfo
 
-	body := detailBorderActiveStyle.Width(m.width - 6).Height(m.detailVPHeight - 2).Render(content)
+	bw := m.width - 6
+	if bw < 1 {
+		bw = 1
+	}
+	bh := m.detailVPHeight - 2
+	if bh < 1 {
+		bh = 1
+	}
+	body := detailBorderActiveStyle.Width(bw).Height(bh).Render(content)
 	return title + "\n" + body + "\n" + help
 }
 
