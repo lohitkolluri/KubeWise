@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -141,7 +142,7 @@ func (rc *ResourcesCollector) Run(ctx context.Context) {
 		slog.Warn("resources: informer cache sync timed out, retrying")
 		if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, rc.syncTimeout, true, func(ctx context.Context) (bool, error) {
 			return cache.WaitForCacheSync(ctx.Done(), rc.podInformer.HasSynced, rc.nodeInformer.HasSynced, rc.depInformer.HasSynced), nil
-		}); err != nil && err != context.Canceled {
+		}); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("resources: informer cache sync failed after retry")
 			return
 		}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -293,10 +294,10 @@ func (s *Store) RebuildAnomalyIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
-			return err
-		}
-		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
+		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+				return err
+			}
+			if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAnomalyIndex)

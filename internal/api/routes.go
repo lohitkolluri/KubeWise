@@ -310,7 +310,9 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 			pw.CloseWithError(fmt.Errorf("backup: %w", err))
 			return
 		}
-		pw.Close()
+			if err := pw.Close(); err != nil {
+				slog.Error("api: backup pipe close error", "error", err)
+			}
 	}()
 
 	w.Header().Set("Content-Type", "application/octet-stream")

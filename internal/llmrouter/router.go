@@ -3,6 +3,7 @@ package llmrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -130,7 +131,7 @@ func isNonRetryable(err error) bool {
 		return false
 	}
 	// Context cancellation is not retryable — the caller is shutting down.
-	if err == context.Canceled {
+		if errors.Is(err, context.Canceled) {
 		return true
 	}
 	// Schema validation failures won't resolve with a different model.
