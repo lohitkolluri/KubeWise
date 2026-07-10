@@ -1,0 +1,39 @@
+{{- if and .Values.agent.features.observability .Values.agent.observability.vl.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubewise.fullname" . }}-loki-gateway
+  namespace: {{ include "kubewise.namespace" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victorialogs
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 9428
+      protocol: TCP
+  selector:
+    app.kubernetes.io/instance: vm-logs
+    app.kubernetes.io/name: victoria-logs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubewise.fullname" . }}-loki
+  namespace: {{ include "kubewise.namespace" . }}
+  labels:
+    {{- include "kubewise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victorialogs
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 9428
+      protocol: TCP
+  selector:
+    app.kubernetes.io/instance: vm-logs
+    app.kubernetes.io/name: victoria-logs
+{{- end }}

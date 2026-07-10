@@ -2,8 +2,8 @@ apiVersion: v2
 name: kubewise
 description: In-cluster Kubernetes predictive observability and safe AI remediation agent
 type: application
-version: 0.4.0
-appVersion: "0.4.0"
+version: 1.0.1
+appVersion: "1.0.1"
 keywords:
   - kubernetes
   - observability
@@ -14,10 +14,14 @@ sources:
   - https://github.com/lohitkolluri/KubeWise
 
 dependencies:
-  - name: loki
-    version: ">=13.0.0 <14.0.0"
-    repository: oci://ghcr.io/grafana-community/helm-charts
-    condition: agent.observability.loki.enabled
+  - name: victoria-metrics-single
+    version: ">=0.40.0 <1.0.0"
+    repository: https://victoriametrics.github.io/helm-charts
+    condition: agent.observability.vm.enabled
+  - name: victoria-logs-single
+    version: ">=0.10.0 <1.0.0"
+    repository: https://victoriametrics.github.io/helm-charts
+    condition: agent.observability.vl.enabled
   - name: tempo
     version: ">=1.0.0 <2.0.0"
     repository: oci://ghcr.io/grafana-community/helm-charts

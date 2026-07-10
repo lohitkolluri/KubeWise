@@ -41,7 +41,8 @@ data:
 
     loki.write "default" {
       endpoint {
-        url = env("ALLOY_LOKI_ENDPOINT") + "/loki/api/v1/push"
+        // VictoriaLogs accepts Loki-compatible push at /insert/loki/api/v1/push
+        url = env("ALLOY_LOKI_ENDPOINT") + "/insert/loki/api/v1/push"
       }
     }
 

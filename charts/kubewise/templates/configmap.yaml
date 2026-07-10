@@ -8,11 +8,11 @@ metadata:
 data:
   config.yaml: |
     scrape_interval: {{ .Values.agent.scrapeInterval | quote }}
-    prometheus_address: {{ .Values.agent.prometheusAddress | quote }}
-    {{- if include "kubewise.observabilityStack" . }}
+    prometheus_address: {{ include "kubewise.metricsURL" . | quote }}
+    {{- if or .Values.agent.observability.logsEndpoint (include "kubewise.observabilityStack" .) }}
     loki_url: {{ include "kubewise.lokiURL" . | quote }}
     {{- end }}
-    {{- if and .Values.agent.features.observability .Values.agent.observability.tempo.enabled }}
+    {{- if or .Values.agent.observability.tracesEndpoint (and .Values.agent.features.observability .Values.agent.observability.tempo.enabled) }}
     tempo_url: {{ include "kubewise.tempoURL" . | quote }}
     {{- end }}
     llm_provider: {{ .Values.agent.llmProvider | quote }}

@@ -41,7 +41,9 @@ persistence:
 
 agent:
   scrapeInterval: 30s
-  prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+  # Auto-detected at runtime if empty; set this to use a specific Prometheus-compatible endpoint.
+  # When empty and the VM subchart is enabled, defaults to the subchart service.
+  prometheusAddress: ""
   llmProvider: openrouter
   llmModel: deepseek/deepseek-v4-flash
   llmBaseURL: ''
@@ -66,23 +68,25 @@ agent:
     toolPlugins: true
     observability: true
   observability:
-    # When agent.features.observability=true, Loki + Tempo + Alloy deploy together.
-    # Alloy ships pod logs (namespace/pod labels) so the agent can query Loki.
-    loki:
+    # Namespace where VictoriaMetrics + VictoriaLogs are (or will be) deployed.
+    # When using subchart deps (plain helm install), this defaults to the release namespace.
+    namespace: kubewise
+    # Subchart toggles — set false to skip if you already have a backend.
+    vm:
       enabled: true
-      # Monolithic mode — single binary for in-cluster use.
-      mode: Monolithic
-      persistence:
-        enabled: false
-        size: 10Gi
-        storageClass: ''
-      resources:
-        requests:
-          cpu: 200m
-          memory: 256Mi
-        limits:
-          cpu: '1'
-          memory: 1Gi
+    vl:
+      enabled: true
+    # Override endpoints — set by kwctl install after auto-detection.
+    # When empty, _helpers.tpl generates default URLs based on Helm conventions.
+    metricsURL: ""
+    logsEndpoint: ""
+    logsPushEndpoint: ""
+    tracesEndpoint: ""
+    tracesOTLPEndpoint: ""
+    # When agent.features.observability=true, Tempo + Alloy deploy together.
+    # Metrics are stored in VictoriaMetrics, logs in VictoriaLogs
+    # (both deployed in the observability namespace).
+    # Alloy ships pod logs (namespace/pod labels) so the agent can query logs.
     tempo:
       enabled: true
       persistence:
@@ -97,7 +101,7 @@ agent:
           cpu: '1'
           memory: 1Gi
     alloy:
-      # Grafana Alloy DaemonSet — scrapes pod logs and forwards to Loki.
+      # Grafana Alloy DaemonSet — scrapes pod logs and forwards to VictoriaLogs.
       enabled: true
       image:
         repository: grafana/alloy
@@ -151,26 +155,27 @@ resources:
       cpu: '1'
       memory: 512Mi
 
-# -- Loki subchart values (used when agent.observability.loki.enabled=true)
-loki:
-  deploymentMode: Monolithic
-  write:
-    replicas: 0
-  read:
-    replicas: 0
-  backend:
-    replicas: 0
-  loki:
-    useTestSchema: true
-    commonConfig:
-      replication_factor: 1
-    storage:
-      type: filesystem
-    auth_enabled: false
-    analytics:
-      reporting_enabled: false
-    # NOTE: Monolithic mode is used — no singleBinary replicas needed.
-    # The singleBinary section is intentionally removed in favor of deploymentMode: Monolithic.
+# -- VictoriaMetrics subchart values (used when agent.observability.vm.enabled=true)
+victoria-metrics-single:
+  server:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: '1'
+        memory: 1Gi
+
+# -- VictoriaLogs subchart values (used when agent.observability.vl.enabled=true)
+victoria-logs-single:
+  server:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 
 # -- Tempo subchart values (used when agent.observability.tempo.enabled=true)
 tempo:

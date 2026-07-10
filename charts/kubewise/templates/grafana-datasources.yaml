@@ -18,7 +18,7 @@ data:
         url: {{ .Values.agent.prometheusAddress | quote }}
         isDefault: true
         editable: false
-      {{- if .Values.agent.observability.loki.enabled }}
+      {{- if .Values.agent.features.observability }}
       - name: Loki
         type: loki
         uid: loki

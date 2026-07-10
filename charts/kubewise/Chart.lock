@@ -1,9 +1,12 @@
 dependencies:
-- name: loki
-  repository: oci://ghcr.io/grafana-community/helm-charts
-  version: 13.7.2
+- name: victoria-metrics-single
+  repository: https://victoriametrics.github.io/helm-charts
+  version: 0.42.0
+- name: victoria-logs-single
+  repository: https://victoriametrics.github.io/helm-charts
+  version: 0.13.8
 - name: tempo
   repository: oci://ghcr.io/grafana-community/helm-charts
   version: 1.26.7
-digest: sha256:500fbbb23a47ca1c53754ebcb233bc4963fe01ce0847b317b57e59ff8d6b5110
-generated: "2026-07-10T02:22:57.636084+05:30"
+digest: sha256:a22b212b5ef8c04a6674f9f00a0671e51bc6564afaee4def73418557056eb4ba
+generated: "2026-07-11T00:02:41.233166+05:30"
