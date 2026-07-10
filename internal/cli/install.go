@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -260,6 +262,12 @@ func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmCo
 		key = os.Getenv("OPENROUTER_API_KEY")
 	}
 	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
+	if apiTok == "" {
+		tok := make([]byte, 24)
+		if _, err := rand.Read(tok); err == nil {
+			apiTok = hex.EncodeToString(tok)
+		}
+	}
 	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
 
 	// Subchart toggles: if we have an explicit override URL, disable the subchart.

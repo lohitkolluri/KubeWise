@@ -10,7 +10,7 @@ var (
 	colorPrimary   = compat.AdaptiveColor{Light: lipgloss.Color("#7C3AED"), Dark: lipgloss.Color("#A78BFA")}
 	colorAccent    = compat.AdaptiveColor{Light: lipgloss.Color("#0D9488"), Dark: lipgloss.Color("#2DD4BF")}
 	colorCritical  = compat.AdaptiveColor{Light: lipgloss.Color("#DC2626"), Dark: lipgloss.Color("#F87171")}
-	colorWarning   = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")} //nolint:unused
+	colorWarning   = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")}
 	colorSuccess   = compat.AdaptiveColor{Light: lipgloss.Color("#16A34A"), Dark: lipgloss.Color("#4ADE80")}
 	colorNeutral   = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#9CA3AF")}
 	colorSubtle    = compat.AdaptiveColor{Light: lipgloss.Color("#4B5563"), Dark: lipgloss.Color("#D1D5DB")} //nolint:unused
@@ -27,7 +27,6 @@ var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorPrimary).
-			Background(compat.AdaptiveColor{Light: lipgloss.Color("#EDE9FE"), Dark: lipgloss.Color("#2D2A4E")}).
 			Padding(0, 1).
 			MarginBottom(1)
 
@@ -49,7 +48,7 @@ var (
 
 	// Status
 	errStyle     = lipgloss.NewStyle().Foreground(colorCritical).Bold(true)
-	warnStyle    = lipgloss.NewStyle().Foreground(colorWarning) //nolint:unused
+	warnStyle    = lipgloss.NewStyle().Foreground(colorWarning)
 	infoStyle    = lipgloss.NewStyle().Foreground(colorNeutral)
 	successStyle = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
 
@@ -57,7 +56,6 @@ var (
 	boxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
-			Background(colorCardBG).
 			Padding(1, 2).
 			Width(72)
 
