@@ -124,22 +124,6 @@ type DataSource interface {
 // BuilderOption configures a Builder.
 type BuilderOption func(*Builder)
 
-// WithLokiURL sets the Loki HTTP API endpoint for log snippet retrieval.
-// When empty, log snippets are not fetched.
-func WithLokiURL(url string) BuilderOption {
-	return func(b *Builder) {
-		b.lokiURL = url
-	}
-}
-
-// WithTempoURL sets the Tempo HTTP API endpoint for trace context retrieval.
-// When empty, traces are not fetched.
-func WithTempoURL(url string) BuilderOption {
-	return func(b *Builder) {
-		b.tempoURL = url
-	}
-}
-
 // New creates a context builder with optional configuration.
 func New(s DataSource, opts ...BuilderOption) *Builder {
 	b := &Builder{store: s}

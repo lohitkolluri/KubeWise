@@ -1,36 +1,39 @@
 package cli
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
+)
 
 //nolint:unused // design system tokens used across the TUI
 var (
 	// Severity / semantic colors
-	colorCritical = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"} // red
-	colorError    = lipgloss.AdaptiveColor{Light: "#EA580C", Dark: "#FB923C"} // orange
-	colorWarning  = lipgloss.AdaptiveColor{Light: "#CA8A04", Dark: "#FBBF24"} // amber
-	colorInfo     = lipgloss.AdaptiveColor{Light: "#0284C7", Dark: "#38BDF8"} // sky
-	colorSuccess  = lipgloss.AdaptiveColor{Light: "#16A34A", Dark: "#4ADE80"} // green
-	colorNeutral  = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"} // gray
+	colorCritical = compat.AdaptiveColor{Light: lipgloss.Color("#DC2626"), Dark: lipgloss.Color("#F87171")} // red
+	colorError    = compat.AdaptiveColor{Light: lipgloss.Color("#EA580C"), Dark: lipgloss.Color("#FB923C")} // orange
+	colorWarning  = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")} // amber
+	colorInfo     = compat.AdaptiveColor{Light: lipgloss.Color("#0284C7"), Dark: lipgloss.Color("#38BDF8")} // sky
+	colorSuccess  = compat.AdaptiveColor{Light: lipgloss.Color("#16A34A"), Dark: lipgloss.Color("#4ADE80")} // green
+	colorNeutral  = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#9CA3AF")} // gray
 
 	// Accent / brand
-	colorPrimary   = lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#A78BFA"} // purple
-	colorAccent    = lipgloss.AdaptiveColor{Light: "#0D9488", Dark: "#2DD4BF"} // teal
-	colorHighlight = lipgloss.AdaptiveColor{Light: "#111827", Dark: "#F9FAFB"} // near white
-	colorSubtle    = lipgloss.AdaptiveColor{Light: "#4B5563", Dark: "#D1D5DB"} // soft text
-	colorMuted     = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#6B7280"} // dim text
-	colorBorder    = lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#374151"}
-	colorSurface   = lipgloss.AdaptiveColor{Light: "#F9FAFB", Dark: "#1F2937"} // panel bg
-	colorScrim     = lipgloss.AdaptiveColor{Light: "#E5E7EB", Dark: "#111827"} // overlay bg
-	colorStatusBar = lipgloss.AdaptiveColor{Light: "#F3F4F6", Dark: "#111827"}
-	colorSelected  = lipgloss.AdaptiveColor{Light: "#E0E7FF", Dark: "#312E81"} // selection bg
-	colorCardBG    = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1F2937"}
+	colorPrimary   = compat.AdaptiveColor{Light: lipgloss.Color("#7C3AED"), Dark: lipgloss.Color("#A78BFA")} // purple
+	colorAccent    = compat.AdaptiveColor{Light: lipgloss.Color("#0D9488"), Dark: lipgloss.Color("#2DD4BF")} // teal
+	colorHighlight = compat.AdaptiveColor{Light: lipgloss.Color("#111827"), Dark: lipgloss.Color("#F9FAFB")} // near white
+	colorSubtle    = compat.AdaptiveColor{Light: lipgloss.Color("#4B5563"), Dark: lipgloss.Color("#D1D5DB")} // soft text
+	colorMuted     = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")} // dim text
+	colorBorder    = compat.AdaptiveColor{Light: lipgloss.Color("#D1D5DB"), Dark: lipgloss.Color("#374151")}
+	colorSurface   = compat.AdaptiveColor{Light: lipgloss.Color("#F9FAFB"), Dark: lipgloss.Color("#1F2937")} // panel bg
+	colorScrim     = compat.AdaptiveColor{Light: lipgloss.Color("#E5E7EB"), Dark: lipgloss.Color("#111827")} // overlay bg
+	colorStatusBar = compat.AdaptiveColor{Light: lipgloss.Color("#F3F4F6"), Dark: lipgloss.Color("#111827")}
+	colorSelected  = compat.AdaptiveColor{Light: lipgloss.Color("#E0E7FF"), Dark: lipgloss.Color("#312E81")} // selection bg
+	colorCardBG    = compat.AdaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("#1F2937")}
 
 	// ── Logo / brand ──
 	brandStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	logoStyle  = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorPrimary).
-			Background(lipgloss.AdaptiveColor{Light: "#EDE9FE", Dark: "#2D2A4E"}).
+			Background(compat.AdaptiveColor{Light: lipgloss.Color("#EDE9FE"), Dark: lipgloss.Color("#2D2A4E")}).
 			Padding(0, 1)
 
 	// ── Tabs ──
@@ -47,6 +50,10 @@ var (
 	tabBadgeStyle = lipgloss.NewStyle().
 			Foreground(colorPrimary).
 			Bold(true)
+
+	tabIndicatorStyle = lipgloss.NewStyle().
+				Foreground(colorAccent).
+				Bold(true)
 
 	// ── Panels ──
 	panelStyle = lipgloss.NewStyle().
@@ -76,19 +83,19 @@ var (
 	// ── Mode badges ──
 	modeLiveStyle = lipgloss.NewStyle().
 			Foreground(colorCritical).
-			Background(lipgloss.AdaptiveColor{Light: "#FEE2E2", Dark: "#3B1111"}).
+			Background(compat.AdaptiveColor{Light: lipgloss.Color("#FEE2E2"), Dark: lipgloss.Color("#3B1111")}).
 			Bold(true).
 			Padding(0, 1)
 
 	modeObserveStyle = lipgloss.NewStyle().
 				Foreground(colorSuccess).
-				Background(lipgloss.AdaptiveColor{Light: "#DCFCE7", Dark: "#0A2E1A"}).
+				Background(compat.AdaptiveColor{Light: lipgloss.Color("#DCFCE7"), Dark: lipgloss.Color("#0A2E1A")}).
 				Bold(true).
 				Padding(0, 1)
 
 	modeDryRunStyle = lipgloss.NewStyle().
 			Foreground(colorWarning).
-			Background(lipgloss.AdaptiveColor{Light: "#FEF3C7", Dark: "#2E250A"}).
+			Background(compat.AdaptiveColor{Light: lipgloss.Color("#FEF3C7"), Dark: lipgloss.Color("#2E250A")}).
 			Bold(true).
 			Padding(0, 1)
 
@@ -103,7 +110,7 @@ var (
 	listRowInfoStyle     = lipgloss.NewStyle().Foreground(colorInfo)
 	listRowSuccessStyle  = lipgloss.NewStyle().Foreground(colorSuccess)
 	listRowDimStyle      = lipgloss.NewStyle().Foreground(colorMuted)
-	listHeaderStyle      = lipgloss.NewStyle().Foreground(colorMuted).Bold(true)
+	listHeaderStyle      = lipgloss.NewStyle().Foreground(colorMuted)
 
 	// ── Dashboard stat cards ──
 	cardStyle = lipgloss.NewStyle().
@@ -124,7 +131,24 @@ var (
 	statValueStyle = lipgloss.NewStyle().Bold(true).Foreground(colorHighlight)
 	statGridGap    = 1
 
-	// ── Dashboard KPI styles (borderless, for compact dashboard grid) ──
+	// ── Dashboard ──
+	dashSectionTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorAccent).
+				PaddingTop(1)
+
+	dashKPILabelStyle = lipgloss.NewStyle().
+				Foreground(colorMuted)
+
+	dashAlertStyle = lipgloss.NewStyle().
+			Foreground(colorWarning).
+			Bold(true).
+			Padding(0, 1)
+
+	dashAlertDetailStyle = lipgloss.NewStyle().
+				Foreground(colorMuted)
+
+	// ── Dashboard KPI value styles ──
 	kpiCriticalStyle = lipgloss.NewStyle().Foreground(colorCritical).Bold(true)
 	kpiWarnStyle     = lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
 	kpiSuccessStyle  = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
@@ -160,8 +184,7 @@ var (
 	confirmBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorWarning).
-			Padding(1, 2).
-			Background(colorSurface)
+			Padding(1, 2)
 
 	confirmTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorWarning)
 
@@ -192,7 +215,7 @@ var (
 )
 
 const (
-	uiHeaderLines = 3
-	uiTabLines    = 1
+	uiHeaderLines = 1 // legacy; prefer contentHeight() measurement
+	uiTabLines    = 2
 	uiFooterLines = 2
 )

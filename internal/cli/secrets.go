@@ -88,11 +88,8 @@ Examples:
 			return err
 		}
 
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ OpenRouter key saved in secret %s/%s\n", agentNS, secName)
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  kwctl up")
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  kwctl ui")
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  kwctl status")
+		printOK(cmd.OutOrStdout(), "OpenRouter key saved in secret %s/%s", agentNS, secName)
+		printNextSteps(cmd.OutOrStdout(), "kwctl up", "kwctl ui", "kwctl status")
 		if secretsRestartAgent {
 			depName, _ := resolveAgentDeploymentName(cmd.Context())
 			if depName == "" {
@@ -101,9 +98,9 @@ Examples:
 			if err := rolloutRestartDeployment(agentNS, depName); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "✓ Agent restarted")
+			printOK(cmd.OutOrStdout(), "Agent restarted")
 		} else {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "ℹ Restart agent to apply: kubectl -n kubewise rollout restart deploy/<agent-deployment>")
+			printHint(cmd.OutOrStdout(), "restart agent to apply: kubectl -n kubewise rollout restart deploy/<agent-deployment>")
 		}
 		return nil
 	},
@@ -149,7 +146,7 @@ Examples:
 			return err
 		}
 
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ API token saved in secret %s/%s\n", agentNS, secName)
+		printOK(cmd.OutOrStdout(), "API token saved in secret %s/%s", agentNS, secName)
 		if secretsAPITokenRestartAgent {
 			depName, _ := resolveAgentDeploymentName(cmd.Context())
 			if depName == "" {
@@ -158,9 +155,9 @@ Examples:
 			if err := rolloutRestartDeployment(agentNS, depName); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "✓ Agent restarted")
+			printOK(cmd.OutOrStdout(), "Agent restarted")
 		} else {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "ℹ Restart agent to apply: kubectl -n kubewise rollout restart deploy/<agent-deployment>")
+			printHint(cmd.OutOrStdout(), "restart agent to apply: kubectl -n kubewise rollout restart deploy/<agent-deployment>")
 		}
 		return nil
 	},

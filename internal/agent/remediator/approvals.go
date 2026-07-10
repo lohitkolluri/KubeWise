@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -187,6 +188,15 @@ func (c *Correlator) SetLiveMode(live bool) {
 		c.executor.SetDryRun(c.cfg.DryRun)
 	}
 	slog.Info("remediator: live mode set", "live", live, "mode", c.cfg.Mode, "dry_run", c.cfg.DryRun)
+}
+
+// SetObservabilityURLs updates Loki/Tempo endpoints used during investigation.
+func (c *Correlator) SetObservabilityURLs(lokiURL, tempoURL string) {
+	if c == nil || c.investigator == nil {
+		return
+	}
+	c.investigator.SetObservabilityURLs(lokiURL, tempoURL)
+	slog.Info("remediator: observability URLs updated", "loki_url", strings.TrimSpace(lokiURL), "tempo_url", strings.TrimSpace(tempoURL))
 }
 
 // UpdateRemediationConfig applies runtime config and syncs the executor dry-run flag.

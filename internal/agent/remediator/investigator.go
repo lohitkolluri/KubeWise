@@ -50,6 +50,15 @@ func NewInvestigatorWithObservability(clientset kubernetes.Interface, lokiURL, t
 	}
 }
 
+// SetObservabilityURLs updates Loki/Tempo endpoints at runtime (e.g. after config PUT).
+func (inv *Investigator) SetObservabilityURLs(lokiURL, tempoURL string) {
+	if inv == nil {
+		return
+	}
+	inv.lokiURL = strings.TrimSpace(lokiURL)
+	inv.tempoURL = strings.TrimSpace(tempoURL)
+}
+
 // Gather collects investigation context for the given anomalies.
 func (inv *Investigator) Gather(ctx context.Context, anomalies []models.AnomalyRecord) string {
 	if inv == nil || inv.clientset == nil || len(anomalies) == 0 {

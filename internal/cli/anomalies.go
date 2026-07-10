@@ -45,15 +45,17 @@ var anomaliesDescribeCmd = &cobra.Command{
 				if outputFormat == "json" {
 					return writeOutput(cmd.OutOrStdout(), "json", r, nil)
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ID:          %s\n", r.ID)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Entity:      %s\n", r.Entity)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Namespace:   %s\n", r.Namespace)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Metric:      %s\n", r.MetricName)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Pattern:     %s\n", r.Pattern)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Score:       %.2f\n", r.Score)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Status:      %s\n", r.Status)
+				out := cmd.OutOrStdout()
+				printSection(out, "Anomaly")
+				printKV(out, "ID:", r.ID)
+				printKV(out, "Entity:", r.Entity)
+				printKV(out, "Namespace:", r.Namespace)
+				printKV(out, "Metric:", r.MetricName)
+				printKV(out, "Pattern:", r.Pattern)
+				printKVStyled(out, "Score:", fmt.Sprintf("%.2f", r.Score), scoreStyle(r.Score))
+				printKVStyled(out, "Status:", string(r.Status), statusStyle(string(r.Status)))
 				if r.DetectedAt != nil {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Detected:    %s\n", r.DetectedAt.Format(timeRFC3339))
+					printKV(out, "Detected:", r.DetectedAt.Format(timeRFC3339))
 				}
 				return nil
 			}
@@ -75,20 +77,24 @@ func runAnomaliesList(cmd *cobra.Command, args []string) error {
 	records = filterAnomalies(records)
 	return writeOutput(cmd.OutOrStdout(), outputFormat, records, func() error {
 		if len(records) == 0 {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No anomalies.")
+			printEmpty(cmd.OutOrStdout(), "No anomalies.")
 			return nil
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-8s %s\n",
-			"TYPE", "ENTITY", "SCORE", "STATUS", "METRIC")
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
+		rows := make([][]string, 0, len(records))
 		for _, r := range records {
 			typ := r.Pattern
 			if typ == "" {
 				typ = "statistical"
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-8s %s\n",
-				trunc(typ, 10), trunc(r.Entity, 22), r.Score, string(r.Status), trunc(r.MetricName, 30))
+			rows = append(rows, []string{
+				trunc(typ, 12),
+				trunc(r.Entity, 24),
+				fmt.Sprintf("%.2f", r.Score),
+				string(r.Status),
+				trunc(r.MetricName, 30),
+			})
 		}
+		printDataTable(cmd.OutOrStdout(), []string{"TYPE", "ENTITY", "SCORE", "STATUS", "METRIC"}, rows)
 		return nil
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
+	"github.com/lohitkolluri/KubeWise/internal/logx"
 	"github.com/lohitkolluri/KubeWise/internal/agent/remediator"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -30,6 +31,8 @@ type Runtime struct {
 
 // Init opens the store, loads or seeds config, and validates runtime settings.
 func Init() (*Runtime, error) {
+	logx.Setup(os.Stderr)
+
 	dataDir := os.Getenv("KUBEWISE_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "/tmp/kubewise"
@@ -64,6 +67,15 @@ func Init() (*Runtime, error) {
 			slog.Info("seeded config from", "path", configPath)
 		} else {
 			cfg = existing
+			if fileCfg, err := loadConfigFile(configPath); err == nil {
+				if mergeObservabilityFromFile(cfg, fileCfg) {
+					if err := s.SaveConfig(cfg); err != nil {
+						_ = s.Close()
+						return nil, fmt.Errorf("save merged config: %w", err)
+					}
+					slog.Info("merged observability URLs from mounted config", "loki_url", cfg.LokiURL, "tempo_url", cfg.TempoURL)
+				}
+			}
 		}
 	} else {
 		existing, err := s.LoadConfig()
@@ -145,7 +157,6 @@ func normalizeConfig(cfg *models.AgentConfig) {
 	if cfg.PrometheusAddress == "" {
 		cfg.PrometheusAddress = "http://localhost:9090"
 	}
-	// Loki/Tempo are optional; leave empty unless configured.
 	if cfg.LLMProvider == "" {
 		cfg.LLMProvider = "openrouter"
 	}
@@ -155,6 +166,21 @@ func normalizeConfig(cfg *models.AgentConfig) {
 	if cfg.Remediation.Mode == "" {
 		cfg.Remediation.Mode = "dry-run"
 	}
+}
+
+// mergeObservabilityFromFile copies Loki/Tempo URLs from the mounted config file
+// into the persisted store config when the file defines them.
+func mergeObservabilityFromFile(dst, file *models.AgentConfig) bool {
+	changed := false
+	if u := strings.TrimSpace(file.LokiURL); u != "" && dst.LokiURL != u {
+		dst.LokiURL = u
+		changed = true
+	}
+	if u := strings.TrimSpace(file.TempoURL); u != "" && dst.TempoURL != u {
+		dst.TempoURL = u
+		changed = true
+	}
+	return changed
 }
 
 func buildRemediationConfig(cfg *models.AgentConfig) remediator.RemediationConfig {

@@ -209,50 +209,6 @@ func (rc *ResourcesCollector) GetUnhealthyNodes() []NodeState {
 	return unhealthy
 }
 
-// GetAllPods returns all tracked pods.
-func (rc *ResourcesCollector) GetAllPods() []PodState {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	pods := make([]PodState, 0, len(rc.pods))
-	for _, p := range rc.pods {
-		pods = append(pods, p)
-	}
-	return pods
-}
-
-// GetAllNodes returns all tracked nodes.
-func (rc *ResourcesCollector) GetAllNodes() []NodeState {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	nodes := make([]NodeState, 0, len(rc.nodes))
-	for _, n := range rc.nodes {
-		nodes = append(nodes, n)
-	}
-	return nodes
-}
-
-// GetAllDeployments returns all tracked deployments.
-func (rc *ResourcesCollector) GetAllDeployments() []DeploymentState {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	deps := make([]DeploymentState, 0, len(rc.deps))
-	for _, d := range rc.deps {
-		deps = append(deps, d)
-	}
-	return deps
-}
-
-// GetPodResources returns memory limits for all tracked pods.
-func (rc *ResourcesCollector) GetPodResources() []PodState {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	pods := make([]PodState, 0, len(rc.pods))
-	for _, p := range rc.pods {
-		pods = append(pods, p)
-	}
-	return pods
-}
-
 // --- Pod handlers ---
 
 func podKey(p *corev1.Pod) string {

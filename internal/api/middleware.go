@@ -41,13 +41,16 @@ func (c middlewareConfig) rateLimitOrDefault() *rateLimiter {
 	return newRateLimiter(rateLimitPerMinute, rateLimitBurst)
 }
 
+const rateLimiterMaxEntries = 10_000
+
 // rateLimiter is a per-IP token bucket for API rate limiting.
 type rateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*bucket
-	rate    int
-	burst   int
-	lastGC  time.Time
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+	rate       int
+	burst      int
+	lastGC     time.Time
+	maxEntries int
 }
 
 type bucket struct {
@@ -57,10 +60,11 @@ type bucket struct {
 
 func newRateLimiter(rate, burst int) *rateLimiter {
 	return &rateLimiter{
-		buckets: make(map[string]*bucket),
-		rate:    rate,
-		burst:   burst,
-		lastGC:  time.Now(),
+		buckets:    make(map[string]*bucket),
+		rate:       rate,
+		burst:      burst,
+		lastGC:     time.Now(),
+		maxEntries: rateLimiterMaxEntries,
 	}
 }
 
@@ -81,6 +85,9 @@ func (rl *rateLimiter) allow(ip string) bool {
 	now := time.Now()
 	b, ok := rl.buckets[ip]
 	if !ok {
+		if len(rl.buckets) >= rl.maxEntries {
+			return false
+		}
 		b = &bucket{tokens: float64(rl.burst), lastFill: now}
 		rl.buckets[ip] = b
 	}
@@ -131,11 +138,7 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 
 		// Rate limit by IP (skip for health/readiness probes).
 		if !publicPath(r.URL.Path) {
-			ip := r.RemoteAddr
-			if idx := strings.LastIndex(ip, ":"); idx >= 0 {
-				ip = ip[:idx]
-			}
-			if !cfg.rateLimitOrDefault().allow(ip) {
+			if !cfg.rateLimitOrDefault().allow(clientIP(r)) {
 				w.Header().Set("Retry-After", "1")
 				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
@@ -160,6 +163,25 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 		next.ServeHTTP(lw, r)
 		slog.Info("api: request", "method", r.Method, "path", r.URL.Path, "status", lw.status, "duration", time.Since(start))
 	})
+}
+
+// clientIP extracts the client IP from a request, checking X-Forwarded-For
+// and X-Real-IP headers before falling back to RemoteAddr.
+func clientIP(r *http.Request) string {
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		if idx := strings.IndexByte(fwd, ','); idx >= 0 {
+			return strings.TrimSpace(fwd[:idx])
+		}
+		return strings.TrimSpace(fwd)
+	}
+	if real := r.Header.Get("X-Real-IP"); real != "" {
+		return strings.TrimSpace(real)
+	}
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx >= 0 {
+		ip = ip[:idx]
+	}
+	return ip
 }
 
 func secureCompare(got, want string) bool {

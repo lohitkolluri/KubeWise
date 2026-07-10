@@ -24,14 +24,16 @@ func init() {
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
+	printBanner(out)
+	printSection(out, "Environment checks")
 	ok := true
 
 	check := func(name string, err error) {
 		if err != nil {
-			_, _ = fmt.Fprintf(out, "✗ %s: %v\n", name, err)
+			printFail(out, "%s: %v", name, err)
 			ok = false
 		} else {
-			_, _ = fmt.Fprintf(out, "✓ %s\n", name)
+			printOK(out, "%s", name)
 		}
 	}
 
@@ -50,7 +52,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 
 	for _, tool := range []string{"helm", "kind", "docker"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			_, _ = fmt.Fprintf(out, "○ %s (optional for local dev)\n", tool)
+			printOptional(out, "%s (optional for local dev)", tool)
 		} else if tool == "docker" {
 			if err := exec.Command("docker", "info").Run(); err != nil {
 				check("docker daemon", fmt.Errorf("not running — start Docker Desktop"))
@@ -62,20 +64,23 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	printSection(out, "Agent")
 	if _, err := fetchHealth(); err != nil {
-		_, _ = fmt.Fprintf(out, "✗ agent at %s: %v\n", resolveAgentURL(), err)
-		_, _ = fmt.Fprintln(out, "  → run: kwctl up   (or start the agent / port-forward)")
+		printFail(out, "agent at %s: %v", resolveAgentURL(), err)
+		printHint(out, "run: kwctl up   (or start the agent / port-forward)")
 		ok = false
 	} else {
-		_, _ = fmt.Fprintf(out, "✓ agent at %s\n", resolveAgentURL())
+		printOK(out, "agent at %s", resolveAgentURL())
 		if st, err := fetchStatus(); err == nil {
-			_, _ = fmt.Fprintf(out, "  scrapes: %d  uptime: %s\n", st.Scrapes, st.Uptime)
+			printKV(out, "Scrapes:", fmt.Sprintf("%d", st.Scrapes))
+			printKV(out, "Uptime:", st.Uptime)
 		}
 	}
 
 	if !ok {
 		return fmt.Errorf("some checks failed")
 	}
-	_, _ = fmt.Fprintln(out, "\nAll checks passed.")
+	printOK(out, "All checks passed")
+	printNextSteps(out, "kwctl install", "kwctl ui")
 	return nil
 }

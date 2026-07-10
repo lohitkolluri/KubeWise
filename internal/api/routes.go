@@ -2,8 +2,9 @@ package api
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -137,6 +138,9 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SaveConfig(&cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
+	}
+	if s.remediator != nil {
+		s.remediator.SetObservabilityURLs(cfg.LokiURL, cfg.TempoURL)
 	}
 	writeJSON(w, http.StatusOK, cfg)
 }
@@ -297,27 +301,23 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "backup requires authentication or local access")
 		return
 	}
-	tmp, err := os.CreateTemp("", "kubewise-backup-*.db")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create temp: %v", err))
-		return
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
 
-	if err := s.store.Backup(tmp); err != nil {
-		_ = tmp.Close()
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("backup: %v", err))
-		return
-	}
-	if err := tmp.Close(); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("close temp: %v", err))
-		return
-	}
+	pr, pw := io.Pipe()
+	defer func() { _ = pr.Close() }()
+
+	go func() {
+		if err := s.store.Backup(pw); err != nil {
+			pw.CloseWithError(fmt.Errorf("backup: %w", err))
+			return
+		}
+		pw.Close()
+	}()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="kubewise-backup-%s.db"`, time.Now().Format("20060102T150405")))
-	http.ServeFile(w, r, tmpPath)
+	if _, err := io.Copy(w, pr); err != nil {
+		slog.Error("api: backup stream error", "error", err)
+	}
 }
 
 func isLocalRequest(r *http.Request) bool {

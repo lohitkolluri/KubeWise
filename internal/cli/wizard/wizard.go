@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // step represents the current wizard step.
@@ -84,7 +84,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			m.state.Completed = false
 			m.step = stepDone
@@ -118,7 +118,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	if m.width == 0 {
 		m.width = 80
 	}
@@ -148,7 +148,7 @@ func (m Model) View() string {
 	}
 
 	progress := m.viewProgress()
-	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Top, progress, body))
+	return tea.NewView(appStyle.Render(lipgloss.JoinVertical(lipgloss.Top, progress, body)))
 }
 
 // ── Progress bar ──
@@ -184,7 +184,7 @@ func mutedStyle(s string) string { return lipgloss.NewStyle().Foreground(colorMu
 // ── Step: Welcome ──
 
 func (m Model) updateWelcome(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepDetect
@@ -214,7 +214,7 @@ func (m Model) viewWelcome() string {
 // ── Step: Detect ──
 
 func (m Model) updateDetect(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepLLM
@@ -243,7 +243,7 @@ func (m Model) viewDetect() string {
 // ── Step: LLM ──
 
 func (m Model) updateLLM(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepObservability
@@ -255,7 +255,7 @@ func (m Model) updateLLM(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < 1 {
 				m.cursor++
 			}
-		case " ":
+		case "space":
 			// Toggle on/off for Ollama option.
 		}
 	}
@@ -296,7 +296,7 @@ func (m Model) viewLLM() string {
 // ── Step: Observability ──
 
 func (m Model) updateObservability(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepTools
@@ -308,7 +308,7 @@ func (m Model) updateObservability(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < 2 {
 				m.cursor++
 			}
-		case " ":
+		case "space":
 			switch m.cursor {
 			case 0:
 				m.state.EnableLoki = !m.state.EnableLoki
@@ -356,7 +356,7 @@ func (m Model) viewObservability() string {
 // ── Step: Tools ──
 
 func (m Model) updateTools(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepNotifications
@@ -392,7 +392,7 @@ func (m Model) viewTools() string {
 // ── Step: Notifications ──
 
 func (m Model) updateNotifications(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepRemediate
@@ -430,7 +430,7 @@ func (m Model) viewNotifications() string {
 // ── Step: Remediate ──
 
 func (m Model) updateRemediate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepReview
@@ -442,7 +442,7 @@ func (m Model) updateRemediate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < 2 {
 				m.cursor++
 			}
-		case " ":
+		case "space":
 			modes := []string{"off", "dry-run", "auto"}
 			if m.cursor < len(modes) {
 				m.state.RemediationMode = modes[m.cursor]
@@ -485,7 +485,7 @@ func (m Model) viewRemediate() string {
 // ── Step: Review ──
 
 func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepInstall
@@ -535,7 +535,7 @@ func (m Model) summaryBool(v bool) string {
 // ── Step: Install ──
 
 func (m Model) updateInstall(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			m.step = stepDone

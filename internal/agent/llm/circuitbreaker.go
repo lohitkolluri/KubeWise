@@ -53,9 +53,11 @@ func (cb *CircuitBreaker) Allow() bool {
 			if circuitState(cb.state.Load()) == stateOpen {
 				cb.state.Store(int32(stateHalfOpen))
 				cb.half = true // the current request consumes the probe
+				cb.mu.Unlock()
+				return true
 			}
 			cb.mu.Unlock()
-			return true
+			return false
 		}
 		return false
 	case stateHalfOpen:

@@ -8,6 +8,33 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
+func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPlan) string {
+	switch tier {
+	case models.RiskTier1:
+		return ""
+	case models.RiskTier2:
+		if !c.tierAssigner.CheckCooldown(plan.Action.Namespace, plan.Action.Type) {
+			return fmt.Sprintf("cooldown active for %s/%s", plan.Action.Namespace, plan.Action.Type)
+		}
+		return ""
+	case models.RiskTier3:
+		if plan.Action.Type == "escalate" {
+			return ""
+		}
+		return "" // queued for human approval after tier gate
+	case models.RiskTier4:
+		// T4 should never auto-execute, but it also shouldn't be auto-rejected
+		// when the action type is known. Instead, require explicit operator approval.
+		if !knownActionTypes[plan.Action.Type] {
+			return fmt.Sprintf("T4 action rejected (unknown action): %s %s/%s (blast radius: %s)",
+				plan.Action.Type, plan.Action.Namespace, plan.Action.Target, plan.Risk.BlastRadius)
+		}
+		return ""
+	default:
+		return fmt.Sprintf("unknown tier: %s", tier)
+	}
+}
+
 // ActionTierMap defines the default risk tier for each action type.
 var ActionTierMap = map[string]models.RiskTier{
 	"restart_pod":         models.RiskTier1,

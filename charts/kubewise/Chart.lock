@@ -1,0 +1,9 @@
+dependencies:
+- name: loki
+  repository: oci://ghcr.io/grafana-community/helm-charts
+  version: 13.7.2
+- name: tempo
+  repository: oci://ghcr.io/grafana-community/helm-charts
+  version: 1.26.7
+digest: sha256:500fbbb23a47ca1c53754ebcb233bc4963fe01ce0847b317b57e59ff8d6b5110
+generated: "2026-07-10T02:22:57.636084+05:30"

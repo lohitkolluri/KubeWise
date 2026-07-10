@@ -117,21 +117,6 @@ func (c *Client) Clientset() kubernetes.Interface {
 	return c.clientset
 }
 
-// FindRunningPod returns the first Running pod in namespace whose name has the given prefix.
-func (c *Client) FindRunningPod(ctx context.Context, namespace, namePrefix string) (*corev1.Pod, error) {
-	pods, err := c.GetPods(ctx, namespace)
-	if err != nil {
-		return nil, err
-	}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if strings.HasPrefix(p.Name, namePrefix) && p.Status.Phase == corev1.PodRunning {
-			return p, nil
-		}
-	}
-	return nil, fmt.Errorf("no running pod with prefix %q in namespace %s", namePrefix, namespace)
-}
-
 // FindRunningPodForDeployment returns a Running pod owned by the deployment's label selector.
 func (c *Client) FindRunningPodForDeployment(ctx context.Context, namespace, deploymentName string) (*corev1.Pod, error) {
 	dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
@@ -290,7 +275,4 @@ func (c *Client) RolloutRestart(ctx context.Context, namespace, name string) err
 	return nil
 }
 
-// GetDeployment returns a deployment by name.
-func (c *Client) GetDeployment(ctx context.Context, namespace, name string) (*appsv1.Deployment, error) {
-	return c.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-}
+

@@ -1,11 +1,12 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"sync"
 
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -20,7 +21,7 @@ var (
 
 // detailContentWidth returns the inner width available for detail text inside the viewport.
 func (m controlModel) detailContentWidth() int {
-	w := m.detailVP.Width
+	w := m.detailVP.Width()
 	if w <= 0 {
 		w = 80
 	}
@@ -85,6 +86,8 @@ func writeDetailProse(b *strings.Builder, width int, text string) {
 	if text == "" {
 		return
 	}
+	// Strip any ANSI escape codes in the source data to avoid raw codes leaking through.
+	text = ansi.Strip(text)
 	rendered := renderMarkdownBody(text, width)
 	rendered = strings.TrimRight(rendered, "\n")
 	if rendered == "" {
@@ -112,7 +115,7 @@ func renderMarkdownBody(text string, width int) string {
 		mdWidth = 16
 	}
 
-	dark := lipgloss.HasDarkBackground()
+	dark := lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 	r, err := glamourRendererFor(mdWidth, dark)
 	if err != nil {
 		return mutedStyle.Render(ansi.Wrap(text, width, " "))
@@ -121,7 +124,41 @@ func renderMarkdownBody(text string, width int) string {
 	if err != nil {
 		return mutedStyle.Render(ansi.Wrap(text, width, " "))
 	}
-	return strings.TrimRight(out, "\n")
+	out = strings.TrimRight(out, "\n")
+	// Glamour's default style adds a 2-space gutter on every line, which
+	// creates visible indentation gaps after section headings (── Title ──).
+	if out != "" {
+		out = stripLeadingSpace(out)
+	}
+	return out
+}
+
+// stripLeadingSpace removes the common leading whitespace from each line.
+func stripLeadingSpace(s string) string {
+	lines := strings.Split(s, "\n")
+	minIndent := -1
+	for _, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		if len(trimmed) == 0 || len(trimmed) == len(line) {
+			continue
+		}
+		indent := len(line) - len(trimmed)
+		if minIndent < 0 || indent < minIndent {
+			minIndent = indent
+		}
+	}
+	if minIndent <= 0 {
+		return s
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if len(line) >= minIndent {
+			out = append(out, line[minIndent:])
+		} else {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func glamourRendererFor(width int, dark bool) (*glamour.TermRenderer, error) {

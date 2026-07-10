@@ -42,16 +42,35 @@ func fetchTraceContext(ctx context.Context, tempoURL, namespace, pod string, sin
 	start := time.Now().Add(-since)
 	end := time.Now()
 
-	// Tempo search API: /api/search?tags={logfmt tags}&start={unixSec}&end={unixSec}&limit=10
+	var lastErr error
+	for _, tags := range buildTempoTagCandidates(namespace, pod) {
+		summaries, err := queryTempoSearch(ctx, tempoURL, tags, start, end, 10)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(summaries) > 0 {
+			return summaries, nil
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, nil
+}
+
+func queryTempoSearch(ctx context.Context, tempoURL, tags string, start, end time.Time, limit int) ([]TraceSummary, error) {
 	u, err := url.Parse(tempoURL + "/api/search")
 	if err != nil {
 		return nil, fmt.Errorf("parse tempo URL: %w", err)
 	}
 	q := u.Query()
-	q.Set("tags", buildTempoTags(namespace, pod))
+	if tags != "" {
+		q.Set("tags", tags)
+	}
 	q.Set("start", fmt.Sprintf("%d", start.Unix()))
 	q.Set("end", fmt.Sprintf("%d", end.Unix()))
-	q.Set("limit", "10")
+	q.Set("limit", fmt.Sprintf("%d", limit))
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -78,8 +97,25 @@ func fetchTraceContext(ctx context.Context, tempoURL, namespace, pod string, sin
 	return flattenTraceSummaries(result), nil
 }
 
+// buildTempoTagCandidates returns tag queries from specific to permissive.
+func buildTempoTagCandidates(namespace, pod string) []string {
+	var out []string
+	if namespace != "" && pod != "" {
+		out = append(out, buildTempoTags(namespace, pod))
+		out = append(out, fmt.Sprintf("k8s.namespace.name=%s k8s.pod.name=%s", namespace, pod))
+	}
+	if pod != "" {
+		out = append(out, "pod="+pod)
+		out = append(out, "k8s.pod.name="+pod)
+	}
+	if namespace != "" && pod == "" {
+		out = append(out, "namespace="+namespace)
+		out = append(out, "k8s.namespace.name="+namespace)
+	}
+	return out
+}
+
 // buildTempoTags builds logfmt-style tags for Tempo search.
-// Tempo search uses tags like: service.name=foo namespace=bar
 func buildTempoTags(namespace, pod string) string {
 	tags := ""
 	if namespace != "" {

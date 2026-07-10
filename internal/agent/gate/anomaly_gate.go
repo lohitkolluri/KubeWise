@@ -127,19 +127,6 @@ type GatePrediction struct {
 	Type       string
 }
 
-// FilterBatch evaluates multiple predictions in order, returning only those
-// that pass the gate. Useful for dry-run / test simulations.
-func (g *AnomalyGate) FilterBatch(predictions []GatePrediction, now time.Time) []Result {
-	results := make([]Result, 0, len(predictions))
-	for _, p := range predictions {
-		r := g.Filter(p.Entity, p.MetricName, p.Score, p.Type, now)
-		if r.Pass {
-			results = append(results, r)
-		}
-	}
-	return results
-}
-
 // ObserveScore records a score for sustainment tracking without evaluating pass rules.
 // Call on every scrape (including sub-threshold) so sustainment reflects consecutive scrapes.
 func (g *AnomalyGate) ObserveScore(entity string, metricName string, score float64, now time.Time) {

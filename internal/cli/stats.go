@@ -25,15 +25,18 @@ func runStats(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return writeOutput(cmd.OutOrStdout(), outputFormat, stats, func() error {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions total:", stats.PredictionsTotal)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions pending:", stats.PredictionsPending)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions hit:", stats.PredictionsHit)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Predictions missed:", stats.PredictionsMissed)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %.1f%%\n", "Prediction accuracy:", stats.PredictionAccuracy*100)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations total:", stats.RemediationsTotal)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations verified:", stats.RemediationsVerified)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Remediations dry-run:", stats.RemediationsDryRun)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %d\n", "Pending approvals:", stats.RemediationsPending)
+		out := cmd.OutOrStdout()
+		printBanner(out)
+		printSection(out, "Outcome metrics")
+		printKV(out, "Predictions total:", fmt.Sprintf("%d", stats.PredictionsTotal))
+		printKV(out, "Predictions pending:", fmt.Sprintf("%d", stats.PredictionsPending))
+		printKV(out, "Predictions hit:", fmt.Sprintf("%d", stats.PredictionsHit))
+		printKV(out, "Predictions missed:", fmt.Sprintf("%d", stats.PredictionsMissed))
+		printKVStyled(out, "Prediction accuracy:", fmt.Sprintf("%.1f%%", stats.PredictionAccuracy*100), scoreStyle(stats.PredictionAccuracy))
+		printKV(out, "Remediations total:", fmt.Sprintf("%d", stats.RemediationsTotal))
+		printKV(out, "Remediations verified:", fmt.Sprintf("%d", stats.RemediationsVerified))
+		printKV(out, "Remediations dry-run:", fmt.Sprintf("%d", stats.RemediationsDryRun))
+		printKV(out, "Pending approvals:", fmt.Sprintf("%d", stats.RemediationsPending))
 		return nil
 	})
 }

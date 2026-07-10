@@ -43,6 +43,7 @@ var predictCmd = &cobra.Command{
 }
 
 func runPredictWatch(cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
 	seen := make(map[string]struct{})
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
@@ -65,8 +66,13 @@ func runPredictWatch(cmd *cobra.Command) error {
 				continue
 			}
 			seen[key] = struct{}{}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s %s score=%.2f eta=%.0fs %s\n",
+			line := fmt.Sprintf("[%s] %s %s score=%.2f eta=%.0fs %s",
 				time.Now().Format("15:04:05"), p.Type, p.Entity, p.Score, p.ETASeconds, p.Action)
+			if writerTTY(out) {
+				_, _ = fmt.Fprintln(out, infoStyle.Render(line))
+			} else {
+				_, _ = fmt.Fprintln(out, line)
+			}
 		}
 		select {
 		case <-done:
@@ -87,16 +93,20 @@ func renderPredictions(cmd *cobra.Command, preds []models.PredictionResult) erro
 	preds = filterPredictions(preds)
 	return writeOutput(cmd.OutOrStdout(), outputFormat, preds, func() error {
 		if len(preds) == 0 {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No active predictions.")
+			printEmpty(cmd.OutOrStdout(), "No active predictions.")
 			return nil
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10s %-10s %s\n",
-			"TYPE", "ENTITY", "SCORE", "ETA(s)", "ACTION")
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), repeatLine(80))
+		rows := make([][]string, 0, len(preds))
 		for _, p := range preds {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-24s %-10.2f %-10.0f %s\n",
-				trunc(p.Type, 10), trunc(p.Entity, 22), p.Score, p.ETASeconds, trunc(p.Action, 30))
+			rows = append(rows, []string{
+				trunc(p.Type, 12),
+				trunc(p.Entity, 24),
+				fmt.Sprintf("%.2f", p.Score),
+				fmt.Sprintf("%.0f", p.ETASeconds),
+				trunc(p.Action, 30),
+			})
 		}
+		printDataTable(cmd.OutOrStdout(), []string{"TYPE", "ENTITY", "SCORE", "ETA(s)", "ACTION"}, rows)
 		return nil
 	})
 }

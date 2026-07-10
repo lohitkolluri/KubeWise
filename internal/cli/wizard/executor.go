@@ -119,6 +119,17 @@ func (s WizardState) helmInstall(ctx context.Context, log *stringsBuilder) error
 			},
 		},
 	}
+	if s.EnableLoki || s.EnableTempo || s.EnableGrafana {
+		obs := map[string]any{
+			"loki":    map[string]any{"enabled": s.EnableLoki},
+			"tempo":   map[string]any{"enabled": s.EnableTempo},
+			"alloy":   map[string]any{"enabled": s.EnableLoki},
+			"grafana": map[string]any{"enabled": s.EnableGrafana},
+		}
+		agent := values["agent"].(map[string]any)
+		agent["features"] = map[string]any{"observability": true}
+		agent["observability"] = obs
+	}
 	if s.OpenRouterKey != "" {
 		values["secrets"] = map[string]any{
 			"openrouterApiKey": s.OpenRouterKey,

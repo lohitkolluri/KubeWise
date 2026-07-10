@@ -6,15 +6,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/reflow/truncate"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 
+	"github.com/lohitkolluri/KubeWise/internal/cli/kwtable"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -66,14 +68,7 @@ func runControlCenter(interval time.Duration) error {
 		interval = 2 * time.Second
 	}
 	m := newControlModel(interval)
-	opts := []tea.ProgramOption{}
-	if uiAltScreen {
-		opts = append(opts, tea.WithAltScreen())
-	}
-	if uiMouse {
-		opts = append(opts, tea.WithMouseCellMotion())
-	}
-	p := tea.NewProgram(m, opts...)
+	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
 }
@@ -148,9 +143,16 @@ type controlModel struct {
 	detailWrapW    int
 
 	// Status bar
-	statusMsg  string
-	lastUpdate time.Time
-	uptime     string
+	lastUpdate  time.Time
+	nextRefresh time.Time
+	uptime      string
+
+	// Toasts & chrome
+	toasts      toastStack
+	refreshProg progress.Model
+	actionProg  progress.Model
+	actionBusy  bool
+	actionLabel string
 
 	// Mode state
 	ready       bool
@@ -161,6 +163,14 @@ type controlModel struct {
 	// Confirmations
 	confirm         confirmKind
 	confirmTargetID string // for confirmApproveRemediation
+	confirmAffirm   bool   // true = primary action focused
+
+	// Tables (kwtable — bubbles/table fork with full-row selection styling)
+	predTable         kwtable.Model
+	anomTable         kwtable.Model
+	auditTable        kwtable.Model
+	approvalTable     kwtable.Model
+	healthTable       kwtable.Model
 
 	// UI components
 	cursor [tabCount]int
@@ -174,11 +184,31 @@ type controlModel struct {
 	paletteInputTitle string
 	paletteInputApply func(m *controlModel, value string) (string, error)
 	paletteQuitApp    bool
+
+	// Mouse
+	mouseEnabled bool
 }
 
 type auditGroup struct {
 	Key     string
 	Records []models.AuditRecord
+}
+
+type kpiTone int
+
+const (
+	kpiToneNeutral kpiTone = iota
+	kpiToneInfo
+	kpiToneSuccess
+	kpiToneWarn
+	kpiToneCritical
+)
+
+type kpiDef struct {
+	label string
+	value string
+	style lipgloss.Style
+	tone  kpiTone
 }
 
 func newControlModel(interval time.Duration) controlModel {
@@ -187,17 +217,25 @@ func newControlModel(interval time.Duration) controlModel {
 	s.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
 	m := controlModel{
-		interval:   interval,
-		tab:        tabDashboard,
-		palette:    newPaletteState(),
-		keys:       defaultUIKeys(),
-		spin:       s,
-		logsFollow: true,
-		detailVP:   viewport.New(80, 10),
+		interval:      interval,
+		tab:           tabDashboard,
+		palette:       newPaletteState(),
+		keys:          defaultUIKeys(),
+		spin:          s,
+		refreshProg:   newRefreshProgress(),
+		actionProg:    newActionProgress(),
+		logsFollow:    true,
+		mouseEnabled:  true,
+		detailVP:      viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)),
+		predTable:     initTable(predCols()),
+		anomTable:     initTable(anomCols()),
+		auditTable:    initTable(auditCols()),
+		approvalTable: initTable(approvalCols()),
+		healthTable:   initTable(healthCols()),
 	}
 	m.help = help.New()
 	m.help.ShowAll = false
-	m.logsVP = viewport.New(80, 20)
+	m.logsVP = viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	m.logsVP.MouseWheelEnabled = true
 	m.detailVP.MouseWheelEnabled = true
 	m.detailVP.Style = lipgloss.NewStyle().
@@ -208,22 +246,28 @@ func newControlModel(interval time.Duration) controlModel {
 }
 
 func (m controlModel) Init() tea.Cmd {
+	m.nextRefresh = time.Now().Add(m.interval)
 	return tea.Batch(
 		m.spin.Tick,
+		m.refreshProg.Init(),
+		m.actionProg.Init(),
 		m.refreshAll(),
+		m.refreshProg.SetPercent(0.1),
 		scheduleTick(m.interval),
 	)
 }
 
 type uiTickMsg time.Time
-type toastClearMsg struct{}
+type restartDoneMsg struct{ err error }
 
 func scheduleTick(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return uiTickMsg(t) })
 }
 
-func scheduleToastClear() tea.Cmd {
-	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return toastClearMsg{} })
+func restartAgentAsync() tea.Cmd {
+	return func() tea.Msg {
+		return restartDoneMsg{err: restartAgentDeployment()}
+	}
 }
 
 func (m controlModel) logsAtBottom() bool {
@@ -231,11 +275,11 @@ func (m controlModel) logsAtBottom() bool {
 	if total <= 0 {
 		return true
 	}
-	bottom := total - m.logsVP.Height
+	bottom := total - m.logsVP.Height()
 	if bottom < 0 {
 		bottom = 0
 	}
-	return m.logsVP.YOffset >= bottom
+	return m.logsVP.YOffset() >= bottom
 }
 
 func (m *controlModel) maybeDisableLogsFollowAfterScroll() tea.Cmd {
@@ -244,8 +288,7 @@ func (m *controlModel) maybeDisableLogsFollowAfterScroll() tea.Cmd {
 	}
 	if m.logsFollow && !m.logsAtBottom() {
 		m.logsFollow = false
-		m.statusMsg = "logs: follow OFF (scrolled)"
-		return scheduleToastClear()
+		m.notify("logs: follow OFF (scrolled)", toastInfo)
 	}
 	return nil
 }
@@ -313,18 +356,7 @@ type dataMsg struct {
 }
 
 func (m controlModel) shouldPauseRefresh() bool {
-	return m.palette.phase != paletteClosed || m.detail != "" || m.detailMeta != "" || m.confirm != confirmNone
-}
-
-func (m controlModel) contentHeight() int {
-	h := m.height - uiHeaderLines - uiTabLines - uiFooterLines - 2
-	if m.help.ShowAll {
-		h -= 2
-	}
-	if h < 6 {
-		return 6
-	}
-	return h
+	return m.palette.phase != paletteClosed || m.detail != "" || m.detailMeta != "" || m.confirmOpen()
 }
 
 // ── Update ──
@@ -334,7 +366,7 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.help.Width = msg.Width
+		m.help.SetWidth(msg.Width)
 		// Clamp viewport dimensions for tiny terminals.
 		vw := msg.Width - 6
 		if vw < 1 {
@@ -344,33 +376,75 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if vh < 1 {
 			vh = 1
 		}
-		m.logsVP.Width = vw
-		m.logsVP.Height = vh
-		m.detailVP.Width = vw
+		m.logsVP.SetWidth(vw)
+		m.logsVP.SetHeight(vh)
+		m.detailVP.SetWidth(vw)
 		m.detailVPHeight = vh
 		m.resizeDetailViewport()
 		if m.detail != "" || m.detailMeta != "" {
 			m.relayoutDetail()
 		}
 		m.resizePalette()
+		// Resize tables
+		tw := vw - 4
+		if tw < 10 {
+			tw = 10
+		}
+		th := vh - 2
+		if th < 3 {
+			th = 3
+		}
+		m.predTable.SetWidth(tw)
+		m.predTable.SetHeight(th)
+		m.anomTable.SetWidth(tw)
+		m.anomTable.SetHeight(th)
+		m.auditTable.SetWidth(tw)
+		m.auditTable.SetHeight(th)
+		m.approvalTable.SetWidth(tw)
+		m.approvalTable.SetHeight(th)
+		m.healthTable.SetWidth(tw)
+		m.healthTable.SetHeight(th)
+		m.resizeChrome()
 		return m, nil
+
+	case progress.FrameMsg:
+		var cmds []tea.Cmd
+		if m.loading {
+			var cmd tea.Cmd
+			m.refreshProg, cmd = m.refreshProg.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+		if m.actionBusy {
+			var cmd tea.Cmd
+			m.actionProg, cmd = m.actionProg.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 
-	case toastClearMsg:
-		if m.statusMsg != "" {
-			m.statusMsg = ""
+	case restartDoneMsg:
+		m.actionBusy = false
+		m.actionLabel = ""
+		if msg.err != nil {
+			m.err = msg.err
+			m.notifyErr(msg.err.Error())
+			return m, m.actionProg.SetPercent(0)
 		}
-		return m, nil
+		m.notify("Agent deployment restarting…", toastSuccess)
+		return m, m.actionProg.SetPercent(1)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.palette.phase != paletteClosed {
 			return m.handlePaletteKey(msg)
 		}
-		if m.confirm != confirmNone {
+		if m.confirmOpen() {
 			return m.handleConfirmKey(msg)
 		}
 		if m.detail != "" {
@@ -388,16 +462,41 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleMainKey(msg)
 
+	case tea.MouseMsg:
+		if m.palette.phase != paletteClosed {
+			var cmd tea.Cmd
+			m.palette.list, cmd = m.palette.list.Update(msg)
+			return m, cmd
+		}
+		if m.confirmOpen() {
+			return m, nil
+		}
+		if m.detail != "" {
+			var cmd tea.Cmd
+			m.detailVP, cmd = m.detailVP.Update(msg)
+			return m, cmd
+		}
+		switch m.tab {
+		case tabLogs:
+			var cmd tea.Cmd
+			m.logsVP, cmd = m.logsVP.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case uiTickMsg:
+		m.toasts.prune(time.Now())
 		if m.shouldPauseRefresh() || m.loading {
 			return m, scheduleTick(m.interval)
 		}
 		m.loading = true
-		return m, tea.Batch(m.refreshAll(), scheduleTick(m.interval))
+		m.nextRefresh = time.Now().Add(m.interval)
+		return m, tea.Batch(m.refreshAll(), m.refreshProg.SetPercent(0.2), scheduleTick(m.interval))
 
 	case dataMsg:
 		m.loading = false
 		m.ready = true
+		m.nextRefresh = time.Now().Add(m.interval)
 
 		// Track uptime from status
 		if msg.err == nil {
@@ -439,75 +538,28 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.healthSum = msg.healthSum
 			m.accSnap = msg.accSnap
 			m.lastUpdate = msg.lastUpdate
-			m.logsVP.SetContent(msg.logs)
+			m.predTable.SetRows(buildPredRows(msg.preds))
+			m.anomTable.SetRows(buildAnomRows(msg.anomalies))
+			m.auditTable.SetRows(buildAuditRows(m.auditGroups))
+			m.approvalTable.SetRows(buildApprovalRows(m.approvalGroups))
+			m.healthTable.SetRows(buildHealthRows(msg.healthScores))
+			m.logsVP.SetContent(colorizeLogs(msg.logs))
 			if m.logsFollow {
 				m.logsVP.GotoBottom()
 			}
-			if m.statusMsg == "Refreshing…" {
-				m.statusMsg = ""
-			}
 		}
-		return m, nil
+		return m, m.refreshProg.SetPercent(1)
 	}
 	return m, nil
 }
 
 // ── Confirmation handling ──
 
-func (m *controlModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, m.keys.Confirm) {
-		kind := m.confirm
-		target := m.confirmTargetID
-		m.confirm = confirmNone
-		m.confirmTargetID = ""
-
-		switch kind {
-		case confirmRestart:
-			if err := restartAgentDeployment(); err != nil {
-				m.err = err
-			} else {
-				m.statusMsg = "Agent deployment restarting…"
-				m.err = nil
-				return m, scheduleToastClear()
-			}
-			return m, nil
-
-		case confirmEnableLive:
-			mode, err := setRemediationLive(true)
-			if err != nil {
-				m.err = err
-			} else {
-				m.remMode = mode
-				m.statusMsg = "LIVE mode — remediations will execute"
-				m.err = nil
-				return m, tea.Batch(m.refreshAll(), scheduleToastClear())
-			}
-			return m, nil
-
-		case confirmApproveRemediation:
-			if err := approveRemediation(target); err != nil {
-				m.err = err
-			} else {
-				m.statusMsg = "Remediation approved and executed"
-				m.err = nil
-				return m, tea.Batch(m.refreshAll(), scheduleToastClear())
-			}
-			return m, nil
-		}
-		return m, nil
-	}
-	if key.Matches(msg, m.keys.Cancel) {
-		m.confirm = confirmNone
-		m.confirmTargetID = ""
-		m.statusMsg = "Cancelled"
-		return m, scheduleToastClear()
-	}
-	return m, nil
-}
+// (see ui_confirm.go)
 
 // ── Main key handler ──
 
-func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *controlModel) handleMainKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
@@ -515,11 +567,11 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openPalette()
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
-		m.logsVP.Height = m.contentHeight()
+		m.logsVP.SetHeight(m.contentHeight())
 		return m, nil
 	case key.Matches(msg, m.keys.Refresh):
-		m.statusMsg = "Refreshing…"
-		return m, tea.Batch(m.refreshAll(), scheduleToastClear())
+		m.notify("Refreshing…", toastInfo)
+		return m, tea.Batch(m.refreshAll(), m.refreshProg.SetPercent(0.15))
 	case key.Matches(msg, m.keys.TabPrev):
 		m.tab = (m.tab + tabCount - 1) % tabCount
 		m.clampCursor()
@@ -556,6 +608,11 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsVP, cmd = m.logsVP.Update(msg)
 			return m, tea.Batch(cmd, m.maybeDisableLogsFollowAfterScroll())
 		}
+		if tbl := m.tableForTab(m.tab); tbl != nil {
+			var cmd tea.Cmd
+			*tbl, cmd = tbl.Update(msg)
+			return m, cmd
+		}
 		if m.cursor[m.tab] < m.listLen(m.tab)-1 {
 			m.cursor[m.tab]++
 		}
@@ -565,6 +622,11 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsVP, cmd = m.logsVP.Update(msg)
 			return m, tea.Batch(cmd, m.maybeDisableLogsFollowAfterScroll())
 		}
+		if tbl := m.tableForTab(m.tab); tbl != nil {
+			var cmd tea.Cmd
+			*tbl, cmd = tbl.Update(msg)
+			return m, cmd
+		}
 		if m.cursor[m.tab] > 0 {
 			m.cursor[m.tab]--
 		}
@@ -573,15 +635,22 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsVP.GotoTop()
 			return m, m.maybeDisableLogsFollowAfterScroll()
 		}
+		if tbl := m.tableForTab(m.tab); tbl != nil {
+			tbl.GotoTop()
+			return m, nil
+		}
 		m.cursor[m.tab] = 0
 	case key.Matches(msg, m.keys.Bottom):
 		if m.tab == tabLogs {
 			m.logsVP.GotoBottom()
 			if !m.logsFollow {
 				m.logsFollow = true
-				m.statusMsg = "logs: follow ON"
-				return m, scheduleToastClear()
+				m.notify("logs: follow ON", toastInfo)
 			}
+			return m, nil
+		}
+		if tbl := m.tableForTab(m.tab); tbl != nil {
+			tbl.GotoBottom()
 			return m, nil
 		}
 		m.cursor[m.tab] = m.listLen(m.tab) - 1
@@ -590,8 +659,15 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, m.keys.Detail):
 		m.showDetailForSelection()
+	case key.Matches(msg, m.keys.Copy):
+		if m.detail != "" || m.detailMeta != "" {
+			content := m.detailMeta + "\n" + m.detail
+			content = ansi.Strip(content)
+			m.notify("copied to clipboard", toastSuccess)
+			return m, tea.SetClipboard(content)
+		}
 	case key.Matches(msg, m.keys.DryRun), key.Matches(msg, m.keys.ToggleLive):
-		m.toggleRemediationMode()
+		return m.toggleRemediationMode()
 	case key.Matches(msg, m.keys.Approve):
 		if m.tab == tabApprovals && len(m.pending) > 0 {
 			i := m.cursor[tabApprovals]
@@ -601,10 +677,7 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if i >= 0 && i < len(groups) {
 				r := groups[i].Records[0]
-				// Show confirmation before approving
-				m.confirm = confirmApproveRemediation
-				m.confirmTargetID = r.ID
-				return m, nil
+				return m, m.openConfirmForm(confirmApproveRemediation, r.ID)
 			}
 		}
 	case key.Matches(msg, m.keys.Reject):
@@ -637,11 +710,11 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsFollow = !m.logsFollow
 			if m.logsFollow {
 				m.logsVP.GotoBottom()
-				m.statusMsg = "logs: follow ON"
+				m.notify("logs: follow ON", toastInfo)
 			} else {
-				m.statusMsg = "logs: follow OFF"
+				m.notify("logs: follow OFF", toastInfo)
 			}
-			return m, scheduleToastClear()
+			return m, nil
 		}
 	case key.Matches(msg, m.keys.Mode):
 		if m.tab == tabConfig && m.config != nil {
@@ -649,13 +722,20 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := putAgentConfig(m.config); err != nil {
 				m.err = err
 			} else {
-				m.statusMsg = fmt.Sprintf("mode=%s saved", m.config.Remediation.Mode)
+				m.notify(fmt.Sprintf("mode=%s saved", m.config.Remediation.Mode), toastSuccess)
 				m.err = nil
-				return m, scheduleToastClear()
+				return m, nil
 			}
 		}
 	case key.Matches(msg, m.keys.Restart):
-		m.confirm = confirmRestart
+		return m, m.openConfirmForm(confirmRestart, "")
+	case key.Matches(msg, m.keys.ToggleMouse):
+		m.mouseEnabled = !m.mouseEnabled
+		if m.mouseEnabled {
+			m.notify("mouse capture ON — Ctrl+S to toggle", toastInfo)
+		} else {
+			m.notify("mouse capture OFF — native selection allowed", toastInfo)
+		}
 		return m, nil
 	default:
 		if m.tab == tabLogs {
@@ -670,12 +750,33 @@ func (m *controlModel) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // ── Helpers ──
 
 func (m *controlModel) clampCursor() {
+	// Table tabs manage their own cursor internally
+	if m.tableForTab(m.tab) != nil {
+		return
+	}
 	max := m.listLen(m.tab) - 1
 	if max < 0 {
 		max = 0
 	}
 	if m.cursor[m.tab] > max {
 		m.cursor[m.tab] = max
+	}
+}
+
+func (m *controlModel) tableForTab(tab int) *kwtable.Model {
+	switch tab {
+	case tabPredict:
+		return &m.predTable
+	case tabAnomalies:
+		return &m.anomTable
+	case tabAudit:
+		return &m.auditTable
+	case tabApprovals:
+		return &m.approvalTable
+	case tabHealth:
+		return &m.healthTable
+	default:
+		return nil
 	}
 }
 
@@ -775,31 +876,46 @@ func statusStyle(s string) lipgloss.Style {
 
 // ── View ──
 
-func (m controlModel) View() string {
+func (m controlModel) View() tea.View {
 	if m.width == 0 {
-		return logoStyle.Render(" KubeWise ") + "\n" + mutedStyle.Render("Connecting…")
+		return tea.NewView(logoStyle.Render(" KubeWise ") + "\n" + mutedStyle.Render("Connecting…"))
 	}
 
-	var b strings.Builder
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n")
-	b.WriteString(m.renderTabs())
-	b.WriteString("\n")
-
-	if m.detail != "" || m.detailMeta != "" {
-		b.WriteString(m.renderDetail())
+	var base string
+	if m.confirmOpen() {
+		base = m.renderConfirmOverlay()
+	} else if m.palette.phase != paletteClosed {
+		base = m.renderPalette()
 	} else {
-		content := m.renderTabContent()
-		b.WriteString(panelStyle.Width(m.width - 2).Height(m.contentHeight()).Render(content))
-	}
-	b.WriteString("\n")
-	b.WriteString(m.renderFooter())
+		var b strings.Builder
+		b.WriteString(m.renderHeader())
+		b.WriteString("\n")
+		if toastStrip := m.toasts.strip(); toastStrip != "" {
+			b.WriteString(toastStrip)
+			b.WriteString("\n")
+		}
+		b.WriteString(m.renderTabs())
+		b.WriteString("\n")
 
-	base := b.String()
-	if m.confirm != confirmNone {
-		base += "\n" + m.renderConfirm()
+		if m.detail != "" || m.detailMeta != "" {
+			b.WriteString(m.renderDetail())
+		} else {
+			content := clipToLines(m.renderTabContent(), m.panelInnerHeight())
+			b.WriteString(panelStyle.Width(m.width - 2).Height(m.contentHeight()).Render(content))
+		}
+		b.WriteString("\n")
+		b.WriteString(m.renderFooter())
+		base = b.String()
 	}
-	return base
+
+	v := tea.NewView(base)
+	v.AltScreen = uiAltScreen
+	if m.confirmOpen() {
+		v.MouseMode = tea.MouseModeNone
+	} else if m.mouseEnabled {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
 }
 
 // ── Header ──
@@ -819,7 +935,7 @@ func (m controlModel) renderHeader() string {
 		sync = m.spin.View() + " "
 	}
 
-	// Freshness indicator
+	// Freshness + refresh countdown
 	freshness := ""
 	if !m.lastUpdate.IsZero() {
 		age := time.Since(m.lastUpdate)
@@ -830,6 +946,11 @@ func (m controlModel) renderHeader() string {
 			freshness = mutedStyle.Render(fmt.Sprintf("%.0fs", age.Seconds()))
 		default:
 			freshness = warnStyle.Render(fmt.Sprintf("%.0fs", age.Seconds()))
+		}
+	}
+	if !m.nextRefresh.IsZero() && m.ready && !m.loading {
+		if rem := time.Until(m.nextRefresh).Round(time.Second); rem > 0 {
+			freshness += " " + mutedStyle.Render(fmt.Sprintf("↻%ds", int(rem.Seconds())))
 		}
 	}
 
@@ -849,25 +970,31 @@ func (m controlModel) renderHeader() string {
 // ── Tabs with badges ──
 
 func (m controlModel) renderTabs() string {
-	var parts []string
+	var labels []string
+	var indicators []string
 	counts := m.tabCounts()
 	for i, label := range tabLabels {
 		style := tabInactiveStyle
 		if i == m.tab {
 			style = tabActiveStyle
 		}
-		label = fmt.Sprintf("%d %s", i+1, label)
+		text := fmt.Sprintf("%d %s", i+1, label)
 		if n := counts[i]; n > 0 && i != m.tab {
-			label += fmt.Sprintf(" %s%d", tabBadgeStyle.Render("●"), n)
+			text += fmt.Sprintf(" %s%d", tabBadgeStyle.Render("●"), n)
 		}
-		marker := ""
+		rendered := style.Render(text)
+		w := lipgloss.Width(rendered)
+		labels = append(labels, rendered)
 		if i == m.tab {
-			marker = " ◂"
+			indicators = append(indicators, tabIndicatorStyle.Width(w).Render(strings.Repeat("─", max(1, w))))
+		} else {
+			indicators = append(indicators, strings.Repeat(" ", w))
 		}
-		parts = append(parts, style.Render(label+marker))
 	}
 	hint := mutedStyle.Render("  ←/→")
-	return strings.Join(parts, "") + hint
+	tabLine := strings.Join(labels, "")
+	indicatorLine := strings.Join(indicators, "")
+	return tabLine + hint + "\n" + indicatorLine
 }
 
 func (m controlModel) tabCounts() [tabCount]int {
@@ -953,22 +1080,26 @@ func (m controlModel) renderTabContent() string {
 		if m.errTab[tabPredict] != nil {
 			return m.renderTabError("predictions", m.errTab[tabPredict])
 		}
-		return m.renderList(m.predsLines(), m.cursor[tabPredict], len(m.preds))
+		return m.tableOrEmpty(m.predTable.View(), emptyStateStyle.Render("No active predictions")+"\n"+
+			mutedStyle.Render("  Predictions appear when the agent detects upcoming issues"))
 	case tabAnomalies:
 		if m.errTab[tabAnomalies] != nil {
 			return m.renderTabError("anomalies", m.errTab[tabAnomalies])
 		}
-		return m.renderList(m.anomalyLines(), m.cursor[tabAnomalies], len(m.anomalies))
+		return m.tableOrEmpty(m.anomTable.View(), emptyStateStyle.Render("No anomalies")+"\n"+
+			mutedStyle.Render("  Anomalies appear when metrics deviate from expected patterns"))
 	case tabAudit:
 		if m.errTab[tabAudit] != nil {
 			return m.renderTabError("audit", m.errTab[tabAudit])
 		}
-		return m.renderList(m.auditLines(), m.cursor[tabAudit], m.listLen(tabAudit))
+		return m.tableOrEmpty(m.auditTable.View(), emptyStateStyle.Render("No remediation records")+"\n"+
+			mutedStyle.Render("  Audit records appear after remediations are attempted"))
 	case tabApprovals:
 		if m.errTab[tabApprovals] != nil {
 			return m.renderTabError("approvals", m.errTab[tabApprovals])
 		}
-		return m.renderList(m.approvalLines(), m.cursor[tabApprovals], m.listLen(tabApprovals))
+		return m.tableOrEmpty(m.approvalTable.View(), emptyStateStyle.Render("No pending approvals")+"\n"+
+			mutedStyle.Render("  T3 actions appear here when live mode is enabled and need your approval"))
 	case tabConfig:
 		if m.errTab[tabConfig] != nil {
 			return m.renderTabError("config", m.errTab[tabConfig])
@@ -990,7 +1121,7 @@ func (m controlModel) renderTabContent() string {
 			follow = "follow=OFF"
 			followSty = mutedStyle
 		}
-		pos := fmt.Sprintf("%d/%d", min(m.logsVP.YOffset+m.logsVP.Height, m.logsVP.TotalLineCount()), max(1, m.logsVP.TotalLineCount()))
+		pos := fmt.Sprintf("%d/%d", min(m.logsVP.YOffset()+m.logsVP.Height(), m.logsVP.TotalLineCount()), max(1, m.logsVP.TotalLineCount()))
 		header := mutedStyle.Render(fmt.Sprintf("lines %d", lines)) +
 			mutedStyle.Render(" · ") +
 			followSty.Render(follow) +
@@ -1001,10 +1132,21 @@ func (m controlModel) renderTabContent() string {
 		if m.errTab[tabHealth] != nil {
 			return m.renderTabError("health scores", m.errTab[tabHealth])
 		}
-		return m.renderList(m.healthScoreLines(), m.cursor[tabHealth], len(m.healthScores))
+		return m.tableOrEmpty(m.healthTable.View(), emptyStateStyle.Render("No health scores")+"\n"+
+			mutedStyle.Render("  Health scores appear after the agent computes them during scrape cycles"))
 	default:
 		return ""
 	}
+}
+
+// colorizeLogs applies charm log level styling to agent log lines.
+
+func (m controlModel) tableOrEmpty(view string, emptyMsg string) string {
+	// If the table view is just headers + empty space, show empty message
+	if view == "" || strings.Count(view, "\n") <= 1 {
+		return emptyMsg
+	}
+	return view
 }
 
 func (m controlModel) renderTabError(tabName string, err error) string {
@@ -1013,186 +1155,7 @@ func (m controlModel) renderTabError(tabName string, err error) string {
 		mutedStyle.Render("Press r to retry")
 }
 
-// ── Dashboard ──
-
-func (m controlModel) renderDashboard() string {
-	var b strings.Builder
-
-	// Health status
-	if !m.ready {
-		b.WriteString(emptyStateStyle.Render("Loading agent data…"))
-		b.WriteString("\n\n")
-	}
-
-	if m.err != nil {
-		b.WriteString(errStyle.Render("⚠  Connection error"))
-		b.WriteString("\n")
-		if m.status.Uptime != "" {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("  Last known: up %s · %d scrapes", m.uptime, m.status.Scrapes)))
-			b.WriteString("\n\n")
-		} else {
-			b.WriteString(mutedStyle.Render("  Agent unreachable. Check connection and retry."))
-			b.WriteString("\n\n")
-		}
-	}
-
-	// ── KPI grid (4 columns, no box borders) ──
-
-	type kpiDef struct {
-		label string
-		value string
-		style lipgloss.Style
-	}
-
-	var kpis []kpiDef
-
-	// Row 1: operational
-	kpis = append(kpis,
-		kpiDef{"Uptime", m.status.Uptime, infoStyle},
-		kpiDef{"Scrapes", fmt.Sprintf("%d", m.status.Scrapes), infoStyle},
-		kpiDef{"Passed", fmt.Sprintf("%d", m.status.GatePassed), successStyle},
-		kpiDef{"Dropped", fmt.Sprintf("%d", m.status.GateDropped), warnStyle},
-	)
-
-	// Row 2: business metrics
-	kpis = append(kpis,
-		kpiDef{"Predictions", fmt.Sprintf("%d", len(m.preds)), kpiValueStyleForCount(len(m.preds), 5)},
-		kpiDef{"Anomalies", fmt.Sprintf("%d", len(m.anomalies)), kpiValueStyleForCount(len(m.anomalies), 3)},
-		kpiDef{"Pending", fmt.Sprintf("%d", len(m.pending)), kpiValueStyleForCount(len(m.pending), 1)},
-	)
-
-	// Health value
-	healthVal := "—"
-	healthSty := mutedStyle
-	if m.healthSum != nil {
-		healthVal = fmt.Sprintf("%.0f", m.healthSum.OverallScore)
-		healthSty = scoreStyle(m.healthSum.OverallScore / 100.0)
-	}
-	kpis = append(kpis, kpiDef{"Health", healthVal, healthSty})
-
-	// Accuracy
-	accVal := "—"
-	accSty := mutedStyle
-	if m.accSnap != nil {
-		accVal = fmt.Sprintf("%.1f%%", m.accSnap.Overall.F1Score*100)
-		accSty = scoreStyle(m.accSnap.Overall.F1Score)
-	}
-	kpis = append(kpis, kpiDef{"Acc F1", accVal, accSty})
-
-	// Render grid — row-major: all labels then all values per row
-	cols := 4
-	cellW := (m.width - 8 - (cols-1)*2) / cols
-	if cellW < 12 {
-		cellW = 12
-	}
-	cellGap := strings.Repeat(" ", 2)
-
-	for rowStart := 0; rowStart < len(kpis); rowStart += cols {
-		rowEnd := rowStart + cols
-		if rowEnd > len(kpis) {
-			rowEnd = len(kpis)
-		}
-		// Labels line
-		for i := rowStart; i < rowEnd; i++ {
-			b.WriteString(mutedStyle.Width(cellW).Render(kpis[i].label))
-			if i < rowEnd-1 {
-				b.WriteString(cellGap)
-			}
-		}
-		b.WriteString("\n")
-		// Values line
-		for i := rowStart; i < rowEnd; i++ {
-			b.WriteString(kpis[i].style.Width(cellW).Bold(true).Render(kpis[i].value))
-			if i < rowEnd-1 {
-				b.WriteString(cellGap)
-			}
-		}
-		b.WriteString("\n\n")
-	}
-
-	// ── Recent Activity ──
-
-	b.WriteString(headingStyle.Render("Recent Activity"))
-	b.WriteString("\n")
-	if len(m.preds) == 0 && len(m.anomalies) == 0 {
-		b.WriteString(successStyle.Render("  ✓ All clear"))
-		b.WriteString("\n")
-		b.WriteString(mutedStyle.Render("  No active predictions or anomalies"))
-	} else {
-		for i, p := range m.preds {
-			if i >= 4 {
-				break
-			}
-			sty := scoreStyle(p.Score)
-			fmt.Fprintf(&b, "  ▸ %s %s  %s  ETA %.0fs\n",
-				sty.Render(trunc(p.Type, 14)),
-				mutedStyle.Render(trunc(p.Entity, 26)),
-				sty.Render(fmt.Sprintf("%.0f%%", p.Score*100)),
-				p.ETASeconds)
-		}
-		for i, a := range m.anomalies {
-			if i >= 4 {
-				break
-			}
-			pat := a.Pattern
-			if pat == "" {
-				pat = "statistical"
-			}
-			sty := scoreStyle(a.Score)
-			fmt.Fprintf(&b, "  ▸ %s %s  %s %s\n",
-				sty.Render(trunc(pat, 14)),
-				mutedStyle.Render(trunc(a.Entity, 26)),
-				sty.Render(fmt.Sprintf("%.2f", a.Score)),
-				statusStyle(a.Status).Render(a.Status))
-		}
-	}
-
-	// ── Cluster Health ──
-
-	if len(m.healthScores) > 0 {
-		b.WriteString("\n")
-		b.WriteString(headingStyle.Render("Cluster Health"))
-		b.WriteString("\n")
-		for i, hs := range m.healthScores {
-			if i >= 5 {
-				break
-			}
-			sty := scoreStyle(hs.Score / 100.0)
-			trend := "stable"
-			if hs.Trend != "" {
-				trend = hs.Trend
-			}
-			fmt.Fprintf(&b, "  ▸ %s  %s  %s  %s\n",
-				sty.Render(fmt.Sprintf("%.0f", hs.Score)),
-				trendStyle(trend).Render(trunc(trend, 10)),
-				mutedStyle.Render(trunc(hs.Namespace, 16)),
-				mutedStyle.Render(trunc(hs.Entity, 28)))
-		}
-	}
-
-	// Agent info line
-	if m.config != nil {
-		b.WriteString("\n" + hbar + "\n")
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("Agent: %s/%s · LLM: %s/%s · Mode: %s",
-			m.config.ScrapeInterval,
-			trunc(m.config.PrometheusAddress, 20),
-			m.config.LLMProvider,
-			trunc(m.config.LLMModel, 20),
-			m.config.Remediation.Mode)))
-	}
-	return b.String()
-}
-
-//nolint:unused
-func scoreStyleForCount(n, threshold int) lipgloss.Style {
-	if n >= threshold*2 {
-		return cardCriticalStyle
-	}
-	if n >= threshold {
-		return cardWarnStyle
-	}
-	return cardSuccessStyle
-}
+// ── Dashboard (see ui_dashboard.go) ──
 
 func kpiValueStyleForCount(n, threshold int) lipgloss.Style {
 	if n >= threshold*2 {
@@ -1204,277 +1167,276 @@ func kpiValueStyleForCount(n, threshold int) lipgloss.Style {
 	return kpiSuccessStyle
 }
 
-func trendStyle(trend string) lipgloss.Style {
-	switch strings.ToLower(trend) {
-	case "improving", "improved":
-		return successStyle
-	case "degrading", "degraded", "declining", "critical":
-		return errStyle
-	default:
-		return mutedStyle
+// ── Table helpers (kwtable) ──
+
+func initTable(cols []kwtable.Column) kwtable.Model {
+	t := kwtable.New(
+		kwtable.WithColumns(cols),
+		kwtable.WithFocused(true),
+		kwtable.WithHeight(10),
+	)
+	t.SetStyles(kwtable.Styles{
+		Header: lipgloss.NewStyle().Bold(true).Foreground(colorMuted).Padding(0, 1),
+		Cell:   lipgloss.NewStyle().Foreground(colorSubtle).Padding(0, 1),
+		Selected: lipgloss.NewStyle().
+			Background(colorSelected).
+			Foreground(colorHighlight).
+			Bold(true).
+			Padding(0, 1),
+	})
+	return t
+}
+
+func predCols() []kwtable.Column {
+	return []kwtable.Column{
+		{Title: "TYPE", Width: 14},
+		{Title: "ENTITY", Width: 24},
+		{Title: "SCORE", Width: 8},
+		{Title: "ETA", Width: 8},
+		{Title: "ACTION", Width: 20},
 	}
 }
 
-// col renders a fixed-width table column with ANSI/Unicode-safe truncation.
-func col(text string, width int, style lipgloss.Style) string {
-	if width <= 0 {
-		return style.Render(text)
+func anomCols() []kwtable.Column {
+	return []kwtable.Column{
+		{Title: "PATTERN", Width: 10},
+		{Title: "ENTITY", Width: 24},
+		{Title: "SCORE", Width: 8},
+		{Title: "STATUS", Width: 12},
 	}
-	// Truncate by display width, not bytes/runes, before styling.
-	t := truncate.StringWithTail(text, uint(width), "…")
-	return style.Width(width).MaxWidth(width).Render(t)
 }
 
-func joinCols(cols ...string) string {
-	return strings.Join(cols, " ")
+func recentCols() []kwtable.Column {
+	return []kwtable.Column{
+		{Title: "TYPE", Width: 10},
+		{Title: "ENTITY", Width: 24},
+		{Title: "SCORE", Width: 8},
+		{Title: "STATUS", Width: 12},
+	}
 }
 
-// ── List views ──
-
-func (m controlModel) predsLines() []string {
-	if len(m.preds) == 0 {
-		return []string{emptyStateStyle.Render("No active predictions") + "\n" +
-			mutedStyle.Render("  Predictions appear when the agent detects upcoming issues")}
+func auditCols() []kwtable.Column {
+	return []kwtable.Column{
+		{Title: "STATUS", Width: 14},
+		{Title: "ACTION", Width: 28},
+		{Title: "COUNT", Width: 7},
+		{Title: "TIER", Width: 8},
+		{Title: "REASON", Width: 33},
 	}
-	var lines []string
-	lines = append(lines, joinCols(
-		col("TYPE", 14, listHeaderStyle),
-		col("ENTITY", 24, listHeaderStyle),
-		col("SCORE", 8, listHeaderStyle),
-		col("ETA", 8, listHeaderStyle),
-		col("ACTION", 20, listHeaderStyle),
-	))
-	for _, p := range m.preds {
-		style := scoreStyle(p.Score)
-		lines = append(lines, joinCols(
-			col(p.Type, 14, style),
-			col(p.Entity, 24, mutedStyle),
-			col(fmt.Sprintf("%.0f", p.Score*100), 8, style),
-			col(fmt.Sprintf("%.0f", p.ETASeconds), 8, mutedStyle),
-			col(p.Action, 20, mutedStyle),
-		))
-	}
-	return lines
 }
 
-func (m controlModel) anomalyLines() []string {
-	if len(m.anomalies) == 0 {
-		return []string{emptyStateStyle.Render("No anomalies") + "\n" +
-			mutedStyle.Render("  Anomalies appear when metrics deviate from expected patterns")}
+func approvalCols() []kwtable.Column {
+	return []kwtable.Column{
+		{Title: "TIER", Width: 10},
+		{Title: "ACTION", Width: 28},
+		{Title: "COUNT", Width: 7},
+		{Title: "CONF", Width: 8},
+		{Title: "REASON", Width: 33},
 	}
-	var lines []string
-	lines = append(lines, joinCols(
-		col("PATTERN", 10, listHeaderStyle),
-		col("ENTITY", 24, listHeaderStyle),
-		col("SCORE", 8, listHeaderStyle),
-		col("STATUS", 12, listHeaderStyle),
-	))
-	for _, a := range m.anomalies {
+}
+
+func healthCols() []kwtable.Column {
+	return []kwtable.Column{
+		{Title: "ENTITY", Width: 24},
+		{Title: "NAMESPACE", Width: 16},
+		{Title: "SCORE", Width: 8},
+		{Title: "FACTORS", Width: 40},
+	}
+}
+
+// ── Table row builders ──
+
+func buildPredRows(preds []models.PredictionResult) []kwtable.Row {
+	if len(preds) == 0 {
+		return nil
+	}
+	rows := make([]kwtable.Row, len(preds))
+	for i, p := range preds {
+		rows[i] = kwtable.Row{
+			p.Type,
+			p.Entity,
+			scoreStyle(p.Score).Render(fmt.Sprintf("%.0f%%", p.Score*100)),
+			fmt.Sprintf("%.0f", p.ETASeconds),
+			p.Action,
+		}
+	}
+	return rows
+}
+
+func buildAnomRows(anomalies []models.AnomalyRecord) []kwtable.Row {
+	if len(anomalies) == 0 {
+		return nil
+	}
+	rows := make([]kwtable.Row, len(anomalies))
+	for i, a := range anomalies {
 		pat := a.Pattern
 		if pat == "" {
 			pat = "statistical"
 		}
-		scoreSty := scoreStyle(a.Score)
-		statSty := statusStyle(a.Status)
-		lines = append(lines, joinCols(
-			col(pat, 10, scoreSty),
-			col(a.Entity, 24, mutedStyle),
-			col(fmt.Sprintf("%.2f", a.Score), 8, scoreSty),
-			col(a.Status, 12, statSty),
-		))
+		rows[i] = kwtable.Row{
+			pat,
+			a.Entity,
+			scoreStyle(a.Score).Render(fmt.Sprintf("%.2f", a.Score)),
+			statusStyle(a.Status).Render(a.Status),
+		}
 	}
-	return lines
+	return rows
 }
 
-func (m controlModel) auditLines() []string {
-	if len(m.audits) == 0 {
-		return []string{emptyStateStyle.Render("No remediation records") + "\n" +
-			mutedStyle.Render("  Audit records appear after remediations are attempted")}
-	}
-	var lines []string
-	groups := m.auditGroups
+func buildAuditRows(groups []auditGroup) []kwtable.Row {
 	if len(groups) == 0 {
-		groups = groupAuditRecords(m.audits, false)
+		return nil
 	}
-	lines = append(lines, joinCols(
-		col("STATUS", 14, listHeaderStyle),
-		col("ACTION", 28, listHeaderStyle),
-		col("COUNT", 7, listHeaderStyle),
-		col("TIER", 8, listHeaderStyle),
-		col("REASON", 33, listHeaderStyle),
-	))
-	for _, g := range groups {
+	rows := make([]kwtable.Row, len(groups))
+	for i, g := range groups {
 		r := g.Records[0]
 		action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
 		status := normalizedAuditStatus(r)
-		statSty := statusStyle(status)
-		tierSty := riskTierStyle(string(r.RiskTier))
 		count := ""
 		if len(g.Records) > 1 {
 			count = fmt.Sprintf("%dx", len(g.Records))
 		}
-		lines = append(lines, joinCols(
-			col(status, 14, statSty),
-			col(action, 28, mutedStyle),
-			col(count, 7, mutedStyle),
-			col(string(r.RiskTier), 8, tierSty),
-			col(r.Reason, 33, mutedStyle),
-		))
+		rows[i] = kwtable.Row{
+			statusStyle(status).Render(status),
+			action,
+			count,
+			riskTierStyle(string(r.RiskTier)).Render(string(r.RiskTier)),
+			r.Reason,
+		}
 	}
-	return lines
+	return rows
 }
 
-func (m controlModel) approvalLines() []string {
-	if len(m.pending) == 0 {
-		return []string{emptyStateStyle.Render("No pending approvals") + "\n" +
-			mutedStyle.Render("  T3 actions appear here when live mode is enabled and need your approval")}
-	}
-	var lines []string
-	groups := m.approvalGroups
+func buildApprovalRows(groups []auditGroup) []kwtable.Row {
 	if len(groups) == 0 {
-		groups = groupAuditRecords(m.pending, true)
+		return nil
 	}
-	lines = append(lines, joinCols(
-		col("TIER", 10, listHeaderStyle),
-		col("ACTION", 28, listHeaderStyle),
-		col("COUNT", 7, listHeaderStyle),
-		col("CONF", 8, listHeaderStyle),
-		col("REASON", 33, listHeaderStyle),
-	))
-	for _, g := range groups {
+	rows := make([]kwtable.Row, len(groups))
+	for i, g := range groups {
 		r := g.Records[0]
 		action := fmt.Sprintf("%s %s/%s", r.Plan.Action.Type, r.Plan.Action.Namespace, r.Plan.Action.Target)
-		tierSty := riskTierStyle(string(r.RiskTier))
 		maxConf := 0.0
 		for _, rr := range g.Records {
 			if rr.Plan.Diagnosis.Confidence > maxConf {
 				maxConf = rr.Plan.Diagnosis.Confidence
 			}
 		}
-		confSty := scoreStyle(maxConf)
 		count := ""
 		if len(g.Records) > 1 {
 			count = fmt.Sprintf("%dx", len(g.Records))
 		}
-		lines = append(lines, joinCols(
-			col(string(r.RiskTier), 10, tierSty),
-			col(action, 28, mutedStyle),
-			col(count, 7, mutedStyle),
-			col(fmt.Sprintf("%.0f%%", maxConf*100), 8, confSty),
-			col(r.Reason, 33, mutedStyle),
-		))
+		rows[i] = kwtable.Row{
+			riskTierStyle(string(r.RiskTier)).Render(string(r.RiskTier)),
+			action,
+			count,
+			fmt.Sprintf("%.0f%%", maxConf*100),
+			r.Reason,
+		}
 	}
-	return lines
+	return rows
 }
 
-func (m controlModel) healthScoreLines() []string {
-	if len(m.healthScores) == 0 {
-		return []string{emptyStateStyle.Render("No health scores") + "\n" +
-			mutedStyle.Render("  Health scores appear after the agent computes them during scrape cycles")}
+func buildHealthRows(scores []models.HealthScore) []kwtable.Row {
+	if len(scores) == 0 {
+		return nil
 	}
-	var lines []string
-	lines = append(lines, joinCols(
-		col("ENTITY", 24, listHeaderStyle),
-		col("NAMESPACE", 16, listHeaderStyle),
-		col("SCORE", 8, listHeaderStyle),
-		col("FACTORS", 40, listHeaderStyle),
-	))
-	for _, hs := range m.healthScores {
-		sty := scoreStyle(hs.Score / 100.0)
+	rows := make([]kwtable.Row, len(scores))
+	for i, hs := range scores {
 		var factors []string
 		for _, f := range hs.Factors {
 			label := f.Name
 			if len(label) > 8 {
 				label = label[:8]
 			}
-			val := int(f.Score * 100)
-			factors = append(factors, fmt.Sprintf("%s=%d", label, val))
+			factors = append(factors, fmt.Sprintf("%s=%d", label, int(f.Score*100)))
 		}
 		factorStr := ""
 		if len(factors) > 0 {
 			factorStr = strings.Join(factors, " ")
 		}
-		lines = append(lines, joinCols(
-			col(hs.Entity, 24, mutedStyle),
-			col(hs.Namespace, 16, mutedStyle),
-			col(fmt.Sprintf("%.0f", hs.Score), 8, sty),
-			col(factorStr, 40, mutedStyle),
-		))
+		rows[i] = kwtable.Row{
+			hs.Entity,
+			hs.Namespace,
+			scoreStyle(hs.Score / 100.0).Render(fmt.Sprintf("%.0f", hs.Score)),
+			factorStr,
+		}
 	}
-	return lines
+	return rows
 }
 
-// ── Render list ──
+func buildHealthRowsTop(scores []models.HealthScore, limit int) []kwtable.Row {
+	rows := buildHealthRows(scores)
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
 
-func (m controlModel) renderList(lines []string, cursor, total int) string {
-	if len(lines) == 1 && strings.Contains(lines[0], "No ") {
-		// Empty state
-		return lines[0]
+func buildApprovalRowsTop(groups []auditGroup, limit int) []kwtable.Row {
+	rows := buildApprovalRows(groups)
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+func buildRecentRows(preds []models.PredictionResult, anomalies []models.AnomalyRecord, limit int) []kwtable.Row {
+	if limit <= 0 {
+		limit = 5
+	}
+	if len(preds) == 0 && len(anomalies) == 0 {
+		return nil
 	}
 
-	// Calculate visible range — header takes 1 line, each data item takes 1 line
-	headerLines := 1
-	maxVisible := m.contentHeight() - 1 // leave room for status line
-	if maxVisible < 3 {
-		maxVisible = 3
+	type recentItem struct {
+		at  time.Time
+		row kwtable.Row
 	}
-	dataLines := lines[headerLines:]
-	dataCount := len(dataLines)
-	if dataCount == 0 {
-		// No data rows (header-only). Render header and footer safely.
-		var b strings.Builder
-		b.WriteString(lines[0])
-		b.WriteString("\n")
-		if total > 0 {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("\n%d/%d  enter detail  g/G top/bottom", 0, total)))
+	items := make([]recentItem, 0, len(preds)+len(anomalies))
+
+	for _, p := range preds {
+		items = append(items, recentItem{
+			at: p.Timestamp,
+			row: kwtable.Row{
+				trunc(p.Type, 10),
+				trunc(p.Entity, 24),
+				scoreStyle(p.Score).Render(fmt.Sprintf("%.0f%%", p.Score*100)),
+				infoStyle.Render(fmt.Sprintf("ETA %.0fs", p.ETASeconds)),
+			},
+		})
+	}
+	for _, a := range anomalies {
+		at := time.Time{}
+		if a.DetectedAt != nil {
+			at = *a.DetectedAt
 		}
-		return b.String()
-	}
-
-	// Center cursor in visible window
-	half := maxVisible / 2
-	start := cursor - half
-	if start < 0 {
-		start = 0
-	}
-	end := start + maxVisible
-	if end > dataCount {
-		end = dataCount
-		start = end - maxVisible
-		if start < 0 {
-			start = 0
+		pat := a.Pattern
+		if pat == "" {
+			pat = "statistical"
 		}
+		items = append(items, recentItem{
+			at: at,
+			row: kwtable.Row{
+				trunc(pat, 10),
+				trunc(a.Entity, 24),
+				scoreStyle(a.Score).Render(fmt.Sprintf("%.2f", a.Score)),
+				statusStyle(a.Status).Render(a.Status),
+			},
+		})
 	}
 
-	var b strings.Builder
-	// Header
-	b.WriteString(lines[0])
-	b.WriteString("\n")
-
-	// Visible data items
-	for i := start; i < end; i++ {
-		line := lines[headerLines+i]
-		// i is a data index into dataLines; cursor is also data index (not absolute line index).
-		if i == cursor {
-			b.WriteString(listSelectedStyle.Render("› " + line))
-		} else {
-			b.WriteString("  " + line)
-		}
-		b.WriteString("\n")
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].at.After(items[j].at)
+	})
+	if len(items) > limit {
+		items = items[:limit]
 	}
 
-	if total > 0 {
-		scrollInfo := ""
-		if dataCount > maxVisible {
-			pct := 0
-			if dataCount > 1 {
-				pct = int(float64(cursor) / float64(dataCount-1) * 100)
-			}
-			scrollInfo = fmt.Sprintf("  scroll %d%%", pct)
-		}
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("\n%d/%d%s  enter detail  g/G top/bottom", cursor+1, total, scrollInfo)))
+	rows := make([]kwtable.Row, len(items))
+	for i, item := range items {
+		rows[i] = item.row
 	}
-	return b.String()
+	return rows
 }
 
 // ── Config ──
@@ -1507,7 +1469,7 @@ func (m controlModel) renderDetail() string {
 	content := m.detailVP.View()
 	total := m.detailVP.TotalLineCount()
 	shown := m.detailVP.VisibleLineCount()
-	top := m.detailVP.YOffset
+	top := m.detailVP.YOffset()
 
 	var scrollInfo string
 	if total > shown {
@@ -1539,7 +1501,7 @@ func (m *controlModel) resizeDetailViewport() {
 	if innerH < 1 {
 		innerH = 1
 	}
-	m.detailVP.Height = innerH
+	m.detailVP.SetHeight(innerH)
 }
 
 func (m *controlModel) relayoutDetail() {
@@ -1560,7 +1522,7 @@ func (m *controlModel) refreshDetailViewport() {
 	den := total - shown
 	pct := 0.0
 	if den > 0 {
-		pct = float64(m.detailVP.YOffset) / float64(den)
+		pct = float64(m.detailVP.YOffset()) / float64(den)
 	}
 
 	m.detailVP.SetContent(m.detail)
@@ -1569,15 +1531,15 @@ func (m *controlModel) refreshDetailViewport() {
 	newShown := m.detailVP.VisibleLineCount()
 	newDen := newTotal - newShown
 	if newDen > 0 {
-		m.detailVP.YOffset = int(pct * float64(newDen))
-		if m.detailVP.YOffset < 0 {
-			m.detailVP.YOffset = 0
+		m.detailVP.SetYOffset(int(pct * float64(newDen)))
+		if m.detailVP.YOffset() < 0 {
+			m.detailVP.SetYOffset(0)
 		}
-		if m.detailVP.YOffset > newDen {
-			m.detailVP.YOffset = newDen
+		if m.detailVP.YOffset() > newDen {
+			m.detailVP.SetYOffset(newDen)
 		}
 	} else {
-		m.detailVP.YOffset = 0
+		m.detailVP.SetYOffset(0)
 	}
 }
 
@@ -1586,9 +1548,8 @@ func (m *controlModel) refreshDetailViewport() {
 func (m controlModel) renderFooter() string {
 	var b strings.Builder
 
-	// Status message
-	if m.statusMsg != "" {
-		b.WriteString(successStyle.Render(m.statusMsg))
+	if bar := m.renderLoadingBar(); bar != "" {
+		b.WriteString(bar)
 		b.WriteString("\n")
 	}
 
@@ -1617,57 +1578,75 @@ func (m controlModel) renderModeBadge() string {
 
 // ── Confirm dialog ──
 
-func (m controlModel) renderConfirm() string {
-	var body string
-	switch m.confirm {
+func (m *controlModel) executePendingConfirm() (tea.Model, tea.Cmd) {
+	kind := m.confirm
+	target := m.confirmTargetID
+	m.confirm = confirmNone
+	m.confirmTargetID = ""
+	m.confirmAffirm = false
+
+	switch kind {
 	case confirmEnableLive:
-		body = confirmTitleStyle.Render("Enable LIVE remediation?") + "\n\n" +
-			mutedStyle.Render("T1/T2 actions will execute automatically.") + "\n" +
-			mutedStyle.Render("T3 actions still require your approval.") + "\n\n" +
-			keyStyle.Render("  y  ") + mutedStyle.Render("enable  ") +
-			keyStyle.Render("  n  ") + mutedStyle.Render("cancel")
+		mode, err := setRemediationLive(true)
+		if err != nil {
+			m.err = err
+		} else {
+			m.remMode = mode
+			m.notify("LIVE mode — remediations will execute", toastSuccess)
+			m.err = nil
+			return m, tea.Batch(m.refreshAll(), m.refreshProg.SetPercent(0.2))
+		}
 	case confirmApproveRemediation:
-		body = confirmTitleStyle.Render("Approve remediation?") + "\n\n" +
-			mutedStyle.Render(fmt.Sprintf("ID: %s", m.confirmTargetID)) + "\n" +
-			warnStyle.Render("This action will be executed against the cluster.") + "\n\n" +
-			keyStyle.Render("  y  ") + mutedStyle.Render("approve  ") +
-			keyStyle.Render("  n  ") + mutedStyle.Render("cancel")
-	default:
-		body = confirmTitleStyle.Render("Restart agent deployment?") + "\n\n" +
-			mutedStyle.Render(fmt.Sprintf("Rolling restart %s/%s.", agentNS, agentSvc)) + "\n\n" +
-			keyStyle.Render("  y  ") + mutedStyle.Render("confirm  ") +
-			keyStyle.Render("  n  ") + mutedStyle.Render("cancel")
+		if err := approveRemediation(target); err != nil {
+			m.err = err
+			m.notifyErr(err.Error())
+		} else {
+			m.notify("Remediation approved and executed", toastSuccess)
+			m.err = nil
+			return m, tea.Batch(m.refreshAll(), m.refreshProg.SetPercent(0.2))
+		}
+	default: // confirmRestart
+		m.actionBusy = true
+		m.actionLabel = "Restarting agent"
+		return m, tea.Batch(m.actionProg.SetPercent(0.4), restartAgentAsync())
 	}
-	return lipgloss.Place(m.width, 6, lipgloss.Center, lipgloss.Bottom,
-		confirmBoxStyle.Width(min(60, m.width-4)).Render(body))
+	return m, nil
 }
 
 // ── Toggle mode ──
 
-func (m *controlModel) toggleRemediationMode() {
+func (m *controlModel) toggleRemediationMode() (tea.Model, tea.Cmd) {
 	if m.remMode.Live {
 		mode, err := setRemediationLive(false)
 		if err != nil {
 			m.err = err
-			return
+			return m, nil
 		}
 		m.remMode = mode
-		m.statusMsg = "OBSERVE mode — dry-run only"
+		m.notify("OBSERVE mode — dry-run only", toastSuccess)
 		m.err = nil
-		return
+		return m, nil
 	}
-	m.confirm = confirmEnableLive
+	return m, m.openConfirmForm(confirmEnableLive, "")
 }
 
 // ── Palette overlay ──
 
-//nolint:unused
-func (m controlModel) renderPaletteOverlay(base string) string {
-	_ = base
-	return m.renderPalette()
+func (m controlModel) renderPalette() string {
+	var b strings.Builder
+	if m.palette.phase == paletteInput {
+		b.WriteString(detailSectionStyle.Render(m.paletteInputTitle))
+		b.WriteString("\n")
+		b.WriteString(m.palette.input.View())
+	} else {
+		b.WriteString(m.palette.search.View())
+		b.WriteString("\n")
+		b.WriteString(m.palette.list.View())
+	}
+	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		confirmBoxStyle.Width(min(60, m.width-4)).Render(b.String()))
+	return overlay
 }
-
-// ── Structured help ──
 
 func (m controlModel) renderStructuredHelp() string {
 	var b strings.Builder
@@ -1733,7 +1712,7 @@ func (m *controlModel) showDetailForSelection() {
 
 	switch m.tab {
 	case tabPredict:
-		i := m.cursor[tabPredict]
+		i := m.predTable.Cursor()
 		if i < 0 || i >= len(m.preds) {
 			return
 		}
@@ -1755,7 +1734,7 @@ func (m *controlModel) showDetailForSelection() {
 		m.refreshDetailViewport()
 
 	case tabAnomalies:
-		i := m.cursor[tabAnomalies]
+		i := m.anomTable.Cursor()
 		if i < 0 || i >= len(m.anomalies) {
 			return
 		}
@@ -1780,7 +1759,7 @@ func (m *controlModel) showDetailForSelection() {
 		m.refreshDetailViewport()
 
 	case tabAudit:
-		i := m.cursor[tabAudit]
+		i := m.auditTable.Cursor()
 		groups := m.auditGroups
 		if len(groups) == 0 {
 			groups = groupAuditRecords(m.audits, false)
@@ -1817,7 +1796,7 @@ func (m *controlModel) showDetailForSelection() {
 		m.refreshDetailViewport()
 
 	case tabApprovals:
-		i := m.cursor[tabApprovals]
+		i := m.approvalTable.Cursor()
 		groups := m.approvalGroups
 		if len(groups) == 0 {
 			groups = groupAuditRecords(m.pending, true)
@@ -1859,7 +1838,7 @@ func (m *controlModel) showDetailForSelection() {
 		m.refreshDetailViewport()
 
 	case tabHealth:
-		i := m.cursor[tabHealth]
+		i := m.healthTable.Cursor()
 		if i < 0 || i >= len(m.healthScores) {
 			return
 		}

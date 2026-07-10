@@ -1,4 +1,4 @@
-{{- if and .Values.agent.features.observability .Values.agent.observability.alloy.enabled }}
+{{- if and (include "kubewise.observabilityStack" .) .Values.agent.observability.alloy.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -34,9 +34,9 @@ spec:
             - --storage.path=/var/lib/alloy/data
           env:
             - name: ALLOY_LOKI_ENDPOINT
-              value: {{ .Values.agent.observability.alloy.lokiEndpoint | quote }}
+              value: {{ default (include "kubewise.lokiPushURL" .) .Values.agent.observability.alloy.lokiEndpoint | quote }}
             - name: ALLOY_TEMPO_ENDPOINT
-              value: {{ .Values.agent.observability.alloy.tempoEndpoint | quote }}
+              value: {{ default (include "kubewise.tempoOTLPEndpoint" .) .Values.agent.observability.alloy.tempoEndpoint | quote }}
             - name: HOSTNAME
               valueFrom:
                 fieldRef:
@@ -49,11 +49,8 @@ spec:
             - name: config
               mountPath: /etc/alloy
               readOnly: true
-            - name: varlog
-              mountPath: /var/log
-              readOnly: true
-            - name: varlibdockercontainers
-              mountPath: /var/lib/docker/containers
+            - name: varlogpods
+              mountPath: /var/log/pods
               readOnly: true
             - name: data
               mountPath: /var/lib/alloy
@@ -68,13 +65,9 @@ spec:
         - name: config
           configMap:
             name: {{ include "kubewise.fullname" . }}-alloy-config
-        - name: varlog
+        - name: varlogpods
           hostPath:
-            path: /var/log
-            type: Directory
-        - name: varlibdockercontainers
-          hostPath:
-            path: /var/lib/docker/containers
+            path: /var/log/pods
             type: Directory
         - name: data
           emptyDir: {}

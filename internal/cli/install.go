@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
@@ -113,7 +113,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	if err := kc.PingCluster(ctx); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(out, "✓ Kubernetes cluster reachable")
+	printOK(out, "Kubernetes cluster reachable")
 
 	if installHelm {
 		promURL := ""
@@ -121,18 +121,18 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
 				promURL = url
 			} else if !installYes {
-				_, _ = fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — set agent.prometheusAddress after install\n", installPrometheusNS)
+				printWarn(out, "no Prometheus found in namespace %q — set agent.prometheusAddress after install", installPrometheusNS)
 			}
 		}
 		if err := applyHelmInstall(out, promURL); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintln(out, "✓ Helm release installed")
+		printOK(out, "Helm release installed")
 	} else {
 		if err := applyInstallManifests(out); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintln(out, "✓ Manifests applied")
+		printOK(out, "Manifests applied")
 
 		if err := applyInstallSecret(); err != nil {
 			return err
@@ -141,29 +141,29 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		if !installSkipPrometheus {
 			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
 				if err := kc.PatchConfigMapPrometheus(ctx, agentNS, url); err != nil {
-					_, _ = fmt.Fprintf(out, "warning: could not patch Prometheus URL: %v\n", err)
+					printWarn(out, "could not patch Prometheus URL: %v", err)
 				} else {
-					_, _ = fmt.Fprintf(out, "✓ Prometheus detected: %s\n", url)
+					printOK(out, "Prometheus detected: %s", url)
 				}
 			} else if !installYes {
-				_, _ = fmt.Fprintf(out, "warning: no Prometheus found in namespace %q — metrics collection may fail until configured\n", installPrometheusNS)
-				_, _ = fmt.Fprintln(out, "  install Prometheus or run: kwctl config set prometheus_address http://...")
+				printWarn(out, "no Prometheus found in namespace %q — metrics collection may fail until configured", installPrometheusNS)
+				printHint(out, "install Prometheus or run: kwctl config set prometheus_address http://...")
 			}
 		}
 	}
 
-	_, _ = fmt.Fprintln(out, "… waiting for agent deployment")
+	_, _ = fmt.Fprintln(out, mutedStyle.Render("… waiting for agent deployment"))
 	waitCtx, waitCancel := context.WithTimeout(ctx, installWaitTimeout)
 	defer waitCancel()
 	if err := waitForAnyAgentDeployment(waitCtx, kc, agentNS, agentSvc); err != nil {
 		return fmt.Errorf("agent not ready: %w", err)
 	}
-	_, _ = fmt.Fprintln(out, "✓ Agent is running")
+	printOK(out, "Agent is running")
 
 	if err := saveInstallProfile(); err != nil {
-		_, _ = fmt.Fprintf(out, "warning: could not save kwctl profile: %v\n", err)
+		printWarn(out, "could not save kwctl profile: %v", err)
 	} else {
-		_, _ = fmt.Fprintln(out, "✓ kwctl profile saved (~/.config/kwctl/config.yaml)")
+		printOK(out, "kwctl profile saved (~/.config/kwctl/config.yaml)")
 	}
 
 	printInstallNextSteps(out)
@@ -480,14 +480,10 @@ func saveInstallProfile() error {
 }
 
 func printInstallNextSteps(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "KubeWise is installed.")
-	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "  1. Connect to the agent:")
-	_, _ = fmt.Fprintln(out, "     kwctl up")
-	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "  2. Open the control center:")
-	_, _ = fmt.Fprintln(out, "     kwctl ui")
-	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "  Or: kwctl connect")
+	printOK(out, "KubeWise is installed")
+	printNextSteps(out,
+		"kwctl up        # connect to the agent",
+		"kwctl ui        # open control center",
+		"kwctl connect   # verify connectivity",
+	)
 }

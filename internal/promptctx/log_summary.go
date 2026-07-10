@@ -12,6 +12,8 @@ import (
 
 var lokiHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
+const logErrorFilter = ` |~ "(?i)error|panic|oom|fail|exception|crash|killed|evicted|backoff"`
+
 // FetchLogSnippets queries Loki for recent log lines matching the namespace/pod.
 // Returns nil when Loki is not configured (empty URL).
 func FetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since time.Duration) ([]LogSnippet, error) {
@@ -29,11 +31,27 @@ func fetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since
 		return nil, nil
 	}
 
-	// Build LogQL: {namespace="...", pod="..."} |= "error|panic|OOM|fail"
-	logql := buildLogQL(namespace, pod)
 	start := time.Now().Add(-since)
 	end := time.Now()
 
+	var lastErr error
+	for _, logql := range buildLogQLCandidates(namespace, pod) {
+		snippets, err := queryLokiRange(ctx, lokiURL, logql, start, end, 50)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(snippets) > 0 {
+			return snippets, nil
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, nil
+}
+
+func queryLokiRange(ctx context.Context, lokiURL, logql string, start, end time.Time, limit int) ([]LogSnippet, error) {
 	u, err := url.Parse(lokiURL + "/loki/api/v1/query_range")
 	if err != nil {
 		return nil, fmt.Errorf("parse loki URL: %w", err)
@@ -42,7 +60,7 @@ func fetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since
 	q.Set("query", logql)
 	q.Set("start", fmt.Sprintf("%d", start.UnixNano()))
 	q.Set("end", fmt.Sprintf("%d", end.UnixNano()))
-	q.Set("limit", "50")
+	q.Set("limit", fmt.Sprintf("%d", limit))
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -69,18 +87,29 @@ func fetchLogSnippets(ctx context.Context, lokiURL, namespace, pod string, since
 	return flattenLogSnippets(result), nil
 }
 
-// buildLogQL constructs a LogQL query filtering by namespace and/or pod
-// with common error keywords.
-func buildLogQL(namespace, pod string) string {
-	var labelFilters []string
-	if namespace != "" {
-		labelFilters = append(labelFilters, fmt.Sprintf(`namespace=%q`, namespace))
+// buildLogQLCandidates returns LogQL queries from most specific to most permissive.
+// Alloy labels streams with namespace+pod; legacy/canary streams may only have pod.
+func buildLogQLCandidates(namespace, pod string) []string {
+	var out []string
+	if namespace != "" && pod != "" {
+		out = append(out, fmt.Sprintf(`{namespace=%q, pod=%q}`, namespace, pod)+logErrorFilter)
 	}
 	if pod != "" {
-		labelFilters = append(labelFilters, fmt.Sprintf(`pod=%q`, pod))
+		out = append(out, fmt.Sprintf(`{pod=%q}`, pod)+logErrorFilter)
 	}
-	stream := fmt.Sprintf("{%s}", joinStrings(labelFilters, ", "))
-	return stream + ` |~ "(?i)error|panic|oom|fail|exception|crash|killed|evicted|backoff"`
+	if namespace != "" && pod == "" {
+		out = append(out, fmt.Sprintf(`{namespace=%q}`, namespace)+logErrorFilter)
+	}
+	return out
+}
+
+// buildLogQL constructs the primary LogQL query (first candidate).
+func buildLogQL(namespace, pod string) string {
+	candidates := buildLogQLCandidates(namespace, pod)
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
 }
 
 // joinStrings joins strings with sep, skipping empty entries.

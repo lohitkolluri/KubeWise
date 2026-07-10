@@ -108,11 +108,6 @@ func (ec *EventsCollector) WatchEvents(ctx context.Context) <-chan EventRecord {
 	return ch
 }
 
-// HasSynced returns true once the informer has completed its initial list.
-func (ec *EventsCollector) HasSynced() bool {
-	return ec.synced
-}
-
 // filterAndSend converts a K8s event to an EventRecord, filters by failure reasons and
 // namespace scope, then sends it to the channel with backpressure.
 func (ec *EventsCollector) filterAndSend(obj any, eventType string, ch chan<- EventRecord) {

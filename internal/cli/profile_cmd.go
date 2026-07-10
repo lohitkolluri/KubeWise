@@ -28,15 +28,18 @@ var profileShowCmd = &cobra.Command{
 		}
 		p := pf.Profiles[pf.Current]
 		path, _ := profilePath()
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "File:        %s\n", path)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Active:      %s\n", pf.Current)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Agent URL:   %s\n", p.AgentURL)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Namespace:   %s\n", p.AgentNamespace)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Service:     %s\n", p.AgentService)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Output:      %s\n", p.Output)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Timeout:     %ds\n", p.TimeoutSeconds)
+		out := cmd.OutOrStdout()
+		printBanner(out)
+		printSection(out, "Active profile")
+		printKV(out, "File:", path)
+		printKV(out, "Active:", pf.Current)
+		printKV(out, "Agent URL:", p.AgentURL)
+		printKV(out, "Namespace:", p.AgentNamespace)
+		printKV(out, "Service:", p.AgentService)
+		printKV(out, "Output:", p.Output)
+		printKV(out, "Timeout:", fmt.Sprintf("%ds", p.TimeoutSeconds))
 		if p.APIToken != "" {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "API Token:   (set)")
+			printKVStyled(out, "API Token:", "(set)", successStyle)
 		}
 		return nil
 	},
@@ -50,12 +53,20 @@ var profileListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		out := cmd.OutOrStdout()
+		printSection(out, "Profiles")
 		for name := range pf.Profiles {
 			marker := " "
+			style := subtleStyle
 			if name == pf.Current {
-				marker = "*"
+				marker = "▸"
+				style = keyStyle
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", marker, name)
+			if writerTTY(out) {
+				_, _ = fmt.Fprintln(out, style.Render(marker+" "+name))
+			} else {
+				_, _ = fmt.Fprintf(out, "%s %s\n", marker, name)
+			}
 		}
 		return nil
 	},
@@ -74,7 +85,11 @@ var profileUseCmd = &cobra.Command{
 			return fmt.Errorf("profile %q not found", args[0])
 		}
 		pf.Current = args[0]
-		return saveProfileFile(pf)
+		if err := saveProfileFile(pf); err != nil {
+			return err
+		}
+		printOK(cmd.OutOrStdout(), "Switched to profile %q", args[0])
+		return nil
 	},
 }
 
@@ -94,6 +109,7 @@ Example:
 				name = pf.Current
 			}
 		}
+		out := cmd.OutOrStdout()
 		for _, arg := range args {
 			key, value, err := parseSetArg(arg)
 			if err != nil {
@@ -102,7 +118,7 @@ Example:
 			if err := setProfileField(name, key, value); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "set %s=%s\n", key, maskIfToken(key, value))
+			printKV(out, key+":", maskIfToken(key, value))
 		}
 		return nil
 	},

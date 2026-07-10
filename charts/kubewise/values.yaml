@@ -66,9 +66,10 @@ agent:
     toolPlugins: true
     observability: true
   observability:
-    # When agent.features.observability=true, Loki + Tempo + Alloy are deployed.
+    # When agent.features.observability=true, Loki + Tempo + Alloy deploy together.
+    # Alloy ships pod logs (namespace/pod labels) so the agent can query Loki.
     loki:
-      enabled: false
+      enabled: true
       # Monolithic mode — single binary for in-cluster use.
       mode: Monolithic
       persistence:
@@ -83,7 +84,7 @@ agent:
           cpu: '1'
           memory: 1Gi
     tempo:
-      enabled: false
+      enabled: true
       persistence:
         enabled: false
         size: 10Gi
@@ -97,15 +98,14 @@ agent:
           memory: 1Gi
     alloy:
       # Grafana Alloy DaemonSet — scrapes pod logs and forwards to Loki.
-      enabled: false
+      enabled: true
       image:
         repository: grafana/alloy
         tag: v1.7.4
         pullPolicy: IfNotPresent
-      # Loki endpoint for log forwarding (in-cluster).
-      lokiEndpoint: http://kubewise-loki:3100
-      # Tempo endpoint for trace forwarding.
-      tempoEndpoint: http://kubewise-tempo:4318
+      # Overridden in alloy-daemonset.yaml via kubewise.lokiPushURL / tempoOTLPEndpoint helpers.
+      lokiEndpoint: ''
+      tempoEndpoint: ''
       resources:
         requests:
           cpu: 100m

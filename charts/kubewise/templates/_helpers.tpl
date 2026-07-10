@@ -43,3 +43,23 @@ app.kubernetes.io/component: agent
 {{- include "kubewise.fullname" . }}-secret
 {{- end }}
 {{- end }}
+
+{{- define "kubewise.lokiURL" -}}
+http://{{ include "kubewise.fullname" . }}-loki-gateway.{{ include "kubewise.namespace" . }}.svc.cluster.local
+{{- end }}
+
+{{- define "kubewise.tempoURL" -}}
+http://{{ include "kubewise.fullname" . }}-tempo.{{ include "kubewise.namespace" . }}.svc.cluster.local:3200
+{{- end }}
+
+{{- define "kubewise.lokiPushURL" -}}
+http://{{ include "kubewise.fullname" . }}-loki.{{ include "kubewise.namespace" . }}.svc.cluster.local:3100
+{{- end }}
+
+{{- define "kubewise.tempoOTLPEndpoint" -}}
+http://{{ include "kubewise.fullname" . }}-tempo.{{ include "kubewise.namespace" . }}.svc.cluster.local:4318
+{{- end }}
+
+{{- define "kubewise.observabilityStack" -}}
+{{- and .Values.agent.features.observability .Values.agent.observability.loki.enabled -}}
+{{- end }}

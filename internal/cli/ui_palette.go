@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -39,9 +39,11 @@ func (i paletteItem) FilterValue() string {
 }
 
 type paletteOutcome struct {
-	msg    string
-	err    error
-	prompt *palettePrompt
+	msg           string
+	err           error
+	prompt        *palettePrompt
+	confirm       confirmKind
+	confirmTarget string
 }
 
 type palettePrompt struct {
@@ -79,8 +81,10 @@ func newPaletteState() paletteState {
 	search.Prompt = "> "
 	search.Placeholder = "Search commands…"
 	search.CharLimit = 64
-	search.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	search.TextStyle = lipgloss.NewStyle().Foreground(colorHighlight)
+	s := textinput.DefaultStyles(false)
+	s.Focused.Prompt = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	s.Focused.Text = lipgloss.NewStyle().Foreground(colorHighlight)
+	search.SetStyles(s)
 
 	ti := textinput.New()
 	ti.Prompt = "› "
@@ -217,8 +221,7 @@ func paletteToggleExecution() func(m *controlModel) paletteOutcome {
 			m.remMode = mode
 			return paletteOutcome{msg: "OBSERVE mode — dry-run only"}
 		}
-		m.confirm = confirmEnableLive
-		return paletteOutcome{msg: "Confirm LIVE mode below (y/n)"}
+		return paletteOutcome{confirm: confirmEnableLive, msg: "Confirm LIVE mode"}
 	}
 }
 
@@ -256,8 +259,7 @@ func paletteCycleOutputFormat() func(m *controlModel) paletteOutcome {
 
 func paletteRestartAgent() func(m *controlModel) paletteOutcome {
 	return func(m *controlModel) paletteOutcome {
-		m.confirm = confirmRestart
-		return paletteOutcome{msg: "Confirm restart below (y/n)"}
+		return paletteOutcome{confirm: confirmRestart, msg: "Confirm agent restart"}
 	}
 }
 
@@ -446,8 +448,8 @@ func (m *controlModel) resizePalette() {
 	}
 	m.palette.list.SetWidth(w)
 	m.palette.list.SetHeight(h - 2) // room for search bar
-	m.palette.search.Width = w
-	m.palette.input.Width = w
+	m.palette.search.SetWidth(w)
+	m.palette.input.SetWidth(w)
 }
 
 func (m *controlModel) openPalette() tea.Cmd {
@@ -482,7 +484,7 @@ func (m *controlModel) closePalette() {
 	m.palette.input.Blur()
 }
 
-func (m *controlModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *controlModel) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.palette.phase {
 	case paletteBrowse:
 		switch {
@@ -509,23 +511,26 @@ func (m *controlModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 			m.closePalette()
+			if out.confirm != confirmNone {
+				if out.msg != "" {
+					m.notify(out.msg, toastInfo)
+				}
+				return m, m.openConfirmForm(out.confirm, out.confirmTarget)
+			}
 			if out.err != nil {
 				m.err = out.err
 			} else {
 				m.err = nil
 				if out.msg != "" {
-					m.statusMsg = out.msg
+					m.notify(out.msg, toastSuccess)
 				}
 			}
 			if out.msg == "Refreshing…" {
 				m.loading = true
-				return m, m.refreshAll()
+				return m, tea.Batch(m.refreshAll(), m.refreshProg.SetPercent(0.15))
 			}
 			if m.paletteQuitApp {
 				return m, tea.Quit
-			}
-			if out.msg != "" && out.msg != "Refreshing…" {
-				return m, scheduleToastClear()
 			}
 			return m, nil
 		case key.Matches(msg, m.palette.list.KeyMap.CursorUp),
@@ -566,51 +571,16 @@ func (m *controlModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.err = err
 			} else {
 				m.err = nil
-				m.statusMsg = msgText
+				if msgText != "" {
+					m.notify(msgText, toastSuccess)
+				}
 			}
 			m.paletteInputApply = nil
-			return m, tea.Batch(m.refreshAll(), scheduleToastClear())
+			return m, tea.Batch(m.refreshAll(), m.refreshProg.SetPercent(0.15))
 		}
 		var cmd tea.Cmd
 		m.palette.input, cmd = m.palette.input.Update(msg)
 		return m, cmd
 	}
 	return m, nil
-}
-
-//nolint:unused
-func (m controlModel) renderPalette() string {
-	w := m.width - 8
-	if w < 40 {
-		w = 40
-	}
-
-	var content string
-	switch m.palette.phase {
-	case paletteBrowse:
-		search := m.palette.search.View()
-		listView := m.palette.list.View()
-		content = search + "\n" + listView
-	case paletteInput:
-		title := brandStyle.Render(m.paletteInputTitle)
-		input := m.palette.input.View()
-		help := mutedStyle.Render("enter save · esc back")
-		content = title + "\n\n" + input + "\n" + help
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorPrimary).
-		Padding(0, 1).
-		Width(w + 2).
-		Render(content)
-
-	scrim := lipgloss.NewStyle().
-		Width(m.width).
-		Height(m.height).
-		Background(colorScrim).
-		Render("")
-
-	centered := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
-	return scrim + "\n" + centered
 }

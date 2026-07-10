@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -35,17 +34,21 @@ var remediationCmd = &cobra.Command{
 		}
 		return writeOutput(cmd.OutOrStdout(), outputFormat, records, func() error {
 			if len(records) == 0 {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No remediation records.")
+				printEmpty(cmd.OutOrStdout(), "No remediation records.")
 				return nil
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
-				"ID", "STATUS", "ACTION", "TIER", "REASON")
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
+			rows := make([][]string, 0, len(records))
 			for _, r := range records {
 				action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-10s %-20s %-8s %s\n",
-					trunc(r.ID, 28), string(r.Status), trunc(action, 18), string(r.RiskTier), trunc(r.Reason, 30))
+				rows = append(rows, []string{
+					trunc(r.ID, 28),
+					string(r.Status),
+					trunc(action, 20),
+					string(r.RiskTier),
+					trunc(r.Reason, 30),
+				})
 			}
+			printDataTable(cmd.OutOrStdout(), []string{"ID", "STATUS", "ACTION", "TIER", "REASON"}, rows)
 			return nil
 		})
 	},

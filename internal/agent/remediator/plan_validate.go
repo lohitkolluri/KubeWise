@@ -2,9 +2,33 @@ package remediator
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
+
+// validatePlan is a thin wrapper that delegates to validateRemediationPlan with the correlator's config.
+func (c *Correlator) validatePlan(plan models.RemediationPlan, anomalies []models.AnomalyRecord) error {
+	return validateRemediationPlan(c.cfg, plan, anomalies)
+}
+
+func (c *Correlator) shouldRetryAfterValidation(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Keep this conservative: only retry for clearly fixable structural omissions.
+	msg := strings.ToLower(err.Error())
+	for _, sub := range []string{
+		"patch_resources requires at least one resource parameter",
+		"scale_replicas requires replicas parameter",
+		"target is empty for action type",
+	} {
+		if strings.Contains(msg, sub) {
+			return true
+		}
+	}
+	return false
+}
 
 // validateRemediationPlan checks a single action/plan for policy and structural validity.
 func validateRemediationPlan(cfg RemediationConfig, plan models.RemediationPlan, anomalies []models.AnomalyRecord) error {

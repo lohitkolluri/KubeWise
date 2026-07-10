@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/charmbracelet/bubbles/key"
+	"charm.land/bubbles/v2/key"
 )
 
 // uiKeyMap centralizes bindings (Charm best practice: key.Matches + help.KeyMap).
@@ -27,6 +27,7 @@ type uiKeyMap struct {
 	// Actions
 	Detail  key.Binding
 	Back    key.Binding
+	Copy    key.Binding
 	Refresh key.Binding
 
 	// Palette & help
@@ -48,8 +49,9 @@ type uiKeyMap struct {
 	LogFollow key.Binding
 
 	// Confirm / cancel
-	Confirm key.Binding
-	Cancel  key.Binding
+	Confirm     key.Binding
+	Cancel      key.Binding
+	ToggleMouse key.Binding
 }
 
 func defaultUIKeys() uiKeyMap {
@@ -95,11 +97,15 @@ func defaultUIKeys() uiKeyMap {
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "show detail"),
 		),
-		Back: key.NewBinding(
-			key.WithKeys("esc"),
-			key.WithHelp("esc", "back / close"),
-		),
-		Refresh: key.NewBinding(
+	Back: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "back / close"),
+	),
+	Copy: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "copy detail to clipboard"),
+	),
+	Refresh: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh data"),
 		),
@@ -161,6 +167,10 @@ func defaultUIKeys() uiKeyMap {
 			key.WithKeys("n", "N", "esc"),
 			key.WithHelp("n", "cancel"),
 		),
+		ToggleMouse: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "toggle mouse capture"),
+		),
 	}
 }
 
@@ -184,5 +194,7 @@ func (k uiKeyMap) FullHelp() [][]key.Binding {
 		{k.DryRun, k.Mode, k.ToggleLive, k.Restart, k.Approve},
 		// Row 6: Actions (cont) + logs
 		{k.Reject, k.LogFollow, k.Confirm, k.Cancel},
+		// Row 7: Mouse
+		{k.ToggleMouse},
 	}
 }

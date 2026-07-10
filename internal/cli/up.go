@@ -43,7 +43,13 @@ Examples:
 var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop background port-forward started by kwctl up",
-	RunE:  runDown,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := stopBackgroundPortForward(); err != nil {
+			return err
+		}
+		printOK(cmd.OutOrStdout(), "Port-forward stopped.")
+		return nil
+	},
 }
 
 func runUp(cmd *cobra.Command, _ []string) error {
@@ -67,7 +73,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	}
 
 	if _, err := fetchHealth(); err == nil {
-		_, _ = fmt.Fprintln(out, "✓ Agent already reachable at", resolveAgentURL())
+		printOK(out, "Agent already reachable at %s", resolveAgentURL())
 		return printUpHints(out)
 	}
 
@@ -87,7 +93,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	if err := startBackgroundPortForward(); err != nil {
 		return fmt.Errorf("port-forward: %w", err)
 	}
-	_, _ = fmt.Fprintln(out, "… waiting for agent at", resolveAgentURL())
+	_, _ = fmt.Fprintln(out, mutedStyle.Render("… waiting for agent at "+resolveAgentURL()))
 	if err := waitForAgent(30 * time.Second); err != nil {
 		_ = stopBackgroundPortForward()
 		return err
@@ -96,7 +102,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		_ = stopBackgroundPortForward()
 		return fmt.Errorf("port-forward exited early — see %s", mustPortForwardLog())
 	}
-	_, _ = fmt.Fprintln(out, "✓ Port-forward running (kwctl down to stop)")
+	printOK(out, "Port-forward running (kwctl down to stop)")
 
 	if upPersistProfile {
 		if err := setProfileField(profileName, "agent-url", fmt.Sprintf("http://localhost:%d", upLocalPort)); err != nil {
@@ -106,20 +112,12 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	return printUpHints(out)
 }
 
-func runDown(_ *cobra.Command, _ []string) error {
-	if err := stopBackgroundPortForward(); err != nil {
-		return err
-	}
-	fmt.Println("Port-forward stopped.")
-	return nil
-}
-
 func printUpHints(out io.Writer) error {
-	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "Next:")
-	_, _ = fmt.Fprintln(out, "  kwctl connect    # verify")
-	_, _ = fmt.Fprintln(out, "  kwctl ui         # control center")
-	_, _ = fmt.Fprintln(out, "  kwctl status     # quick summary")
+	printNextSteps(out,
+		"kwctl connect    # verify",
+		"kwctl ui         # control center",
+		"kwctl status     # quick summary",
+	)
 	return nil
 }
 

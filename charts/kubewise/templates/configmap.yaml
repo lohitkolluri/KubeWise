@@ -9,6 +9,12 @@ data:
   config.yaml: |
     scrape_interval: {{ .Values.agent.scrapeInterval | quote }}
     prometheus_address: {{ .Values.agent.prometheusAddress | quote }}
+    {{- if include "kubewise.observabilityStack" . }}
+    loki_url: {{ include "kubewise.lokiURL" . | quote }}
+    {{- end }}
+    {{- if and .Values.agent.features.observability .Values.agent.observability.tempo.enabled }}
+    tempo_url: {{ include "kubewise.tempoURL" . | quote }}
+    {{- end }}
     llm_provider: {{ .Values.agent.llmProvider | quote }}
     llm_model: {{ .Values.agent.llmModel | quote }}
     {{- if .Values.agent.llmBaseURL }}

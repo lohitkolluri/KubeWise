@@ -15,6 +15,7 @@ type Remediator interface {
 	RemediationState() models.RemediationModeView
 	SetLiveMode(live bool)
 	ApplyRemediationConfig(cfg models.RemediationConfig)
+	SetObservabilityURLs(lokiURL, tempoURL string)
 }
 
 func (s *Server) registerRemediationRoutes(mux *http.ServeMux) {

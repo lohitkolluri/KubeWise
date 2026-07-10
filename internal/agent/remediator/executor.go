@@ -68,6 +68,9 @@ func NewK8sExecutor(dryRun bool) (*K8sExecutor, error) {
 	// KUBERNETES_SERVICE_HOST / KUBERNETES_SERVICE_PORT env vars.
 	_ = reg.Register(tools.NewKubectlPlugin(""))
 	_ = reg.Register(tools.NewHelmPlugin("", ""))
+	// argocd and terraform use CLI config/env defaults when config is empty
+	_ = reg.Register(tools.NewArgoCDPlugin("", "", false))
+	_ = reg.Register(tools.NewTerraformPlugin(""))
 
 	return &K8sExecutor{clientset: clientset, dryRun: dryRun, toolRegistry: reg}, nil
 }

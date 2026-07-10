@@ -1,4 +1,4 @@
-{{- if and .Values.agent.features.observability .Values.agent.observability.alloy.enabled }}
+{{- if and (include "kubewise.observabilityStack" .) .Values.agent.observability.alloy.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,21 +9,17 @@ metadata:
     app.kubernetes.io/component: alloy-config
 data:
   config.alloy: |
-    // Scrape pod logs from /var/log/pods using the Kubernetes-logging discovery.
+    // Collect pod logs on this node only (DaemonSet).
     discovery.kubernetes "pods" {
       role = "pod"
       selectors {
         role  = "pod"
-        field = "status.phase!=Succeeded,status.phase!=Failed"
+        field = "spec.nodeName=" + coalesce(env("HOSTNAME"), constants.hostname)
       }
     }
 
     discovery.relabel "pod_logs" {
       targets = discovery.kubernetes.pods.targets
-      rule {
-        source_labels = ["__meta_kubernetes_pod_node_name"]
-        target_label  = "__host__"
-      }
       rule {
         source_labels = ["__meta_kubernetes_namespace"]
         target_label  = "namespace"
@@ -36,50 +32,19 @@ data:
         source_labels = ["__meta_kubernetes_pod_container_name"]
         target_label  = "container"
       }
-      rule {
-        replacement = discovery.kubernetes.pods.target
-        target_label = "instance"
-      }
     }
 
-    // Read container logs from /var/log/pods/<ns>_<pod>_<uid>/<container>/<n>.log
-    loki.source.file "pod_logs" {
+    loki.source.kubernetes "pod_logs" {
       targets    = discovery.relabel.pod_logs.output
-      forward_to = [loki.process.filter_logs.receiver]
-      tail_from_end = false
-    }
-
-    // Filter out health-check noise and only forward error/warning level logs.
-    loki.process "filter_logs" {
-      stage.match {
-        selector = "{container=~\"agent|forecaster\"}"
-        stage.logfmt {}
-        stage.drop {
-          source = "level"
-          value  = "info"
-        }
-        stage.drop {
-          source = "level"
-          value  = "debug"
-        }
-      }
-
       forward_to = [loki.write.default.receiver]
     }
 
-    // Write to in-cluster Loki.
     loki.write "default" {
       endpoint {
         url = env("ALLOY_LOKI_ENDPOINT") + "/loki/api/v1/push"
-
-        // Enable snappy compression.
-        headers = {
-          "Content-Encoding" = "snappy",
-        }
       }
     }
 
-    // Forward traces to Tempo via OTLP.
     otelcol.receiver.otlp "default" {
       http {
         endpoint = "0.0.0.0:4318"

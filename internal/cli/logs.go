@@ -47,24 +47,38 @@ var agentRestartCmd = &cobra.Command{
 		if err := restartAgentDeployment(); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Restarted deployment %s/%s\n", agentNS, agentSvc)
+		printOK(cmd.OutOrStdout(), "Restarted deployment %s/%s", agentNS, agentSvc)
 		return nil
 	},
 }
 
 func runLogs(cmd *cobra.Command, args []string) error {
+	out := cmd.OutOrStdout()
 	if logsFollow {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Streaming logs from %s/%s (ctrl+c to stop)…\n\n", agentNS, agentSvc)
+		if writerTTY(out) {
+			_, _ = fmt.Fprintln(out, mutedStyle.Render(fmt.Sprintf("Streaming logs from %s/%s (ctrl+c to stop)…", agentNS, agentSvc)))
+			_, _ = fmt.Fprintln(out)
+		} else {
+			_, _ = fmt.Fprintf(out, "Streaming logs from %s/%s (ctrl+c to stop)…\n\n", agentNS, agentSvc)
+		}
 		return streamAgentLogs(ctx, logsTail, func(line string) {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
+			if writerTTY(out) {
+				_, _ = fmt.Fprintln(out, colorizeLogLine(line))
+			} else {
+				_, _ = fmt.Fprintln(out, line)
+			}
 		})
 	}
 	text, err := fetchAgentLogs(logsTail)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprint(cmd.OutOrStdout(), text)
+	if writerTTY(out) {
+		_, _ = fmt.Fprint(out, colorizeLogs(text))
+	} else {
+		_, _ = fmt.Fprint(out, text)
+	}
 	return nil
 }

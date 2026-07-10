@@ -1,21 +1,24 @@
 package wizard
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
+)
 
 // Design system tokens — consistent with internal/cli/theme.go.
 var (
-	colorPrimary   = lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#A78BFA"}
-	colorAccent    = lipgloss.AdaptiveColor{Light: "#0D9488", Dark: "#2DD4BF"}
-	colorCritical  = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"}
-	colorWarning   = lipgloss.AdaptiveColor{Light: "#CA8A04", Dark: "#FBBF24"} //nolint:unused
-	colorSuccess   = lipgloss.AdaptiveColor{Light: "#16A34A", Dark: "#4ADE80"}
-	colorNeutral   = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"}
-	colorSubtle    = lipgloss.AdaptiveColor{Light: "#4B5563", Dark: "#D1D5DB"} //nolint:unused
-	colorMuted     = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#6B7280"}
-	colorSurface   = lipgloss.AdaptiveColor{Light: "#F9FAFB", Dark: "#1F2937"} //nolint:unused
-	colorCardBG    = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1F2937"}
-	colorBorder    = lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#374151"}
-	colorHighlight = lipgloss.AdaptiveColor{Light: "#111827", Dark: "#F9FAFB"}
+	colorPrimary   = compat.AdaptiveColor{Light: lipgloss.Color("#7C3AED"), Dark: lipgloss.Color("#A78BFA")}
+	colorAccent    = compat.AdaptiveColor{Light: lipgloss.Color("#0D9488"), Dark: lipgloss.Color("#2DD4BF")}
+	colorCritical  = compat.AdaptiveColor{Light: lipgloss.Color("#DC2626"), Dark: lipgloss.Color("#F87171")}
+	colorWarning   = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")} //nolint:unused
+	colorSuccess   = compat.AdaptiveColor{Light: lipgloss.Color("#16A34A"), Dark: lipgloss.Color("#4ADE80")}
+	colorNeutral   = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#9CA3AF")}
+	colorSubtle    = compat.AdaptiveColor{Light: lipgloss.Color("#4B5563"), Dark: lipgloss.Color("#D1D5DB")} //nolint:unused
+	colorMuted     = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")}
+	colorSurface   = compat.AdaptiveColor{Light: lipgloss.Color("#F9FAFB"), Dark: lipgloss.Color("#1F2937")} //nolint:unused
+	colorCardBG    = compat.AdaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("#1F2937")}
+	colorBorder    = compat.AdaptiveColor{Light: lipgloss.Color("#D1D5DB"), Dark: lipgloss.Color("#374151")}
+	colorHighlight = compat.AdaptiveColor{Light: lipgloss.Color("#111827"), Dark: lipgloss.Color("#F9FAFB")}
 
 	// Container
 	appStyle = lipgloss.NewStyle().Padding(1, 2)
@@ -24,7 +27,7 @@ var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorPrimary).
-			Background(lipgloss.AdaptiveColor{Light: "#EDE9FE", Dark: "#2D2A4E"}).
+			Background(compat.AdaptiveColor{Light: lipgloss.Color("#EDE9FE"), Dark: lipgloss.Color("#2D2A4E")}).
 			Padding(0, 1).
 			MarginBottom(1)
 

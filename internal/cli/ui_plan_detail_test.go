@@ -4,16 +4,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
 func TestFormatParamChipsSorted(t *testing.T) {
-	got := formatParamChips(map[string]string{
+	got := ansi.Strip(formatParamChips(map[string]string{
 		"memory_limit":   "2Gi",
 		"cpu_limit":      "500m",
 		"cpu_request":    "200m",
 		"memory_request": "1Gi",
-	})
+	}))
 	if !strings.Contains(got, "cpu limit=500m") {
 		t.Fatalf("expected cpu limit chip, got %q", got)
 	}
@@ -45,7 +46,7 @@ func TestWritePlanDetailRunbookLayout(t *testing.T) {
 			Rationale:   "Wait for rollout.",
 		},
 	})
-	out := b.String()
+	out := ansi.Strip(b.String())
 	if strings.Contains(out, "patch_resources monitoring/") {
 		t.Fatalf("runbook should not cram target into header line: %q", out)
 	}

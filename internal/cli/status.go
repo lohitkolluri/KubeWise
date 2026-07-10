@@ -29,7 +29,8 @@ var healthCmd = &cobra.Command{
 		if outputFormat == "json" {
 			return writeOutput(cmd.OutOrStdout(), "json", h, nil)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\n", h["status"])
+		out := cmd.OutOrStdout()
+		printKVStyled(out, "status:", h["status"], statusStyle(h["status"]))
 		return nil
 	},
 }
@@ -43,12 +44,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return writeOutput(cmd.OutOrStdout(), outputFormat, st, func() error {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Uptime:", st.Uptime)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %s\n", "Started At:", st.StartedAt)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Scrapes:", st.Scrapes)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Passed:", st.GatePassed)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Dropped:", st.GateDropped)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-20s %d\n", "Gate Observed:", st.GateObserved)
+		out := cmd.OutOrStdout()
+		printBanner(out)
+		printSection(out, "Agent status")
+		printKV(out, "Uptime:", st.Uptime)
+		printKV(out, "Started:", st.StartedAt)
+		printKV(out, "Scrapes:", fmt.Sprintf("%d", st.Scrapes))
+		printKV(out, "Gate passed:", fmt.Sprintf("%d", st.GatePassed))
+		printKV(out, "Gate dropped:", fmt.Sprintf("%d", st.GateDropped))
+		printKV(out, "Gate observed:", fmt.Sprintf("%d", st.GateObserved))
 		return nil
 	})
 }

@@ -21,20 +21,28 @@ var connectCmd = &cobra.Command{
   kwctl up
   kwctl connect`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		url := resolveAgentURL()
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Agent URL: %s\n", url)
+		out := cmd.OutOrStdout()
+		printBanner(out)
+		printSection(out, "Agent connectivity")
+		printKV(out, "URL:", resolveAgentURL())
+
 		h, err := fetchHealth()
 		if err != nil {
 			return fmt.Errorf("health check failed: %w", err)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Health:    %s\n", h["status"])
+		printKVStyled(out, "Health:", h["status"], statusStyle(h["status"]))
+
 		st, err := fetchStatus()
 		if err != nil {
 			return fmt.Errorf("status check failed: %w", err)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Uptime:    %s\n", st.Uptime)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Scrapes:   %d\n", st.Scrapes)
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Connected successfully.")
+		printKV(out, "Uptime:", st.Uptime)
+		printKV(out, "Scrapes:", fmt.Sprintf("%d", st.Scrapes))
+		printOK(out, "Connected successfully")
+		printNextSteps(out,
+			"kwctl ui      # control center",
+			"kwctl status  # quick summary",
+		)
 		return nil
 	},
 }
@@ -43,7 +51,12 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print kwctl version",
 	Run: func(cmd *cobra.Command, args []string) {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "kwctl %s\n", version.Version)
+		out := cmd.OutOrStdout()
+		if writerTTY(out) {
+			_, _ = fmt.Fprintln(out, logoStyle.Render("KubeWise")+mutedStyle.Render(" kwctl ")+brandStyle.Render(version.Version))
+			return
+		}
+		_, _ = fmt.Fprintf(out, "kwctl %s\n", version.Version)
 	},
 }
 
