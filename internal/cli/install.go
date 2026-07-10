@@ -1,16 +1,19 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	yaml "gopkg.in/yaml.v3"
 
 	"github.com/lohitkolluri/KubeWise/internal/cli/wizard"
@@ -71,7 +74,7 @@ func init() {
 	installCmd.Flags().StringVar(&installOpenRouterKey, "openrouter-key", "", "OpenRouter API key (or set OPENROUTER_API_KEY)")
 	installCmd.Flags().BoolVar(&installSkipPrometheus, "skip-prometheus", false, "skip Prometheus auto-detection")
 	installCmd.Flags().StringVar(&installPrometheusNS, "prometheus-namespace", "monitoring", "namespace to search for Prometheus")
-	installCmd.Flags().DurationVar(&installWaitTimeout, "wait", 3*time.Minute, "timeout waiting for agent rollout")
+	installCmd.Flags().DurationVar(&installWaitTimeout, "wait", 10*time.Minute, "timeout waiting for agent rollout (first install may need 5-10m to pull images)")
 	installCmd.Flags().StringVar(&installObsNamespace, "observability-namespace", "", "namespace to probe for existing observability backends (default: monitoring)")
 	rootCmd.AddCommand(installCmd)
 }
@@ -119,6 +122,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 
 	if installHelm {
 		if err := runHelmInstallWithObservability(ctx, out, kc); err != nil {
+			printPodStatus(out, kc, agentNS)
 			return err
 		}
 	} else {
@@ -145,10 +149,12 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	_, _ = fmt.Fprintln(out, mutedStyle.Render("… waiting for agent deployment"))
-	waitCtx, waitCancel := context.WithTimeout(ctx, installWaitTimeout)
-	defer waitCancel()
-	if err := waitForAnyAgentDeployment(waitCtx, kc, agentNS, agentSvc); err != nil {
+	if err := runWithSpinner(out, "Waiting for agent deployment to become ready...", func() error {
+		waitCtx, waitCancel := context.WithTimeout(ctx, installWaitTimeout)
+		defer waitCancel()
+		return waitForAnyAgentDeployment(waitCtx, kc, agentNS, agentSvc)
+	}); err != nil {
+		printPodStatus(out, kc, agentNS)
 		return fmt.Errorf("agent not ready: %w", err)
 	}
 	printOK(out, "Agent is running")
@@ -310,6 +316,8 @@ func runHelmDepUpdate(chartDir string) error {
 }
 
 // helmInstallWithValues writes values to a temp file and runs helm upgrade --install.
+// Output is suppressed (shown via spinner) and the captured stderr is returned on error
+// so the caller can display it alongside pod diagnostics.
 func helmInstallWithValues(out io.Writer, chart string, values map[string]any) error {
 	args := []string{
 		"upgrade", "--install", "kubewise", chart,
@@ -339,10 +347,22 @@ func helmInstallWithValues(out io.Writer, chart string, values map[string]any) e
 		args = append(args, "-f", tmpPath)
 	}
 
-	c := exec.Command("helm", args...) //nolint:gosec // CLI tool, intentional helm install
-	c.Stdout = out
-	c.Stderr = os.Stderr
-	return c.Run()
+	return runWithSpinner(out, "Installing Helm chart — pulling images and waiting for resources...", func() error {
+		c := exec.Command("helm", args...) //nolint:gosec // CLI tool, intentional helm install
+		// Suppress helm's own progress output during the spinner; capture stderr
+		// so we can show it on failure.
+		c.Stdout = io.Discard
+		var stderrBuf bytes.Buffer
+		c.Stderr = &stderrBuf
+		if err := c.Run(); err != nil {
+			// Print captured helm output before returning the error.
+			if stderrBuf.Len() > 0 {
+				_, _ = fmt.Fprintln(out, mutedStyle.Render(stderrBuf.String()))
+			}
+			return fmt.Errorf("helm install failed: %w", err)
+		}
+		return nil
+	})
 }
 
 func waitForAnyAgentDeployment(ctx context.Context, kc *k8s.Client, namespace, preferred string) error {
@@ -369,6 +389,131 @@ func waitForAnyAgentDeployment(ctx context.Context, kc *k8s.Client, namespace, p
 		return lastErr
 	}
 	return fmt.Errorf("deployment not found")
+}
+
+// ---------------------------------------------------------------------------
+// Spinner progress helpers
+// ---------------------------------------------------------------------------
+
+// spinnerFrames is a simple braille spinner for CLI progress indication.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// runWithSpinner shows an animated spinner while fn executes. It is a
+// no-op (runs fn directly) when w is not a terminal.
+func runWithSpinner(w io.Writer, msg string, fn func() error) error {
+	if !writerTTY(w) {
+		return fn()
+	}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-done:
+				_, _ = fmt.Fprintf(w, "\r%s\r", strings.Repeat(" ", ansiWidth(msg)+4))
+				return
+			default:
+				_, _ = fmt.Fprintf(w, "\r%s %s", infoStyle.Render(spinnerFrames[i]), mutedStyle.Render(msg))
+			}
+			i = (i + 1) % len(spinnerFrames)
+			time.Sleep(120 * time.Millisecond)
+		}
+	}()
+	err := fn()
+	close(done)
+	wg.Wait()
+	return err
+}
+
+// ansiWidth returns the visible width of a string, ignoring ANSI escape sequences.
+func ansiWidth(s string) int {
+	const esc = '\x1b'
+	w := 0
+	in := false
+	for _, r := range s {
+		if r == esc {
+			in = true
+			continue
+		}
+		if in {
+			if r == 'm' {
+				in = false
+			}
+			continue
+		}
+		if r >= ' ' && r < 0x7f || r > 0x9f {
+			w++
+		}
+	}
+	return w
+}
+
+// printPodStatus prints a compact table of pods and their statuses in the given
+// namespace. It is used to provide actionable diagnostics after a failed install.
+func printPodStatus(w io.Writer, kc *k8s.Client, namespace string) {
+	pods, err := kc.GetPods(context.Background(), namespace)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(w, mutedStyle.Render("\nPod status in namespace "+namespace+":"))
+	for _, p := range pods.Items {
+		status, detail := compactPodStatus(&p)
+		var line string
+		switch {
+		case p.Status.Phase == corev1.PodRunning && p.Status.ContainerStatuses[0].Ready:
+			line = successStyle.Render("● " + status) + " " + mutedStyle.Render(p.Name)
+		case p.Status.Phase == corev1.PodPending:
+			line = warnStyle.Render("● " + status) + " " + mutedStyle.Render(p.Name)
+			if detail != "" {
+				line += "\n" + mutedStyle.Render("  └ " + detail)
+			}
+		default:
+			line = errStyle.Render("● " + status) + " " + mutedStyle.Render(p.Name)
+			if detail != "" {
+				line += "\n" + mutedStyle.Render("  └ " + detail)
+			}
+		}
+		_, _ = fmt.Fprintln(w, line)
+	}
+}
+
+// compactPodStatus returns a short status label and optional detail for a pod.
+func compactPodStatus(p *corev1.Pod) (status, detail string) {
+	switch p.Status.Phase {
+	case corev1.PodRunning:
+		ready, total := 0, len(p.Status.ContainerStatuses)
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.Ready {
+				ready++
+			}
+		}
+		return fmt.Sprintf("Running (%d/%d)", ready, total), ""
+	case corev1.PodPending:
+		// Check container waiting reasons (image pull, etc.)
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Waiting != nil {
+				reason := cs.State.Waiting.Reason
+				if reason == "" {
+					reason = "waiting"
+				}
+				msg := cs.State.Waiting.Message
+				if msg == "" {
+					msg = "container " + cs.Name
+				}
+				return "Pending", reason + ": " + msg
+			}
+		}
+		return "Pending", "scheduling"
+	case corev1.PodSucceeded:
+		return "Succeeded", ""
+	case corev1.PodFailed:
+		return "Failed", ""
+	default:
+		return string(p.Status.Phase), ""
+	}
 }
 
 func runInstallWizard(out io.Writer) error {
