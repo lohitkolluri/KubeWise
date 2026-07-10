@@ -36,7 +36,7 @@ var (
 	installSkipPrometheus bool
 	installPrometheusNS   string
 	installWaitTimeout    time.Duration
-	installObsNamespace string
+	installObsNamespace   string
 )
 
 var installCmd = &cobra.Command{
@@ -265,11 +265,11 @@ func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmCo
 				"observability": true,
 			},
 			"observability": map[string]any{
-				"metricsURL":          obsCfg.metricsURL,
-				"logsEndpoint":        obsCfg.logsEndpoint,
-				"logsPushEndpoint":    obsCfg.logsPushURL,
-				"tracesEndpoint":      obsCfg.tracesURL,
-				"tracesOTLPEndpoint":  obsCfg.tracesOTLP,
+				"metricsURL":         obsCfg.metricsURL,
+				"logsEndpoint":       obsCfg.logsEndpoint,
+				"logsPushEndpoint":   obsCfg.logsPushURL,
+				"tracesEndpoint":     obsCfg.tracesURL,
+				"tracesOTLPEndpoint": obsCfg.tracesOTLP,
 				"vm": map[string]any{
 					"enabled": vmSubchart,
 				},

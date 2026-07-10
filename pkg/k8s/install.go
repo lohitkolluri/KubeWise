@@ -28,9 +28,9 @@ type DetectedBackend struct {
 	Type         BackendType `json:"type"`
 	Namespace    string      `json:"namespace"`
 	Service      string      `json:"service"`
-	URL          string      `json:"url"`           // Query/read endpoint
-	PushURL      string      `json:"pushUrl"`       // Write/push endpoint (for Alloy pushes to VL)
-	OTLPEndpoint string      `json:"otlpEndpoint"`  // OTLP gRPC endpoint (for Tempo traces)
+	URL          string      `json:"url"`          // Query/read endpoint
+	PushURL      string      `json:"pushUrl"`      // Write/push endpoint (for Alloy pushes to VL)
+	OTLPEndpoint string      `json:"otlpEndpoint"` // OTLP gRPC endpoint (for Tempo traces)
 }
 
 // ObservabilityReport captures all discovered monitoring backends.
@@ -138,7 +138,7 @@ func (c *Client) DetectLogsBackend(ctx context.Context, namespaces []string) *De
 				port := findServicePort(svc, 9428)
 				base := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", svc.Name, ns, port)
 				return &DetectedBackend{
-					Type:    BackendVictoriaLogs,
+					Type:      BackendVictoriaLogs,
 					Namespace: ns, Service: svc.Name,
 					URL:     base + "/select/loki",
 					PushURL: base,

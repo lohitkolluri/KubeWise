@@ -268,7 +268,7 @@ func (a *Agent) Run() error {
 	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
 
-		slog.Info("agent: started", "interval", a.interval.String())
+	slog.Info("agent: started", "interval", a.interval.String())
 
 	for {
 		select {

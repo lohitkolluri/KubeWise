@@ -14,5 +14,3 @@ type ClusterInfo struct {
 	PrometheusNamespace string
 	DetectedAt          time.Time
 }
-
-

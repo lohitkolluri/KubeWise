@@ -10,9 +10,9 @@ import (
 type circuitState int32
 
 const (
-	stateClosed    circuitState = iota // normal operation
-	stateOpen                          // failing — reject fast
-	stateHalfOpen                      // testing — allow one request
+	stateClosed   circuitState = iota // normal operation
+	stateOpen                         // failing — reject fast
+	stateHalfOpen                     // testing — allow one request
 )
 
 // CircuitBreaker prevents cascading failures by fast-rejecting requests
