@@ -295,9 +295,9 @@ func (s *Store) RebuildAnomalyIndexes() error {
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
-				return err
-			}
-			if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+			return err
+		}
+		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAnomalyIndex)
