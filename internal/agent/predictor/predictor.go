@@ -336,15 +336,16 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 	aboveThreshold := 0
 	belowThreshold := 0
 	for k, st := range seen {
-		if st.dp < p.config.MinWarmup {
+		switch {
+		case st.dp < p.config.MinWarmup:
 			warmup++
-		} else if st.score >= p.config.MinScore {
+		case st.score >= p.config.MinScore:
 			aboveThreshold++
 			if st.score > maxScore {
 				maxScore = st.score
 				maxKey = k
 			}
-		} else if st.score >= 0 {
+		case st.score >= 0:
 			belowThreshold++
 			if st.score > maxScore {
 				maxScore = st.score

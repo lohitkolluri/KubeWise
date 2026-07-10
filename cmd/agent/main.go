@@ -12,10 +12,14 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	rt, err := bootstrap.Init()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		if err := rt.Store.Close(); err != nil {
@@ -34,7 +38,7 @@ func main() {
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create agent: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	go func() {
@@ -47,6 +51,7 @@ func main() {
 
 	if err := agt.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "agent error: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
