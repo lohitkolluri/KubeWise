@@ -131,7 +131,7 @@ func isNonRetryable(err error) bool {
 		return false
 	}
 	// Context cancellation is not retryable — the caller is shutting down.
-		if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) {
 		return true
 	}
 	// Schema validation failures won't resolve with a different model.
