@@ -3,6 +3,8 @@ package wizard
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,6 +28,17 @@ func (s State) Execute(ctx context.Context) (string, error) {
 		_, _ = log.WriteString(configYAML)
 		_, _ = log.WriteString("\n[dry-run] No changes made.\n")
 		return log.String(), nil
+	}
+
+	// Auto-generate API token if not set (prevents agent crashloop from
+	// security.requireApiToken=true with no token).
+	if s.APIToken == "" {
+		tok := make([]byte, 24)
+		if _, err := rand.Read(tok); err != nil {
+			return "", fmt.Errorf("generate api token: %w", err)
+		}
+		s.APIToken = hex.EncodeToString(tok)
+		_, _ = log.WriteString("✓ Auto-generated API token\n")
 	}
 
 	// 1. Generate and save config.
@@ -131,10 +144,15 @@ func (s State) helmInstall(ctx context.Context, log *stringsBuilder) error {
 		agent["features"] = map[string]any{"observability": true}
 		agent["observability"] = obs
 	}
-	if s.OpenRouterKey != "" {
-		values["secrets"] = map[string]any{
-			"openrouterApiKey": s.OpenRouterKey,
+	if s.OpenRouterKey != "" || s.APIToken != "" {
+		secrets := map[string]any{}
+		if s.OpenRouterKey != "" {
+			secrets["openrouterApiKey"] = s.OpenRouterKey
 		}
+		if s.APIToken != "" {
+			secrets["apiToken"] = s.APIToken
+		}
+		values["secrets"] = secrets
 	}
 	if len(s.WatchNamespaces) > 0 {
 		agent := values["agent"].(map[string]any)

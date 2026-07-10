@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -29,6 +30,7 @@ type State struct {
 	ClusterType     string
 	OpenRouterKey   string
 	OllamaURL       string
+	APIToken        string // optional — auto-generated if empty
 	EnableLoki      bool
 	EnableTempo     bool
 	EnableGrafana   bool
@@ -49,6 +51,9 @@ type Model struct {
 	width  int
 	height int
 	cursor int // cursor position within a step
+
+	// Text inputs (lazily initialized)
+	apiTokenInput textinput.Model
 }
 
 // stepNames for rendering step indicators.
@@ -66,9 +71,19 @@ var stepNames = []string{
 
 // New creates a wizard model with default settings.
 func New() Model {
+	ti := textinput.New()
+	ti.Prompt = "› "
+	ti.Placeholder = "Auto-generated if empty"
+	ti.CharLimit = 64
+	ti.SetWidth(48)
+	s := textinput.DefaultStyles(false)
+	s.Focused.Prompt = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	s.Focused.Text = lipgloss.NewStyle().Foreground(colorHighlight)
+	ti.SetStyles(s)
 	return Model{
-		step:  stepWelcome,
-		state: State{RemediationMode: "dry-run"},
+		step:          stepWelcome,
+		state:         State{RemediationMode: "dry-run"},
+		apiTokenInput: ti,
 	}
 }
 
@@ -241,23 +256,16 @@ func (m Model) viewDetect() string {
 // ── Step: LLM ──
 
 func (m Model) updateLLM(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "enter":
-			m.step = stepObservability
-		case "up":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down":
-			if m.cursor < 1 {
-				m.cursor++
-			}
-		case "space":
-			// Toggle on/off for Ollama option.
-		}
+	// Enter saves the token and advances.
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		m.state.APIToken = m.apiTokenInput.Value()
+		m.step = stepObservability
+		return m, nil
 	}
-	return m, nil
+	// All other key events go to the text input.
+	var cmd tea.Cmd
+	m.apiTokenInput, cmd = m.apiTokenInput.Update(msg)
+	return m, cmd
 }
 
 func (m Model) viewLLM() string {
@@ -272,20 +280,29 @@ func (m Model) viewLLM() string {
 		ollama = "http://localhost:11434 (default)"
 	}
 
-	cursor := " "
-	if m.cursor == 0 {
-		cursor = "▸"
+	orStatus := mutedStyle("not set (observe-only mode)")
+	if m.state.OpenRouterKey != "" {
+		orStatus = successStyle.Render("✓ configured")
 	}
 
 	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
-		stepStyle.Render("Step 3/9: LLM Provider"),
+		stepStyle.Render("Step 3/9: LLM Provider & Security"),
 		"",
-		fmt.Sprintf("%s OpenRouter API key: %s", cursor, inputValueStyle.Render(maskedKey)),
-		infoStyle.Render("  Set via OPENROUTER_API_KEY env var or enter below"),
+		lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(22).Foreground(colorMuted).Render("OpenRouter API key"),
+			inputValueStyle.Render(maskedKey),
+			infoStyle.Render(" "+orStatus),
+		),
+		mutedStyle("  Set via OPENROUTER_API_KEY env var"),
 		"",
-		fmt.Sprintf("  Ollama URL: %s", inputValueStyle.Render(ollama)),
+		lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(22).Foreground(colorMuted).Render("Ollama URL"),
+			inputValueStyle.Render(ollama),
+		),
 		"",
-		successStyle.Render("✓ OpenRouter configured")+"  "+mutedStyle("(no key = observe-only mode)"),
+		lipgloss.NewStyle().Foreground(colorMuted).Render("API Token") + mutedStyle("  (for secure agent API access)"),
+		m.apiTokenInput.View(),
+		mutedStyle("  Leave empty to auto-generate"),
 		"",
 		buttonStyle.Render("Press Enter to continue ▶"),
 	))
@@ -491,12 +508,27 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) viewReview() string {
-	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
+	// Collect and show validation warnings
+	warnings := m.state.Validate()
+	warnLines := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		warnLines = append(warnLines, warnStyle.Render("⚠ "+w))
+	}
+
+	maskedToken := m.state.APIToken
+	if len(maskedToken) > 8 {
+		maskedToken = maskedToken[:4] + "···" + maskedToken[len(maskedToken)-4:]
+	} else if maskedToken != "" {
+		maskedToken = "··set··"
+	}
+
+	lines := []string{
 		stepStyle.Render("Step 8/9: Review Configuration"),
 		"",
-		summarySectionStyle.Render("LLM Provider"),
-		fmt.Sprintf("  %s OpenRouter: %s", summaryKeyStyle.Render("Key:"), m.summaryBool(m.state.OpenRouterKey != "")),
+		summarySectionStyle.Render("LLM Provider & Security"),
+		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("OpenRouter:"), m.summaryBool(m.state.OpenRouterKey != "")),
 		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("Ollama:"), m.state.OllamaURL),
+		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("API Token:"), m.summaryBool(m.state.APIToken != "")),
 		"",
 		summarySectionStyle.Render("Observability"),
 		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("Loki:"), m.summaryBool(m.state.EnableLoki)),
@@ -511,10 +543,19 @@ func (m Model) viewReview() string {
 		"",
 		summarySectionStyle.Render("Remediation"),
 		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("Mode:"), m.state.RemediationMode),
-		"",
+	}
+	if len(warnings) > 0 {
+		lines = append(lines, "",
+			warnStyle.Render("⚠ Warnings"))
+		for _, wl := range warnLines {
+			lines = append(lines, mutedStyle("  "+wl))
+		}
+	}
+	lines = append(lines, "",
 		successStyle.Render("✓ Press Enter to install")+"  "+
-			mutedStyle("Esc: go back to edit"),
-	))
+			mutedStyle("Esc: go back to edit"))
+
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Top, lines...))
 }
 
 func (m Model) summaryBool(v bool) string {
