@@ -16,11 +16,16 @@ import (
 type TaskType int
 
 const (
-	TaskExtraction     TaskType = iota // T1: signal extraction from raw data
-	TaskClassification                 // T1: classify anomaly type
-	TaskRCA                            // T2: root cause analysis
-	TaskRemediation                    // T3: generate YAML/runbook
-	TaskValidation                     // T1: validate structured output
+	// TaskExtraction extracts signals from raw data (T1).
+	TaskExtraction TaskType = iota
+	// TaskClassification classifies anomaly type (T1).
+	TaskClassification
+	// TaskRCA performs root cause analysis (T2).
+	TaskRCA
+	// TaskRemediation generates YAML/runbook remediation plans (T3).
+	TaskRemediation
+	// TaskValidation validates structured LLM output (T1).
+	TaskValidation
 )
 
 // String returns a human-readable task name (used in metrics, logs).

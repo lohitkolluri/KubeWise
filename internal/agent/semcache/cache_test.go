@@ -194,7 +194,7 @@ func TestEviction(t *testing.T) {
 	}
 }
 
-func TestConcurrentAccess(t *testing.T) {
+func TestConcurrentAccess(_ *testing.T) {
 	// No t.Parallel — this IS the concurrency test.
 	c := New(Config{TTL: 10 * time.Minute, MaxEntries: 100})
 

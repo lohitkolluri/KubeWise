@@ -42,6 +42,7 @@ func NewOllamaProvider(baseURL, model, apiKey string) *OllamaProvider {
 	}
 }
 
+// Name returns "ollama" as the provider identifier.
 func (p *OllamaProvider) Name() string { return "ollama" }
 
 // SetModel changes the model used for subsequent requests.
@@ -50,6 +51,7 @@ func (p *OllamaProvider) SetModel(model string) { p.model = model }
 // HasAPIKey is true when a reachable base URL is configured (Ollama often needs no key).
 func (p *OllamaProvider) HasAPIKey() bool { return p.baseURL != "" }
 
+// ValidateKey checks that the Ollama server is reachable and responding.
 func (p *OllamaProvider) ValidateKey(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/tags", nil)
 	if err != nil {
@@ -68,11 +70,13 @@ func (p *OllamaProvider) ValidateKey(ctx context.Context) error {
 	return nil
 }
 
+// StructuredOutput sends a prompt and returns a typed JSON response.
 func (p *OllamaProvider) StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error {
 	_, err := p.StructuredOutputWithUsage(ctx, systemPrompt, userContent, schema, respPtr)
 	return err
 }
 
+// StructuredOutputWithUsage sends a prompt and returns a typed response with token usage.
 func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	if !p.circuitBreaker.Allow() {
 		return Usage{}, fmt.Errorf("ollama circuit breaker open")

@@ -1,3 +1,4 @@
+// Package cli provides the kwctl command-line interface for KubeWise.
 package cli
 
 import (
@@ -66,7 +67,7 @@ var anomaliesDescribeCmd = &cobra.Command{
 
 const timeRFC3339 = "2006-01-02 15:04:05 MST"
 
-func runAnomaliesList(cmd *cobra.Command, args []string) error {
+func runAnomaliesList(cmd *cobra.Command, _ []string) error {
 	if err := validateOutputFormat(); err != nil {
 		return err
 	}

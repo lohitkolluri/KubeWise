@@ -43,7 +43,7 @@ var agentRestartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Rolling restart of the agent deployment",
 	Long:  `Triggers a kubectl-style rolling restart. Use after config changes to pick up new settings.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		if err := restartAgentDeployment(); err != nil {
 			return err
 		}
@@ -52,7 +52,7 @@ var agentRestartCmd = &cobra.Command{
 	},
 }
 
-func runLogs(cmd *cobra.Command, args []string) error {
+func runLogs(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
 	if logsFollow {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

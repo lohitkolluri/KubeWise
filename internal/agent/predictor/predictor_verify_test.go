@@ -114,7 +114,7 @@ func TestVerifyCleanSteadyState(t *testing.T) {
 	cfg.Persistence = 1
 	pred := NewPredictor(cfg)
 
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for test reproducibility
 
 	// Send one point at a time. No results during warmup.
 	for i := 0; i < MinimumWarmupPoints-1; i++ {
@@ -169,12 +169,12 @@ func TestVerifySpikeDetection(t *testing.T) {
 	cfg.Persistence = 1
 	pred := NewPredictor(cfg)
 
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for test reproducibility
 
 	// Warmup with steady data, one point at a time.
 	for i := 0; i < MinimumWarmupPoints+20; i++ {
 		val := 50.0 + 3.0*rng.NormFloat64()
-		pred.Run(singlePoint("test_cpu_usage", val, map[string]string{}))
+		_, _ = pred.Run(singlePoint("test_cpu_usage", val, map[string]string{}))
 	}
 
 	// Send a large spike.
@@ -208,12 +208,12 @@ func TestVerifyRampDetection(t *testing.T) {
 	cfg.Persistence = 1
 	pred := NewPredictor(cfg)
 
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for test reproducibility
 
 	// Warmup with steady values around 50, one point at a time.
 	for i := 0; i < MinimumWarmupPoints+20; i++ {
 		val := 50.0 + 2.0*rng.NormFloat64()
-		pred.Run(singlePoint("test_mem_usage", val, map[string]string{}))
+		_, _ = pred.Run(singlePoint("test_mem_usage", val, map[string]string{}))
 	}
 
 	// Continuous ramp: values climb 1 per point from 55 to 104.
@@ -494,7 +494,7 @@ func TestVerifyMultipleMetricsIndependent(t *testing.T) {
 	cfg.Persistence = 1
 	pred := NewPredictor(cfg)
 
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for test reproducibility
 
 	// Feed both metrics one point at a time across iterations.
 	// After warmup, the flat metric should not see high-confidence alarms.
@@ -726,7 +726,7 @@ func singlePoint(name string, val float64, labels map[string]string) []MetricRes
 // metricResult builds a MetricResult with n points drawn from N(center, std^2).
 func metricResult(name string, n int, center, std float64) []MetricResult {
 	values := make([]MetricPoint, n)
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for test reproducibility
 	for i := 0; i < n; i++ {
 		values[i] = MetricPoint{
 			Value:     center + std*rng.NormFloat64(),

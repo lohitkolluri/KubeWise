@@ -34,7 +34,7 @@ func init() {
 	configCmd.RunE = runConfigShow
 }
 
-func runConfigShow(cmd *cobra.Command, args []string) error {
+func runConfigShow(cmd *cobra.Command, _ []string) error {
 	if err := validateOutputFormat(); err != nil {
 		return err
 	}
@@ -96,12 +96,12 @@ var configSetCmd = &cobra.Command{
 var configApplyCmd = &cobra.Command{
 	Use:   "apply -f FILE",
 	Short: "Apply agent configuration from a YAML file",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		file, _ := cmd.Flags().GetString("file")
 		if file == "" {
 			return fmt.Errorf("--file is required")
 		}
-		data, err := os.ReadFile(file)
+		data, err := os.ReadFile(file) //nolint:gosec // user-provided config file path via --file flag
 		if err != nil {
 			return err
 		}

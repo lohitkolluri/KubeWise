@@ -29,7 +29,7 @@ func (re *RuleEngine) RegisterRule(r Rule) {
 // Evaluate runs all registered rules against the input.
 // Returns all matched results sorted by confidence descending.
 // Returns empty slice (not nil) when no rules match.
-func (re *RuleEngine) Evaluate(ctx context.Context, input EngineInput) ([]RuleResult, error) {
+func (re *RuleEngine) Evaluate(ctx context.Context, input Input) ([]RuleResult, error) {
 	re.mu.RLock()
 	rules := make([]Rule, len(re.rules))
 	copy(rules, re.rules)

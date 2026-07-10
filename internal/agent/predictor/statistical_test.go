@@ -242,11 +242,11 @@ func TestChangepointDetectorRegimeShift(t *testing.T) {
 	cd := NewChangepointDetector(5, 30)
 	// 60 points from one distribution, then 60 from another
 	for i := 0; i < 60; i++ {
-		cd.Add(rand.NormFloat64()*0.1 + 10)
+		cd.Add(rand.NormFloat64()*0.1 + 10) //nolint:gosec // deterministic test, weak rand is fine
 	}
 	detected := false
 	for i := 0; i < 60; i++ {
-		if cd.Add(rand.NormFloat64()*0.1 + 50) {
+		if cd.Add(rand.NormFloat64()*0.1 + 50) { //nolint:gosec // deterministic test, weak rand is fine
 			detected = true
 		}
 	}

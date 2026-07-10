@@ -19,7 +19,7 @@ type mockRule struct {
 }
 
 func (r *mockRule) Name() string { return r.name }
-func (r *mockRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+func (r *mockRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == r.matchOn {
 			return []RuleResult{{
@@ -41,7 +41,7 @@ func (r *mockRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult,
 type errRule struct{ name string }
 
 func (r *errRule) Name() string { return r.name }
-func (r *errRule) Evaluate(_ context.Context, _ EngineInput) ([]RuleResult, error) {
+func (r *errRule) Evaluate(_ context.Context, _ Input) ([]RuleResult, error) {
 	return nil, errors.New("always fails")
 }
 
@@ -59,7 +59,7 @@ func TestEvaluate_SingleMatch(t *testing.T) {
 	re := New()
 	re.RegisterRule(&mockRule{name: "oom_test", matchOn: "OOMKilled", action: "restart_pod", confidence: 0.98})
 
-	input := EngineInput{
+	input := Input{
 		Anomalies: []models.AnomalyRecord{
 			mkAnomaly("pod-1", "default", "OOMKilled", 0.9),
 		},
@@ -87,7 +87,7 @@ func TestEvaluate_NoMatch(t *testing.T) {
 	re := New()
 	re.RegisterRule(&mockRule{name: "oom_test", matchOn: "OOMKilled", action: "restart_pod", confidence: 0.98})
 
-	input := EngineInput{
+	input := Input{
 		Anomalies: []models.AnomalyRecord{
 			mkAnomaly("pod-2", "default", "CrashLoopBackOff", 0.8),
 		},
@@ -107,7 +107,7 @@ func TestEvaluate_MultipleRules(t *testing.T) {
 	re.RegisterRule(&mockRule{name: "oom", matchOn: "OOMKilled", action: "restart_pod", confidence: 0.98})
 	re.RegisterRule(&mockRule{name: "crash", matchOn: "CrashLoopBackOff", action: "restart_pod", confidence: 0.95})
 
-	input := EngineInput{
+	input := Input{
 		Anomalies: []models.AnomalyRecord{
 			mkAnomaly("pod-a", "default", "OOMKilled", 0.9),
 			mkAnomaly("pod-b", "default", "CrashLoopBackOff", 0.8),
@@ -133,7 +133,7 @@ func TestEvaluate_PartialMatch(t *testing.T) {
 	re.RegisterRule(&mockRule{name: "oom", matchOn: "OOMKilled", action: "restart_pod", confidence: 0.98})
 	re.RegisterRule(&mockRule{name: "crash", matchOn: "CrashLoopBackOff", action: "restart_pod", confidence: 0.95})
 
-	input := EngineInput{
+	input := Input{
 		Anomalies: []models.AnomalyRecord{
 			mkAnomaly("pod-a", "default", "OOMKilled", 0.9),
 		},
@@ -156,7 +156,7 @@ func TestEvaluate_ErrorRuleDoesNotBlock(t *testing.T) {
 	re.RegisterRule(&errRule{name: "broken"})
 	re.RegisterRule(&mockRule{name: "oom", matchOn: "OOMKilled", action: "restart_pod", confidence: 0.98})
 
-	input := EngineInput{
+	input := Input{
 		Anomalies: []models.AnomalyRecord{
 			mkAnomaly("pod-a", "default", "OOMKilled", 0.9),
 		},
@@ -181,7 +181,7 @@ func TestEvaluate_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	_, err := re.Evaluate(ctx, EngineInput{})
+	_, err := re.Evaluate(ctx, Input{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
@@ -197,7 +197,7 @@ func TestEvaluate_ContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
 	defer cancel()
 
-	_, err := re.Evaluate(ctx, EngineInput{})
+	_, err := re.Evaluate(ctx, Input{})
 	if err == nil {
 		t.Fatal("expected error from expired deadline, got nil")
 	}
@@ -206,7 +206,7 @@ func TestEvaluate_ContextDeadline(t *testing.T) {
 func TestEvaluate_EmptyEngine(t *testing.T) {
 	re := New()
 
-	results, err := re.Evaluate(context.Background(), EngineInput{
+	results, err := re.Evaluate(context.Background(), Input{
 		Anomalies: []models.AnomalyRecord{
 			mkAnomaly("pod", "default", "OOMKilled", 0.9),
 		},
@@ -223,7 +223,7 @@ func TestEvaluate_EmptyAnomalies(t *testing.T) {
 	re := New()
 	re.RegisterRule(&mockRule{name: "oom", matchOn: "OOMKilled", action: "restart_pod", confidence: 0.98})
 
-	results, err := re.Evaluate(context.Background(), EngineInput{})
+	results, err := re.Evaluate(context.Background(), Input{})
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}

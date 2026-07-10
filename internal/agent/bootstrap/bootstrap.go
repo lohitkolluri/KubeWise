@@ -1,3 +1,4 @@
+// Package bootstrap handles initial agent setup and data directory creation.
 package bootstrap
 
 import (
@@ -37,7 +38,7 @@ func Init() (*Runtime, error) {
 	if dataDir == "" {
 		dataDir = "/tmp/kubewise"
 	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil { //nolint:gosec // dataDir from KUBEWISE_DATA_DIR env var, by design
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
@@ -138,7 +139,7 @@ func defaultConfig() *models.AgentConfig {
 }
 
 func loadConfigFile(path string) (*models.AgentConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // config path from KUBEWISE_CONFIG_PATH env var, by design
 	if err != nil {
 		return nil, fmt.Errorf("read config file: %w", err)
 	}

@@ -213,9 +213,3 @@ var (
 	dotSeparator = mutedStyle.Render(" · ")
 	hbar         = mutedStyle.Render(repeatLine(48))
 )
-
-const (
-	uiHeaderLines = 1 // legacy; prefer contentHeight() measurement
-	uiTabLines    = 2
-	uiFooterLines = 2
-)

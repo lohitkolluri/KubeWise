@@ -21,6 +21,7 @@ type OpenAICompatibleProvider struct {
 	circuitBreaker *CircuitBreaker
 }
 
+// NewOpenAICompatibleProvider creates an OpenAI-compatible Chat Completions backend.
 func NewOpenAICompatibleProvider(baseURL, model, apiKey string) *OpenAICompatibleProvider {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -44,14 +45,17 @@ func NewOpenAICompatibleProvider(baseURL, model, apiKey string) *OpenAICompatibl
 // Note: "openai" is accepted as an alias at config parsing time.
 func (p *OpenAICompatibleProvider) Name() string { return "openapi" }
 
+// HasAPIKey returns true when an API key is configured.
 func (p *OpenAICompatibleProvider) HasAPIKey() bool { return p.apiKey != "" }
 
+// SetModel changes the model used for subsequent requests.
 func (p *OpenAICompatibleProvider) SetModel(model string) {
 	if strings.TrimSpace(model) != "" {
 		p.model = model
 	}
 }
 
+// ValidateKey checks that the API key is valid against the provider's endpoints.
 func (p *OpenAICompatibleProvider) ValidateKey(ctx context.Context) error {
 	if p.apiKey == "" {
 		return fmt.Errorf("openapi-compatible API key is empty")
@@ -101,11 +105,13 @@ type openAIChatResp struct {
 	} `json:"usage"`
 }
 
+// StructuredOutput sends a prompt and returns a typed JSON response.
 func (p *OpenAICompatibleProvider) StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error {
 	_, err := p.StructuredOutputWithUsage(ctx, systemPrompt, userContent, schema, respPtr)
 	return err
 }
 
+// StructuredOutputWithUsage sends a prompt and returns a typed response with token usage.
 func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	if p.apiKey == "" {
 		return Usage{}, fmt.Errorf("openapi-compatible API key is empty")

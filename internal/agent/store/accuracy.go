@@ -1,3 +1,4 @@
+// Package store provides persistent storage for predictions, accuracy, and cache data.
 package store
 
 import (
@@ -207,7 +208,7 @@ func (s *Store) ListPredictionsInWindow(since time.Time, limit int) ([]models.Tr
 		if b == nil {
 			return nil
 		}
-		return b.ForEach(func(k, v []byte) error {
+		return b.ForEach(func(_, v []byte) error {
 			var tp models.TrackedPrediction
 			if err := json.Unmarshal(v, &tp); err != nil {
 				return nil

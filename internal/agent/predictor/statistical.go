@@ -38,7 +38,7 @@ const (
 	// MinimumWarmupPoints is the minimum data points before producing anomaly scores.
 	MinimumWarmupPoints = 10
 
-	// DefaultChangepointMinSegment is the minimum segment length for ED-PELT.
+	// DefaultChangepointMinSeg is the minimum segment length for ED-PELT changepoint detection.
 	DefaultChangepointMinSeg = 5
 
 	// DefaultChangepointInterval is how often (in data points) to run the

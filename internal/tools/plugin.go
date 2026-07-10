@@ -29,9 +29,9 @@ type ToolPlugin interface {
 const OutputMaxBytes = 10 * 1024
 
 // Truncate truncates a string to max bytes, appending "..." if truncated.
-func Truncate(s string, max int) string {
-	if len(s) <= max {
+func Truncate(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:maxBytes] + "..."
 }

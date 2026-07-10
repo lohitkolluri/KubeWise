@@ -16,7 +16,7 @@ var statsCmd = &cobra.Command{
 	RunE:  runStats,
 }
 
-func runStats(cmd *cobra.Command, args []string) error {
+func runStats(cmd *cobra.Command, _ []string) error {
 	if err := validateOutputFormat(); err != nil {
 		return err
 	}

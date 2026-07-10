@@ -1,3 +1,4 @@
+// Package remediator plans and executes remediation actions against the cluster.
 package remediator
 
 import (

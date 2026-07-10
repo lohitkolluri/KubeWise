@@ -49,7 +49,7 @@ tempo_url: http://tempo:3200
 	if rt1.Config.LokiURL != "http://loki-gateway:80" {
 		t.Fatalf("seed loki_url = %q", rt1.Config.LokiURL)
 	}
-	rt1.Store.Close()
+	_ = rt1.Store.Close()
 
 	// Simulate store seeded without observability URLs (older deploy).
 	s, err := store.Open(dir + "/agent.db")
@@ -61,7 +61,7 @@ tempo_url: http://tempo:3200
 	if err := s.SaveConfig(stale); err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	rt2, err := Init()
 	if err != nil {

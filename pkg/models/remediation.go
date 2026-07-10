@@ -6,9 +6,13 @@ import "time"
 type ToolCapability string
 
 const (
-	CapRead             ToolCapability = "read"
-	CapWrite            ToolCapability = "write"
-	CapDestructive      ToolCapability = "destructive"
+	// CapRead indicates the tool can read cluster state.
+	CapRead ToolCapability = "read"
+	// CapWrite indicates the tool can modify cluster state.
+	CapWrite ToolCapability = "write"
+	// CapDestructive indicates the tool performs irreversible destructive actions.
+	CapDestructive ToolCapability = "destructive"
+	// CapRequiresApproval indicates the tool needs explicit human approval.
 	CapRequiresApproval ToolCapability = "requires_approval"
 )
 
@@ -35,9 +39,13 @@ type ToolResult struct {
 type RiskTier string
 
 const (
+	// RiskTier1 represents auto-execute remediation (safe actions like pod restart).
 	RiskTier1 RiskTier = "T1" // Auto-execute
+	// RiskTier2 represents cooldown-gated remediation (e.g., scaling or rolling update).
 	RiskTier2 RiskTier = "T2" // Cooldown-gated
+	// RiskTier3 represents remediation that needs human approval (escalate).
 	RiskTier3 RiskTier = "T3" // Needs human approval (escalate)
+	// RiskTier4 represents actions that are always rejected (unknown or cluster-wide).
 	RiskTier4 RiskTier = "T4" // Always rejected
 )
 
@@ -150,14 +158,23 @@ type RemediationAction struct {
 type AuditStatus string
 
 const (
-	AuditApproved     AuditStatus = "approved"
-	AuditRejected     AuditStatus = "rejected"
-	AuditExecuted     AuditStatus = "executed"
-	AuditFailed       AuditStatus = "failed"
-	AuditDryRun       AuditStatus = "dry_run"
-	AuditEscalated    AuditStatus = "escalated"
-	AuditPending      AuditStatus = "pending_approval"
-	AuditVerified     AuditStatus = "verified"
+	// AuditApproved indicates a remediation plan was approved for execution.
+	AuditApproved AuditStatus = "approved"
+	// AuditRejected indicates a remediation plan was rejected.
+	AuditRejected AuditStatus = "rejected"
+	// AuditExecuted indicates a remediation plan was executed.
+	AuditExecuted AuditStatus = "executed"
+	// AuditFailed indicates a remediation plan execution failed.
+	AuditFailed AuditStatus = "failed"
+	// AuditDryRun indicates a remediation plan was tested without execution.
+	AuditDryRun AuditStatus = "dry_run"
+	// AuditEscalated indicates a remediation plan was escalated to a higher tier.
+	AuditEscalated AuditStatus = "escalated"
+	// AuditPending indicates a remediation plan is awaiting approval.
+	AuditPending AuditStatus = "pending_approval"
+	// AuditVerified indicates a remediation plan was verified as successful.
+	AuditVerified AuditStatus = "verified"
+	// AuditVerifyFailed indicates post-remediation verification failed.
 	AuditVerifyFailed AuditStatus = "verify_failed"
 )
 

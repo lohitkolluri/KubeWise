@@ -174,8 +174,8 @@ func clientIP(r *http.Request) string {
 		}
 		return strings.TrimSpace(fwd)
 	}
-	if real := r.Header.Get("X-Real-IP"); real != "" {
-		return strings.TrimSpace(real)
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+		return strings.TrimSpace(realIP)
 	}
 	ip := r.RemoteAddr
 	if idx := strings.LastIndex(ip, ":"); idx >= 0 {

@@ -1,3 +1,4 @@
+// Package llm provides LLM provider abstractions and circuit breaker logic.
 package llm
 
 import (
@@ -6,11 +7,11 @@ import (
 	"time"
 )
 
-// circuitState tracks the health of an LLM provider connection.
-type circuitState int32
+// CircuitState tracks the health of an LLM provider connection.
+type CircuitState int32
 
 const (
-	stateClosed   circuitState = iota // normal operation
+	stateClosed   CircuitState = iota // normal operation
 	stateOpen                         // failing — reject fast
 	stateHalfOpen                     // testing — allow one request
 )
@@ -40,7 +41,7 @@ func newCircuitBreaker(threshold int32, cooldown time.Duration) *CircuitBreaker 
 
 // Allow reports whether a request should proceed. Returns true for closed or half-open states.
 func (cb *CircuitBreaker) Allow() bool {
-	s := circuitState(cb.state.Load())
+	s := CircuitState(cb.state.Load())
 	switch s {
 	case stateClosed:
 		return true
@@ -50,7 +51,7 @@ func (cb *CircuitBreaker) Allow() bool {
 		if time.Since(last) >= cb.cooldown {
 			cb.mu.Lock()
 			// Double-check under lock to avoid race.
-			if circuitState(cb.state.Load()) == stateOpen {
+			if CircuitState(cb.state.Load()) == stateOpen {
 				cb.state.Store(int32(stateHalfOpen))
 				cb.half = true // the current request consumes the probe
 				cb.mu.Unlock()
@@ -77,7 +78,7 @@ func (cb *CircuitBreaker) Allow() bool {
 // Success records a successful call, resetting the failure count and closing the circuit.
 func (cb *CircuitBreaker) Success() {
 	cb.failures.Store(0)
-	if circuitState(cb.state.Load()) != stateClosed {
+	if CircuitState(cb.state.Load()) != stateClosed {
 		cb.state.Store(int32(stateClosed))
 	}
 }
@@ -86,7 +87,7 @@ func (cb *CircuitBreaker) Success() {
 func (cb *CircuitBreaker) Failure() {
 	f := cb.failures.Add(1)
 	if f >= cb.threshold {
-		prev := circuitState(cb.state.Swap(int32(stateOpen)))
+		prev := CircuitState(cb.state.Swap(int32(stateOpen)))
 		if prev != stateOpen {
 			cb.lastOpen.Store(time.Now().UnixNano())
 		}
@@ -94,8 +95,8 @@ func (cb *CircuitBreaker) Failure() {
 }
 
 // State returns the current circuit state.
-func (cb *CircuitBreaker) State() circuitState {
-	return circuitState(cb.state.Load())
+func (cb *CircuitBreaker) State() CircuitState {
+	return CircuitState(cb.state.Load())
 }
 
 // Reset forcibly closes the circuit and resets the failure count.
@@ -104,7 +105,7 @@ func (cb *CircuitBreaker) Reset() {
 	cb.state.Store(int32(stateClosed))
 }
 
-func (s circuitState) String() string {
+func (s CircuitState) String() string {
 	switch s {
 	case stateClosed:
 		return "closed"

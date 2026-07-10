@@ -2,12 +2,14 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -250,10 +252,10 @@ func (s *Store) RebuildAuditIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
+		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
-		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && err != bolt.ErrBucketNotFound { //nolint:staticcheck
+		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAuditIndex)

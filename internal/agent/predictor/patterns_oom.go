@@ -7,10 +7,13 @@ import (
 const oomMinConfidence = 0.7
 const memoryMetric = "pod_memory_usage"
 
+// OOMPattern detects pods at risk of being OOMKilled based on memory usage trends.
 type OOMPattern struct{}
 
+// Name returns "OOMRisk" as the pattern identifier.
 func (o *OOMPattern) Name() string { return "OOMRisk" }
 
+// Match checks memory usage metrics for OOM risk signals.
 func (o *OOMPattern) Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
 	memResult, ok := findMetric(metrics, memoryMetric)
 	if !ok || len(memResult.Values) == 0 {

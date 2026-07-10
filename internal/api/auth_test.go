@@ -1,3 +1,4 @@
+// Package api provides the HTTP API server for the KubeWise agent.
 package api
 
 import (
@@ -8,7 +9,7 @@ import (
 
 func TestAuthMiddleware_RejectsWithoutToken(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -28,7 +29,7 @@ func TestAuthMiddleware_RejectsWithoutToken(t *testing.T) {
 
 func TestAuthMiddleware_AcceptsBearerToken(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -52,7 +53,7 @@ func TestAuthMiddleware_HealthBypassesAuth(t *testing.T) {
 	for _, path := range []string{"/health", "/readyz", "/metrics", "/status"} {
 		t.Run(path, func(t *testing.T) {
 			mux := http.NewServeMux()
-			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
 
@@ -74,7 +75,7 @@ func TestAuthMiddleware_HealthBypassesAuth(t *testing.T) {
 
 func TestAuthMiddleware_RequireTokenFailsClosedWhenTokenMissing(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/stats", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 

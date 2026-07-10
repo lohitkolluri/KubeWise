@@ -1,3 +1,4 @@
+// Package agent runs the main prediction, anomaly detection, and remediation loop.
 package agent
 
 import (

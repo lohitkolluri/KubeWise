@@ -28,6 +28,7 @@ func NewSemCacheBackend(s *Store) *SemCacheBackend {
 	return &SemCacheBackend{store: s}
 }
 
+// LoadAll reads all cached entries from the bolt bucket.
 func (b *SemCacheBackend) LoadAll() (map[string]*semcache.Entry, error) {
 	if b == nil || b.store == nil {
 		return nil, nil
@@ -56,6 +57,7 @@ func (b *SemCacheBackend) LoadAll() (map[string]*semcache.Entry, error) {
 	return out, err
 }
 
+// Save persists a cache entry to the bolt bucket.
 func (b *SemCacheBackend) Save(entry *semcache.Entry) error {
 	if b == nil || b.store == nil || entry == nil || entry.Fingerprint == "" {
 		return nil
@@ -80,6 +82,7 @@ func (b *SemCacheBackend) Save(entry *semcache.Entry) error {
 	})
 }
 
+// Delete removes a cache entry by its fingerprint.
 func (b *SemCacheBackend) Delete(fp string) error {
 	if b == nil || b.store == nil || fp == "" {
 		return nil

@@ -15,7 +15,7 @@ func fakePrometheusServer(t *testing.T, responseJSON string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/query" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(responseJSON))
+			_, _ = w.Write([]byte(responseJSON))
 			return
 		}
 		http.NotFound(w, r)
@@ -27,7 +27,7 @@ func TestNewPrometheusCollector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(f.Name())
 
 	s, err := store.Open(f.Name())
@@ -65,7 +65,7 @@ func TestCollectMetrics_ValidResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(f.Name())
 
 	s, err := store.Open(f.Name())
@@ -105,7 +105,7 @@ func TestCollectMetrics_ServerError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(f.Name())
 
 	s, err := store.Open(f.Name())
@@ -149,7 +149,7 @@ func TestCollectQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(f.Name())
 
 	s, err := store.Open(f.Name())

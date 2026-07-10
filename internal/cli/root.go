@@ -32,7 +32,7 @@ Quick start:
 Profiles: ~/.config/kwctl/config.yaml`,
 	SilenceErrors: true,
 	SilenceUsage:  true,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		if isTerminal(os.Stdout) {
 			return runControlCenter(2 * time.Second)
 		}
@@ -40,6 +40,7 @@ Profiles: ~/.config/kwctl/config.yaml`,
 	},
 }
 
+// Execute runs the root CLI command and exits on failure.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, formatCLIError(err))

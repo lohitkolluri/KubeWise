@@ -13,9 +13,11 @@ import (
 // Action: restart_pod (T1 — auto in live mode).
 type OOMRule struct{}
 
+// Name returns "oom_killed" as the rule identifier.
 func (r *OOMRule) Name() string { return "oom_killed" }
 
-func (r *OOMRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for OOMKilled patterns in the anomaly input.
+func (r *OOMRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "OOMKilling" || a.Pattern == "OOMKilled" {
 			return []RuleResult{{
@@ -41,9 +43,11 @@ func (r *OOMRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, 
 // Action: restart_pod (T1 — auto).
 type CrashLoopRule struct{}
 
+// Name returns "crash_loop" as the rule identifier.
 func (r *CrashLoopRule) Name() string { return "crash_loop" }
 
-func (r *CrashLoopRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for CrashLoopBackOff or high restart-rate anomalies.
+func (r *CrashLoopRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "CrashLoopBackOff" || (a.MetricName == "restart_rate" && a.Score >= 0.8) {
 			return []RuleResult{{
@@ -68,9 +72,11 @@ func (r *CrashLoopRule) Evaluate(_ context.Context, input EngineInput) ([]RuleRe
 // Action: noop + escalate (T3 — requires approval because image fix needs human).
 type ImagePullBackOffRule struct{}
 
+// Name returns "image_pull_backoff" as the rule identifier.
 func (r *ImagePullBackOffRule) Name() string { return "image_pull_backoff" }
 
-func (r *ImagePullBackOffRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for image pull failure anomalies.
+func (r *ImagePullBackOffRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "ImagePullBackOff" || a.Pattern == "ErrImagePull" || a.Pattern == "ImagePull" {
 			return []RuleResult{{
@@ -95,9 +101,11 @@ func (r *ImagePullBackOffRule) Evaluate(_ context.Context, input EngineInput) ([
 // Action: escalate (T3 — can't auto-fix a node from inside the cluster).
 type NodeNotReadyRule struct{}
 
+// Name returns "node_not_ready" as the rule identifier.
 func (r *NodeNotReadyRule) Name() string { return "node_not_ready" }
 
-func (r *NodeNotReadyRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for NodeNotReady conditions in the anomaly input.
+func (r *NodeNotReadyRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "NodeNotReady" {
 			return []RuleResult{{
@@ -127,9 +135,11 @@ const PendingRuleMinDuration = 5 * time.Minute
 // Action: escalate (requires cluster-level intervention).
 type PendingRule struct{}
 
+// Name returns "pod_pending" as the rule identifier.
 func (r *PendingRule) Name() string { return "pod_pending" }
 
-func (r *PendingRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for Unschedulable or long-pending pod anomalies.
+func (r *PendingRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "Unschedulable" || (a.Pattern == "Pending" && a.Score >= 0.7) {
 			return []RuleResult{{
@@ -155,9 +165,11 @@ func (r *PendingRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResu
 // Action: scale_replicas (T2 — auto with cooldown).
 type ReadyRatioRule struct{}
 
+// Name returns "ready_ratio_low" as the rule identifier.
 func (r *ReadyRatioRule) Name() string { return "ready_ratio_low" }
 
-func (r *ReadyRatioRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for low ready-replica ratio anomalies.
+func (r *ReadyRatioRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "LowReadyRatio" {
 			return []RuleResult{{
@@ -183,9 +195,11 @@ func (r *ReadyRatioRule) Evaluate(_ context.Context, input EngineInput) ([]RuleR
 // Action: patch_resources (T2 — auto but needs LLM for appropriate values).
 type CPUThrottleRule struct{}
 
+// Name returns "cpu_throttle_high" as the rule identifier.
 func (r *CPUThrottleRule) Name() string { return "cpu_throttle_high" }
 
-func (r *CPUThrottleRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for high CPU throttling anomalies.
+func (r *CPUThrottleRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.MetricName == "cpu_throttle" && a.Score >= 0.5 {
 			return []RuleResult{{
@@ -211,9 +225,11 @@ func (r *CPUThrottleRule) Evaluate(_ context.Context, input EngineInput) ([]Rule
 // Action: escalate (T3 — requires approval).
 type MemoryPressureRule struct{}
 
+// Name returns "memory_pressure" as the rule identifier.
 func (r *MemoryPressureRule) Name() string { return "memory_pressure" }
 
-func (r *MemoryPressureRule) Evaluate(_ context.Context, input EngineInput) ([]RuleResult, error) {
+// Evaluate checks for memory pressure conditions in the cluster.
+func (r *MemoryPressureRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
 	for _, a := range input.Anomalies {
 		if a.Pattern == "MemoryPressure" || a.MetricName == "node_memory_pressure" {
 			return []RuleResult{{

@@ -9,8 +9,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// CLIProfile holds kwctl client settings (not the agent runtime config).
-type CLIProfile struct {
+// Profile holds kwctl client settings (not the agent runtime config).
+type Profile struct {
 	AgentURL       string `yaml:"agent_url,omitempty"`
 	AgentNamespace string `yaml:"agent_namespace,omitempty"`
 	AgentService   string `yaml:"agent_service,omitempty"`
@@ -22,8 +22,8 @@ type CLIProfile struct {
 }
 
 type profileFile struct {
-	Current  string                `yaml:"current_profile"`
-	Profiles map[string]CLIProfile `yaml:"profiles"`
+	Current  string             `yaml:"current_profile"`
+	Profiles map[string]Profile `yaml:"profiles"`
 }
 
 func profilePath() (string, error) {
@@ -36,7 +36,7 @@ func profilePath() (string, error) {
 		base = filepath.Join(home, ".config")
 	}
 	dir := filepath.Join(base, "kwctl")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil { //nolint:gosec // CLI tool, config directory
 		return "", err
 	}
 	return filepath.Join(dir, "config.yaml"), nil
@@ -47,7 +47,7 @@ func loadProfileFile() (*profileFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // profile path from XDG_CONFIG_HOME, by design
 	if err != nil {
 		if os.IsNotExist(err) {
 			return defaultProfileFile(), nil
@@ -59,7 +59,7 @@ func loadProfileFile() (*profileFile, error) {
 		return nil, fmt.Errorf("parse profile %s: %w", path, err)
 	}
 	if pf.Profiles == nil {
-		pf.Profiles = map[string]CLIProfile{}
+		pf.Profiles = map[string]Profile{}
 	}
 	if pf.Current == "" {
 		pf.Current = "default"
@@ -79,7 +79,7 @@ func loadProfileFile() (*profileFile, error) {
 func defaultProfileFile() *profileFile {
 	return &profileFile{
 		Current: "default",
-		Profiles: map[string]CLIProfile{
+		Profiles: map[string]Profile{
 			"default": {
 				AgentURL:       defaultAgentURL,
 				AgentNamespace: "kubewise",
@@ -103,7 +103,7 @@ func saveProfileFile(pf *profileFile) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-func activeProfile() CLIProfile {
+func activeProfile() Profile {
 	pf, err := loadProfileFile()
 	if err != nil {
 		return defaultProfileFile().Profiles["default"]
@@ -214,7 +214,7 @@ func setProfileField(name, key, value string) error {
 		name = pf.Current
 	}
 	if pf.Profiles == nil {
-		pf.Profiles = map[string]CLIProfile{}
+		pf.Profiles = map[string]Profile{}
 	}
 	prof := pf.Profiles[name]
 	if prof.AgentURL == "" {

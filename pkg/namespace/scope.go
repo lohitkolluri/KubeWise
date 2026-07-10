@@ -1,3 +1,4 @@
+// Package namespace provides namespace-scoping utilities for watch filters.
 package namespace
 
 // InScope reports whether ns is within watch. Empty watch means all namespaces.

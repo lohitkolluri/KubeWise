@@ -24,8 +24,8 @@ const (
 	stepDone
 )
 
-// WizardState holds all collected configuration across steps.
-type WizardState struct {
+// State holds all collected configuration across steps.
+type State struct {
 	ClusterType     string
 	OpenRouterKey   string
 	OllamaURL       string
@@ -45,7 +45,7 @@ type WizardState struct {
 // Model is the bubbletea model for the wizard.
 type Model struct {
 	step   step
-	state  WizardState
+	state  State
 	width  int
 	height int
 	cursor int // cursor position within a step
@@ -64,21 +64,24 @@ var stepNames = []string{
 	"Install",
 }
 
+// New creates a wizard model with default settings.
 func New() Model {
 	return Model{
 		step:  stepWelcome,
-		state: WizardState{RemediationMode: "dry-run"},
+		state: State{RemediationMode: "dry-run"},
 	}
 }
 
 // State returns the wizard state for inspection or modification.
-func (m *Model) State() *WizardState { return &m.state }
+func (m *Model) State() *State { return &m.state }
 
 // IsComplete returns true when the wizard finished successfully.
 func (m Model) IsComplete() bool { return m.state.Completed }
 
+// Init returns the initial command for the bubbletea model.
 func (m Model) Init() tea.Cmd { return nil }
 
+// Update handles bubbletea messages and advances the wizard state.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -118,6 +121,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// View renders the current wizard step as a bubbletea view.
 func (m Model) View() tea.View {
 	if m.width == 0 {
 		m.width = 80
@@ -184,11 +188,8 @@ func mutedStyle(s string) string { return lipgloss.NewStyle().Foreground(colorMu
 // ── Step: Welcome ──
 
 func (m Model) updateWelcome(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "enter":
-			m.step = stepDetect
-		}
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		m.step = stepDetect
 	}
 	return m, nil
 }
@@ -214,11 +215,8 @@ func (m Model) viewWelcome() string {
 // ── Step: Detect ──
 
 func (m Model) updateDetect(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "enter":
-			m.step = stepLLM
-		}
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		m.step = stepLLM
 	}
 	return m, nil
 }
@@ -332,7 +330,7 @@ func (m Model) viewObservability() string {
 		{"Grafana (dashboards)", m.state.EnableGrafana},
 	}
 
-	var lines []string
+	lines := make([]string, 0, 8)
 	lines = append(lines, stepStyle.Render("Step 4/9: Observability Stack"))
 	lines = append(lines, "")
 	for i, t := range toggles {
@@ -356,11 +354,8 @@ func (m Model) viewObservability() string {
 // ── Step: Tools ──
 
 func (m Model) updateTools(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "enter":
-			m.step = stepNotifications
-		}
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		m.step = stepNotifications
 	}
 	return m, nil
 }
@@ -392,11 +387,8 @@ func (m Model) viewTools() string {
 // ── Step: Notifications ──
 
 func (m Model) updateNotifications(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "enter":
-			m.step = stepRemediate
-		}
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		m.step = stepRemediate
 	}
 	return m, nil
 }
@@ -462,7 +454,7 @@ func (m Model) viewRemediate() string {
 		{"auto", "Automatic remediation for T1/T2 risks"},
 	}
 
-	var lines []string
+	lines := make([]string, 0, 7)
 	lines = append(lines, stepStyle.Render("Step 7/9: Remediation Mode"))
 	lines = append(lines, "")
 	for i, mode := range modes {
@@ -535,13 +527,10 @@ func (m Model) summaryBool(v bool) string {
 // ── Step: Install ──
 
 func (m Model) updateInstall(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "enter":
-			m.step = stepDone
-			m.state.Completed = true
-			return m, tea.Quit
-		}
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		m.step = stepDone
+		m.state.Completed = true
+		return m, tea.Quit
 	}
 	return m, nil
 }

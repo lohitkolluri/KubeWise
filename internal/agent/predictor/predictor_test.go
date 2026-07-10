@@ -67,7 +67,7 @@ func TestPredictorRisingMetric(t *testing.T) {
 		if cycle >= 12 && len(results) == 0 {
 			t.Logf("cycle %d: no prediction yet (score < %.2f)", cycle, cfg.MinScore)
 		}
-		val = val * 1.10
+		val *= 1.10
 	}
 
 	// After 15 cycles with rising values, we should have predictions
@@ -121,7 +121,7 @@ func TestPredictorFlatMetric(t *testing.T) {
 				},
 			},
 		}
-		p.Run(metrics)
+		_, _ = p.Run(metrics)
 	}
 
 	// Same flat value — no deviation
@@ -166,7 +166,7 @@ func TestPredictorMultipleMetrics(t *testing.T) {
 				},
 			},
 		}
-		p.Run(metrics)
+		_, _ = p.Run(metrics)
 	}
 
 	// After warmup, multiple metrics with further deviations should produce predictions
@@ -204,7 +204,7 @@ func TestPredictorSpikeAfterWarmup(t *testing.T) {
 				},
 			},
 		}
-		p.Run(metrics)
+		_, _ = p.Run(metrics)
 	}
 
 	// Spike to 10x (1.0 from 0.1 steady-state)
@@ -261,7 +261,7 @@ func TestPredictorScoreRange(t *testing.T) {
 				},
 			},
 		}
-		p.Run(metrics)
+		_, _ = p.Run(metrics)
 	}
 
 	results, _ := p.Run([]MetricResult{
@@ -293,7 +293,7 @@ func TestPredictorKeyIndependent(t *testing.T) {
 				},
 			},
 		}
-		p.Run(metrics)
+		_, _ = p.Run(metrics)
 	}
 
 	results, _ := p.Run([]MetricResult{
@@ -356,7 +356,7 @@ func TestPredictorNoisySteadyWithinBound(t *testing.T) {
 
 	// 30 cycles with modest gaussian-ish noise (±10% CV) — deviations should
 	// be within the Hoeffding bound for the chosen false-positive rate.
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for test reproducibility
 	maxObserved := 0.0
 	for cycle := 0; cycle < 30; cycle++ {
 		metrics := []MetricResult{
@@ -389,7 +389,7 @@ func TestPredictorLargeStep(t *testing.T) {
 
 	// 12 cycles at value 100
 	for cycle := 0; cycle < 12; cycle++ {
-		p.Run([]MetricResult{
+		_, _ = p.Run([]MetricResult{
 			{
 				Name: "step_metric",
 				Values: []MetricPoint{

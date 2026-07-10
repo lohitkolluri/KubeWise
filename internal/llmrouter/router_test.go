@@ -174,7 +174,7 @@ func TestTaskTypeString(t *testing.T) {
 	}
 }
 
-func TestCostTrackerConcurrentSafety(t *testing.T) {
+func TestCostTrackerConcurrentSafety(_ *testing.T) {
 	ct := NewCostTracker()
 	done := make(chan struct{})
 

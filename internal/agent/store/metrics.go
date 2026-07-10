@@ -20,12 +20,12 @@ type MetricPoint struct {
 
 func itob(v int64) []byte {
 	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, uint64(v))
+	binary.BigEndian.PutUint64(b, uint64(v)) //nolint:gosec // intentional bit-pattern conversion for binary encoding
 	return b
 }
 
 func btoi(b []byte) int64 {
-	return int64(binary.BigEndian.Uint64(b))
+	return int64(binary.BigEndian.Uint64(b)) //nolint:gosec // intentional bit-pattern conversion for binary decoding
 }
 
 // seriesKey builds a unique storage key from metric name and optional entity labels.

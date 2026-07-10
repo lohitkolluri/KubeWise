@@ -1,3 +1,4 @@
+// Package wizard provides an interactive installation wizard for KubeWise.
 package wizard
 
 import (
@@ -10,9 +11,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Execute performs the install using the collected WizardState.
+// Execute performs the install using the collected State.
 // Returns a verbose log of all actions taken and any fatal error.
-func (s WizardState) Execute(ctx context.Context) (string, error) {
+func (s State) Execute(ctx context.Context) (string, error) {
 	var log stringsBuilder
 
 	if s.DryRun {
@@ -35,7 +36,7 @@ func (s WizardState) Execute(ctx context.Context) (string, error) {
 	}
 
 	configPath := configFilePath()
-	if err := os.MkdirAll(configDir(), 0755); err != nil {
+	if err := os.MkdirAll(configDir(), 0750); err != nil {
 		return log.String(), fmt.Errorf("create config dir: %w", err)
 	}
 	if err := os.WriteFile(configPath, []byte(configYAML), 0600); err != nil {
@@ -53,7 +54,7 @@ func (s WizardState) Execute(ctx context.Context) (string, error) {
 }
 
 // GenerateConfig produces a KubeWise agent YAML config from the wizard state.
-func (s WizardState) GenerateConfig() (string, error) {
+func (s State) GenerateConfig() (string, error) {
 	cfg := map[string]interface{}{
 		"agent": map[string]interface{}{
 			"llm_provider": llmProvider(s),
@@ -86,7 +87,7 @@ func (s WizardState) GenerateConfig() (string, error) {
 	return string(out), nil
 }
 
-func llmProvider(s WizardState) string {
+func llmProvider(s State) string {
 	if s.OpenRouterKey != "" {
 		return "openrouter"
 	}
@@ -96,7 +97,7 @@ func llmProvider(s WizardState) string {
 	return ""
 }
 
-func llmModel(s WizardState) string {
+func llmModel(s State) string {
 	if s.OpenRouterKey != "" {
 		return "openai/gpt-4o-mini"
 	}
@@ -106,7 +107,7 @@ func llmModel(s WizardState) string {
 	return ""
 }
 
-func (s WizardState) helmInstall(ctx context.Context, log *stringsBuilder) error {
+func (s State) helmInstall(ctx context.Context, log *stringsBuilder) error {
 	if _, err := exec.LookPath("helm"); err != nil {
 		return fmt.Errorf("helm not found in PATH")
 	}
@@ -166,7 +167,7 @@ func (s WizardState) helmInstall(ctx context.Context, log *stringsBuilder) error
 		"-f", tmpPath,
 	}
 
-	cmd := exec.CommandContext(ctx, "helm", args...)
+	cmd := exec.CommandContext(ctx, "helm", args...) //nolint:gosec // CLI tool, intentional helm install
 	cmd.Stdout = log
 	cmd.Stderr = log
 
@@ -194,7 +195,7 @@ func configFilePath() string {
 }
 
 // Validate performs pre-flight checks and returns a list of warnings.
-func (s WizardState) Validate() []string {
+func (s State) Validate() []string {
 	var warnings []string
 
 	if s.OpenRouterKey == "" && s.OllamaURL == "" {

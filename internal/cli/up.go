@@ -125,10 +125,10 @@ func waitForAgent(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if _, err := fetchHealth(); err == nil {
-			return nil
-		} else {
+		if _, err := fetchHealth(); err != nil {
 			lastErr = err
+		} else {
+			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -148,7 +148,7 @@ func portForwardPIDPath() (string, error) {
 		base = filepath.Join(home, ".config")
 	}
 	dir := filepath.Join(base, "kwctl")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // CLI tool, port-forward PID dir
 		return "", err
 	}
 	// Include port in filename to avoid collisions if user changes --local-port.
@@ -161,11 +161,11 @@ func startBackgroundPortForward() error {
 	if err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // CLI tool, port-forward log
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("kubectl", args...)
+	cmd := exec.Command("kubectl", args...) //nolint:gosec // CLI tool, intentional port-forward
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -192,7 +192,7 @@ func portForwardLogPath() (string, error) {
 		base = filepath.Join(home, ".config")
 	}
 	dir := filepath.Join(base, "kwctl")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // CLI tool, port-forward log dir
 		return "", err
 	}
 	return filepath.Join(dir, fmt.Sprintf("port-forward-%d.log", upLocalPort)), nil
@@ -203,7 +203,7 @@ func portForwardRunning() bool {
 	if err != nil {
 		return false
 	}
-	data, err := os.ReadFile(pidPath)
+	data, err := os.ReadFile(pidPath) //nolint:gosec // CLI tool, PID file
 	if err != nil {
 		return false
 	}
@@ -216,7 +216,7 @@ func portForwardRunning() bool {
 	}
 	// Best-effort guard against PID reuse: verify the command looks like a kubectl port-forward.
 	// If ps is unavailable or parsing fails, fall back to the existence check above.
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output() //nolint:gosec // CLI tool, PID verification
 	if err != nil {
 		return true
 	}
@@ -241,7 +241,7 @@ func mustPortForwardLog() string {
 func runPortForwardForeground(out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "Forwarding %s/svc/%s → localhost:%d (Ctrl+C to stop)\n", agentNS, agentSvc, upLocalPort)
 	args := portForwardArgs()
-	cmd := exec.Command("kubectl", args...)
+	cmd := exec.Command("kubectl", args...) //nolint:gosec // CLI tool, intentional foreground port-forward
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -288,7 +288,7 @@ func serviceExists(namespace, name string) bool {
 		args = append(args, "--context", contextName)
 	}
 	args = append(args, "-n", namespace, "get", "svc", name)
-	return exec.Command("kubectl", args...).Run() == nil
+	return exec.Command("kubectl", args...).Run() == nil //nolint:gosec // CLI tool, intentional service lookup
 }
 
 func stopBackgroundPortForward() error {
@@ -296,7 +296,7 @@ func stopBackgroundPortForward() error {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(pidPath)
+	data, err := os.ReadFile(pidPath) //nolint:gosec // CLI tool, PID file
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil

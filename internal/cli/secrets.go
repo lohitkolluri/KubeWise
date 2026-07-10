@@ -347,7 +347,7 @@ func kubectlJSON(ctx context.Context, args ...string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	c := exec.CommandContext(ctx, "kubectl", args...)
+	c := exec.CommandContext(ctx, "kubectl", args...) //nolint:gosec // CLI tool, intentional kubectl run
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	c.Stdout = &out

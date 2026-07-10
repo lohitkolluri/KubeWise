@@ -1,3 +1,4 @@
+// Package outcome provides prediction accuracy tracking and validation.
 package outcome
 
 import (

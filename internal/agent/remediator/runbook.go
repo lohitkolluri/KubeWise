@@ -27,7 +27,7 @@ func (e *K8sExecutor) ExecuteRunbook(ctx context.Context, plan models.Remediatio
 			sec := step.WaitSeconds
 			if sec <= 0 {
 				if v, ok := step.Parameters["seconds"]; ok {
-					fmt.Sscanf(v, "%d", &sec) //nolint:errcheck
+					fmt.Sscanf(v, "%d", &sec) //nolint:errcheck,gosec
 				}
 			}
 			if sec <= 0 {
@@ -70,12 +70,13 @@ func (e *K8sExecutor) ExecuteRunbook(ctx context.Context, plan models.Remediatio
 	return strings.Join(results, "; "), nil
 }
 
+// AssignTierPlan determines the risk tier for a remediation plan based on its steps.
 func (ta *TierAssigner) AssignTierPlan(plan models.RemediationPlan) models.RiskTier {
 	steps := plan.EffectiveSteps()
 	if len(steps) == 0 {
 		return models.RiskTier4
 	}
-	max := models.RiskTier1
+	maxTier := models.RiskTier1
 	for _, step := range steps {
 		if step.Type == waitActionType {
 			continue
@@ -85,11 +86,11 @@ func (ta *TierAssigner) AssignTierPlan(plan models.RemediationPlan) models.RiskT
 			Risk:   plan.Risk,
 		}
 		t := ta.AssignTier(sub)
-		if tierToInt(t) > tierToInt(max) {
-			max = t
+		if tierToInt(t) > tierToInt(maxTier) {
+			maxTier = t
 		}
 	}
-	return max
+	return maxTier
 }
 
 func (c *Correlator) gateByTierPlan(tier models.RiskTier, plan models.RemediationPlan) string {

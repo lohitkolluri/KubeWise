@@ -375,7 +375,7 @@ func (c *Correlator) dryRunSummary(plan models.RemediationPlan) string {
 	return strings.Join(parts, "; ")
 }
 
-func (c *Correlator) verifyAfterRemediation(ctx context.Context, plan models.RemediationPlan, execResult string) string {
+func (c *Correlator) verifyAfterRemediation(ctx context.Context, plan models.RemediationPlan, _ string) string {
 	if plan.Action.Type == "noop" || plan.Action.Type == "escalate" {
 		return ""
 	}

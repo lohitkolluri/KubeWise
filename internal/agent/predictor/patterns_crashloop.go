@@ -4,10 +4,13 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
+// CrashLoopPattern detects pods at risk of entering CrashLoopBackOff.
 type CrashLoopPattern struct{}
 
+// Name returns "CrashLoopRisk" as the pattern identifier.
 func (c *CrashLoopPattern) Name() string { return "CrashLoopRisk" }
 
+// Match checks restart-rate metrics for crash-loop risk signals.
 func (c *CrashLoopPattern) Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
 	restartResult, ok := findMetric(metrics, "restart_rate")
 	if !ok || len(restartResult.Values) == 0 {
