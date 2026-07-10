@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kubewise-agent
-  namespace: kubewise
   labels:
     app.kubernetes.io/name: kubewise
     app.kubernetes.io/component: agent

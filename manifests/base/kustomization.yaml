@@ -11,7 +11,34 @@ labels:
 resources:
   - 00-namespace.yaml
   - 10-serviceaccount.yaml
+  - 11-alloy-sa.yaml
+  - 12-tempo-sa.yaml
   - 20-clusterrole.yaml
-  - 30-configmap.yaml
+  - 21-alloy-clusterrole.yaml
   - 40-deployment.yaml
   - 50-service.yaml
+  - 60-alloy.yaml
+  - 70-tempo.yaml
+
+configMapGenerator:
+  - name: kubewise-agent-config
+    files:
+      - config.yaml=configs/agent-config.yaml
+  - name: kubewise-alloy-config
+    files:
+      - config.alloy=configs/alloy-config.alloy
+  - name: kubewise-tempo-config
+    files:
+      - tempo.yaml=configs/tempo-config.yaml
+
+generatorOptions:
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: config
+  disableNameSuffixHash: false
+
+images:
+  - name: grafana/alloy
+    newTag: v1.7.4
+  - name: grafana/tempo
+    newTag: 2.7.1

@@ -1,0 +1,23 @@
+---
+# Minimal RBAC for Alloy pod discovery (no Secrets, no writes).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubewise-alloy
+rules:
+  - apiGroups: ['']
+    resources: [pods, nodes]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubewise-alloy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubewise-alloy
+subjects:
+  - kind: ServiceAccount
+    name: kubewise-alloy
+    namespace: kubewise

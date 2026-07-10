@@ -4,8 +4,11 @@ kind: Kustomization
 resources:
   - ../../base
 
-patches:
-  - path: config-patch.yaml
+configMapGenerator:
+  - name: kubewise-agent-config
+    behavior: merge
+    files:
+      - config.yaml=configs/agent-config.yaml
 
 images:
   - name: kubewise/agent

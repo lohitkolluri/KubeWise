@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kubewise-alloy
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: alloy
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubewise
+      app.kubernetes.io/component: alloy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubewise
+        app.kubernetes.io/component: alloy
+    spec:
+      serviceAccountName: kubewise-alloy
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: false
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.7.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --stability.level=public-preview
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/var/lib/alloy/data
+          env:
+            - name: ALLOY_LOKI_ENDPOINT
+              value: http://vm-logs-victoria-logs-single-server.monitoring.svc.cluster.local:9428
+            - name: ALLOY_TEMPO_ENDPOINT
+              value: http://kubewise-tempo.kubewise.svc.cluster.local:4318
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http
+              containerPort: 12345
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: config
+          configMap:
+            name: kubewise-alloy-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: data
+          emptyDir: {}

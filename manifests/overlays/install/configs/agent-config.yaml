@@ -1,0 +1,13 @@
+scrape_interval: 30s
+# Patched at install time when Prometheus is detected; override via kwctl config.
+prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+llm_provider: openrouter
+llm_model: deepseek/deepseek-v4-flash
+remediation:
+  mode: dry-run
+  dry_run: true
+  rate_limit: 10
+  namespace_denylist:
+    - kube-system
+    - kubewise
+  allowlist: []

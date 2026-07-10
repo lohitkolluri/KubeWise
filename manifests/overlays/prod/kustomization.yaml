@@ -9,10 +9,10 @@ resources:
 images:
   - name: kubewise/agent
     newName: kubewise/agent
-    newTag: latest
+    newTag: v0.3.0
   - name: kubewise/forecaster
     newName: kubewise/forecaster
-    newTag: latest
+    newTag: v0.3.0
 
 patches:
   - path: deployment-patch.yaml

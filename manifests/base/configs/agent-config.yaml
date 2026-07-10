@@ -1,0 +1,25 @@
+scrape_interval: 30s
+prometheus_address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+loki_url: http://kubewise-loki-gateway.kubewise.svc.cluster.local
+tempo_url: http://kubewise-tempo.kubewise.svc.cluster.local:3200
+llm_provider: openrouter
+llm_model: deepseek/deepseek-v4-flash
+# llm_provider: ollama
+# llm_base_url: http://ollama.ollama.svc.cluster.local:11434
+# llm_model: llama3.1:8b
+remediation:
+  mode: dry-run
+  dry_run: true
+  rate_limit: 3
+  namespace_denylist:
+    - kube-system
+    - kubewise
+  allowlist: []
+notifications:
+  enabled: false
+  # slack_webhook_url: https://hooks.slack.com/services/...
+  # webhook_url: https://your-incident-bridge.example/hooks/kubewise
+  min_score: 0.7
+  on_prediction: true
+  on_remediation: true
+  on_approval: true

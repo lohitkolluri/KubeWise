@@ -2,12 +2,14 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: kubewise-agent
-  namespace: kubewise
   labels:
     app.kubernetes.io/name: kubewise
     app.kubernetes.io/component: agent
 spec:
-  minAvailable: 1
+  # maxUnavailable: 1 allows voluntary disruptions (drain, node upgrade) with
+  # a single replica. When scaling to 2+ replicas, change to maxUnavailable: 1
+  # (keeps the same meaning) or to minAvailable: 1 (guarantees one pod always up).
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: kubewise
