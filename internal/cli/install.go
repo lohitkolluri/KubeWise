@@ -36,6 +36,7 @@ var (
 	installSkipPrometheus bool
 	installPrometheusNS   string
 	installWaitTimeout    time.Duration
+	installObsNamespace string
 )
 
 var installCmd = &cobra.Command{
@@ -71,6 +72,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installSkipPrometheus, "skip-prometheus", false, "skip Prometheus auto-detection")
 	installCmd.Flags().StringVar(&installPrometheusNS, "prometheus-namespace", "monitoring", "namespace to search for Prometheus")
 	installCmd.Flags().DurationVar(&installWaitTimeout, "wait", 3*time.Minute, "timeout waiting for agent rollout")
+	installCmd.Flags().StringVar(&installObsNamespace, "observability-namespace", "", "namespace to probe for existing observability backends (default: monitoring)")
 	rootCmd.AddCommand(installCmd)
 }
 
@@ -116,18 +118,9 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	printOK(out, "Kubernetes cluster reachable")
 
 	if installHelm {
-		promURL := ""
-		if !installSkipPrometheus {
-			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
-				promURL = url
-			} else if !installYes {
-				printWarn(out, "no Prometheus found in namespace %q — set agent.prometheusAddress after install", installPrometheusNS)
-			}
-		}
-		if err := applyHelmInstall(out, promURL); err != nil {
+		if err := runHelmInstallWithObservability(ctx, out, kc); err != nil {
 			return err
 		}
-		printOK(out, "Helm release installed")
 	} else {
 		if err := applyInstallManifests(out); err != nil {
 			return err
@@ -168,6 +161,230 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 
 	printInstallNextSteps(out)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Observability auto-detection + install orchestration
+// ---------------------------------------------------------------------------
+
+// observabilityHelmConfig holds the computed install configuration.
+type observabilityHelmConfig struct {
+	metricsURL   string
+	logsEndpoint string
+	logsPushURL  string
+	tracesURL    string
+	tracesOTLP   string
+}
+
+// runHelmInstallWithObservability detects backends, then installs KubeWise (subcharts
+// handle missing backends automatically).
+func runHelmInstallWithObservability(ctx context.Context, out io.Writer, kc *k8s.Client) error {
+	printSection(out, "Observability")
+
+	report := kc.DetectAll(ctx, installObsNamespace)
+	obsCfg := observabilityHelmConfig{}
+
+	if report.Metrics != nil {
+		obsCfg.metricsURL = report.Metrics.URL
+		printOK(out, "Metrics: %s (%s)", report.Metrics.Type, report.Metrics.URL)
+	} else {
+		printWarn(out, "No metrics backend detected — VM subchart will install VictoriaMetrics")
+	}
+
+	if report.Logs != nil {
+		obsCfg.logsEndpoint = report.Logs.URL
+		obsCfg.logsPushURL = report.Logs.PushURL
+		printOK(out, "Logs: %s (%s)", report.Logs.Type, report.Logs.URL)
+	} else {
+		printWarn(out, "No logs backend detected — VL subchart will install VictoriaLogs")
+	}
+
+	if report.Traces != nil {
+		obsCfg.tracesURL = report.Traces.URL
+		obsCfg.tracesOTLP = report.Traces.OTLPEndpoint
+		printOK(out, "Traces: %s (%s)", report.Traces.Type, report.Traces.URL)
+	} else {
+		printWarn(out, "No traces backend detected — Tempo subchart will install")
+	}
+
+	printSection(out, "KubeWise Install")
+	if err := applyHelmInstallWithObservability(out, obsCfg); err != nil {
+		return err
+	}
+	printOK(out, "Helm release installed")
+	return nil
+}
+
+// applyHelmInstallWithObservability installs the KubeWise chart with auto-detected URLs.
+// It disables subcharts for backends that were detected externally, and enables them for
+// backends that need to be installed.
+func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmConfig) error {
+	if err := requireHelm(); err != nil {
+		return err
+	}
+	if err := requireKubectl(); err != nil {
+		return err
+	}
+
+	chart := installChartPath
+	if chart == "" {
+		if local := findHelmChartDir(); local != "" {
+			chart = local
+		} else {
+			chart = fmt.Sprintf("https://github.com/lohitkolluri/KubeWise/charts/kubewise?ref=%s", installRef)
+		}
+	}
+
+	// Run dep update for local charts to fetch VM+VL subchart dependencies
+	if local := findHelmChartDir(); local != "" {
+		_ = runHelmDepUpdate(local)
+	}
+
+	_, _ = fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
+
+	key := installOpenRouterKey
+	if key == "" {
+		key = os.Getenv("OPENROUTER_API_KEY")
+	}
+	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
+	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
+
+	// Subchart toggles: if we have an explicit override URL, disable the subchart.
+	// If no override URL, enable the subchart to install the backend.
+	vmSubchart := obsCfg.metricsURL == ""
+	vlSubchart := obsCfg.logsEndpoint == ""
+	tempoSubchart := obsCfg.tracesURL == ""
+
+	alloyEnabled := obsCfg.logsEndpoint != "" || vlSubchart
+
+	// Build Helm values
+	values := map[string]any{
+		"agent": map[string]any{
+			"prometheusAddress": obsCfg.metricsURL,
+			"features": map[string]any{
+				"observability": true,
+			},
+			"observability": map[string]any{
+				"metricsURL":          obsCfg.metricsURL,
+				"logsEndpoint":        obsCfg.logsEndpoint,
+				"logsPushEndpoint":    obsCfg.logsPushURL,
+				"tracesEndpoint":      obsCfg.tracesURL,
+				"tracesOTLPEndpoint":  obsCfg.tracesOTLP,
+				"vm": map[string]any{
+					"enabled": vmSubchart,
+				},
+				"vl": map[string]any{
+					"enabled": vlSubchart,
+				},
+				"tempo": map[string]any{
+					"enabled": tempoSubchart,
+				},
+				"alloy": map[string]any{
+					"enabled": alloyEnabled,
+				},
+			},
+		},
+	}
+
+	if key != "" || apiTok != "" {
+		secrets := map[string]any{}
+		if key != "" {
+			secrets["openrouterApiKey"] = key
+		}
+		if apiTok != "" {
+			secrets["apiToken"] = apiTok
+		}
+		values["secrets"] = secrets
+	}
+	if requireToken {
+		values["security"] = map[string]any{"requireApiToken": true}
+	}
+
+	return helmInstallWithValues(out, chart, values)
+}
+
+// runHelmDepUpdate runs helm dep update on a local chart directory.
+func runHelmDepUpdate(chartDir string) error {
+	cmd := exec.Command("helm", "dep", "update", chartDir)
+	return cmd.Run()
+}
+
+// applyHelmInstall is the original Helm install path (used by non-detection flow).
+func applyHelmInstall(out io.Writer, prometheusURL string) error {
+	if err := requireHelm(); err != nil {
+		return err
+	}
+	chart := installChartPath
+	if chart == "" {
+		if local := findHelmChartDir(); local != "" {
+			chart = local
+		} else {
+			chart = fmt.Sprintf("https://github.com/lohitkolluri/KubeWise/charts/kubewise?ref=%s", installRef)
+		}
+	}
+	_, _ = fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
+
+	values := map[string]any{}
+	if prometheusURL != "" {
+		values["agent"] = map[string]any{"prometheusAddress": prometheusURL}
+	}
+	key := installOpenRouterKey
+	if key == "" {
+		key = os.Getenv("OPENROUTER_API_KEY")
+	}
+	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
+	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
+	if key != "" || apiTok != "" {
+		secrets := map[string]any{}
+		if key != "" {
+			secrets["openrouterApiKey"] = key
+		}
+		if apiTok != "" {
+			secrets["apiToken"] = apiTok
+		}
+		values["secrets"] = secrets
+	}
+	if requireToken {
+		values["security"] = map[string]any{"requireApiToken": true}
+	}
+
+	return helmInstallWithValues(out, chart, values)
+}
+
+// helmInstallWithValues writes values to a temp file and runs helm upgrade --install.
+func helmInstallWithValues(out io.Writer, chart string, values map[string]any) error {
+	args := []string{
+		"upgrade", "--install", "kubewise", chart,
+		"-n", agentNS, "--create-namespace",
+		"--wait", "--timeout", installWaitTimeout.String(),
+	}
+
+	tmpPath := ""
+	if len(values) > 0 {
+		b, err := yaml.Marshal(values)
+		if err != nil {
+			return fmt.Errorf("marshal helm values: %w", err)
+		}
+		f, err := os.CreateTemp("", "kubewise-values-*.yaml")
+		if err != nil {
+			return fmt.Errorf("create temp values file: %w", err)
+		}
+		tmpPath = f.Name()
+		_ = f.Chmod(0o600)
+		if _, err := f.Write(b); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("write temp values file: %w", err)
+		}
+		_ = f.Close()
+		defer func() { _ = os.Remove(tmpPath) }()
+		args = append(args, "-f", tmpPath)
+	}
+
+	c := exec.Command("helm", args...)
+	c.Stdout = out
+	c.Stderr = os.Stderr
+	return c.Run()
 }
 
 func waitForAnyAgentDeployment(ctx context.Context, kc *k8s.Client, namespace, preferred string) error {
@@ -278,84 +495,6 @@ func requireHelm() error {
 		return fmt.Errorf("helm not found in PATH — install Helm or use kwctl install without --helm")
 	}
 	return nil
-}
-
-func applyHelmInstall(out io.Writer, prometheusURL string) error {
-	if err := requireHelm(); err != nil {
-		return err
-	}
-	chart := installChartPath
-	if chart == "" {
-		if local := findHelmChartDir(); local != "" {
-			chart = local
-		} else {
-			chart = fmt.Sprintf("https://github.com/lohitkolluri/KubeWise/charts/kubewise?ref=%s", installRef)
-		}
-	}
-	_, _ = fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
-
-	args := []string{
-		"upgrade", "--install", "kubewise", chart,
-		"-n", agentNS, "--create-namespace",
-		"--wait", "--timeout", installWaitTimeout.String(),
-	}
-	key := installOpenRouterKey
-	if key == "" {
-		key = os.Getenv("OPENROUTER_API_KEY")
-	}
-	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
-	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
-
-	// Avoid passing secrets via argv. Write values to a 0600 temp file and `-f` it.
-	values := map[string]any{}
-	if prometheusURL != "" {
-		values["agent"] = map[string]any{"prometheusAddress": prometheusURL}
-		_, _ = fmt.Fprintf(out, "✓ Prometheus detected: %s\n", prometheusURL)
-	}
-	if key != "" || apiTok != "" {
-		secrets := map[string]any{}
-		if key != "" {
-			secrets["openrouterApiKey"] = key
-		}
-		if apiTok != "" {
-			secrets["apiToken"] = apiTok
-		}
-		values["secrets"] = secrets
-	}
-	if requireToken {
-		values["security"] = map[string]any{"requireApiToken": true}
-	}
-
-	tmpPath := ""
-	if len(values) > 0 {
-		b, err := yaml.Marshal(values)
-		if err != nil {
-			return fmt.Errorf("marshal helm values: %w", err)
-		}
-		f, err := os.CreateTemp("", "kubewise-values-*.yaml")
-		if err != nil {
-			return fmt.Errorf("create temp values file: %w", err)
-		}
-		tmpPath = f.Name()
-		_ = f.Chmod(0o600)
-		if _, err := f.Write(b); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("write temp values file: %w", err)
-		}
-		_ = f.Close()
-		defer func() { _ = os.Remove(tmpPath) }()
-		args = append(args, "-f", tmpPath)
-	}
-
-	if key == "" && !installYes {
-		_, _ = fmt.Fprintln(out, "ℹ No OPENROUTER_API_KEY — running in observe-only mode (dry-run remediation)")
-	}
-
-	c := exec.Command("helm", args...)
-	c.Stdout = out
-	c.Stderr = os.Stderr
-	return c.Run()
 }
 
 func findHelmChartDir() string {
