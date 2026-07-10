@@ -13,8 +13,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
-	corev1 "k8s.io/api/core/v1"
 	yaml "gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/lohitkolluri/KubeWise/internal/cli/wizard"
 	"github.com/lohitkolluri/KubeWise/internal/version"
@@ -136,15 +136,22 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		}
 
 		if !installSkipPrometheus {
-			if be := kc.DetectMetricsBackend(ctx, []string{installPrometheusNS}); be != nil {
-				if err := kc.PatchConfigMapPrometheus(ctx, agentNS, be.URL); err != nil {
-					printWarn(out, "could not patch Prometheus URL: %v", err)
-				} else {
-					printOK(out, "Prometheus detected: %s", be.URL)
-				}
-			} else if !installYes {
-				printWarn(out, "no Prometheus found in namespace %q — metrics collection may fail until configured", installPrometheusNS)
-				printHint(out, "install Prometheus or run: kwctl config set prometheus_address http://...")
+			printSection(out, "Observability")
+			report := kc.DetectAll(ctx, installPrometheusNS)
+			if report.Metrics != nil {
+				printOK(out, "Metrics: %s (%s)", report.Metrics.Type, report.Metrics.URL)
+			} else {
+				printWarn(out, "No metrics backend detected — metrics collection may fail until configured")
+				printHint(out, "kwctl config set prometheus_address http://...")
+			}
+			if report.Logs != nil {
+				printOK(out, "Logs: %s (%s)", report.Logs.Type, report.Logs.URL)
+			}
+			if report.Traces != nil {
+				printOK(out, "Traces: %s (%s)", report.Traces.Type, report.Traces.URL)
+			}
+			if err := kc.PatchConfigMapObservability(ctx, agentNS, report); err != nil {
+				printWarn(out, "could not patch observability endpoints: %v", err)
 			}
 		}
 	}
@@ -464,16 +471,16 @@ func printPodStatus(w io.Writer, kc *k8s.Client, namespace string) {
 		var line string
 		switch {
 		case p.Status.Phase == corev1.PodRunning && p.Status.ContainerStatuses[0].Ready:
-			line = successStyle.Render("● " + status) + " " + mutedStyle.Render(p.Name)
+			line = successStyle.Render("● "+status) + " " + mutedStyle.Render(p.Name)
 		case p.Status.Phase == corev1.PodPending:
-			line = warnStyle.Render("● " + status) + " " + mutedStyle.Render(p.Name)
+			line = warnStyle.Render("● "+status) + " " + mutedStyle.Render(p.Name)
 			if detail != "" {
-				line += "\n" + mutedStyle.Render("  └ " + detail)
+				line += "\n" + mutedStyle.Render("  └ "+detail)
 			}
 		default:
-			line = errStyle.Render("● " + status) + " " + mutedStyle.Render(p.Name)
+			line = errStyle.Render("● "+status) + " " + mutedStyle.Render(p.Name)
 			if detail != "" {
-				line += "\n" + mutedStyle.Render("  └ " + detail)
+				line += "\n" + mutedStyle.Render("  └ "+detail)
 			}
 		}
 		_, _ = fmt.Fprintln(w, line)

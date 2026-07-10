@@ -189,8 +189,28 @@ func (c *Client) DetectTracesBackend(ctx context.Context, namespaces []string) *
 	return nil
 }
 
-// PatchConfigMapPrometheus updates the agent config ConfigMap prometheus_address field.
-func (c *Client) PatchConfigMapPrometheus(ctx context.Context, namespace, url string) error {
+// patchConfigMapField is a helper that replaces a YAML key under the first two levels of
+// indentation in a ConfigMap "config.yaml" data field. Returns true if a replacement was made.
+func patchConfigMapField(raw, key, value string) (string, bool) {
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	replaced := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+":") {
+			indent := len(line) - len(strings.TrimLeft(line, " \t"))
+			out = append(out, strings.Repeat(" ", indent)+key+": "+value)
+			replaced = true
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n"), replaced
+}
+
+// PatchConfigMapObservability updates the agent ConfigMap with detected metrics, logs, and
+// traces endpoints. Only non-nil report entries are patched.
+func (c *Client) PatchConfigMapObservability(ctx context.Context, namespace string, report *ObservabilityReport) error {
 	cm, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(ctx, "kubewise-agent-config", metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get configmap: %w", err)
@@ -199,21 +219,28 @@ func (c *Client) PatchConfigMapPrometheus(ctx context.Context, namespace, url st
 	if !ok {
 		return fmt.Errorf("configmap missing config.yaml")
 	}
-	lines := strings.Split(raw, "\n")
-	out := make([]string, 0, len(lines))
-	replaced := false
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "prometheus_address:") {
-			out = append(out, "    prometheus_address: "+url)
-			replaced = true
-			continue
+	patches := map[string]string{}
+	if report.Metrics != nil {
+		patches["prometheus_address"] = report.Metrics.URL
+	}
+	if report.Logs != nil {
+		patches["loki_url"] = report.Logs.URL
+		// Some logs backends have a separate push URL; include it as an inline Loki endpoint.
+	}
+	if report.Traces != nil {
+		patches["tempo_url"] = report.Traces.URL
+	}
+	if len(patches) == 0 {
+		return nil
+	}
+	for key, val := range patches {
+		var replaced bool
+		raw, replaced = patchConfigMapField(raw, key, val)
+		if !replaced {
+			return fmt.Errorf("config.yaml missing %s", key)
 		}
-		out = append(out, line)
 	}
-	if !replaced {
-		return fmt.Errorf("config.yaml missing prometheus_address")
-	}
-	cm.Data["config.yaml"] = strings.Join(out, "\n")
+	cm.Data["config.yaml"] = raw
 	_, err = c.clientset.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{})
 	return err
 }
