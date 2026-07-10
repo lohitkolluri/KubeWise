@@ -16,7 +16,7 @@ func TestOpenClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(path)
 
 	s, err := store.Open(path)
@@ -34,7 +34,7 @@ func TestMetricsRingBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(path)
 
 	s, err := store.Open(path)
@@ -68,7 +68,7 @@ func TestAnomalyCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(path)
 
 	s, err := store.Open(path)
@@ -128,7 +128,7 @@ func TestConfigSaveLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(path)
 
 	s, err := store.Open(path)
@@ -176,7 +176,7 @@ func TestTrimOlderThan(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 	defer os.Remove(path)
 
 	s, err := store.Open(path)

@@ -187,7 +187,7 @@ func (c *Cache) Stats() Stats {
 	}
 }
 
-// FingerprintForAnomaly is a convenience wrapper that extracts fields from an anomaly-like type.
+// Anomaly is implemented by types that can be fingerprinted for semantic cache lookups.
 type Anomaly interface {
 	GetEntity() string
 	GetNamespace() string

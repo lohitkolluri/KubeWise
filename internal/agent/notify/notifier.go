@@ -1,3 +1,4 @@
+// Package notify delivers anomaly and remediation notifications to external channels.
 package notify
 
 import (

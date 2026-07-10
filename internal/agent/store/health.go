@@ -47,7 +47,7 @@ func (s *Store) GetLatestHealthScores() ([]models.HealthScore, error) {
 		if b == nil {
 			return nil
 		}
-		return b.ForEach(func(k, v []byte) error {
+		return b.ForEach(func(_, v []byte) error {
 			var hs models.HealthScore
 			if err := json.Unmarshal(v, &hs); err != nil {
 				return nil // skip corrupt records

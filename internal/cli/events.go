@@ -18,7 +18,7 @@ func init() {
 var eventsCmd = &cobra.Command{
 	Use:   "events",
 	Short: "Show recent Kubernetes events in the agent namespace",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		kc, err := newKubeClient()

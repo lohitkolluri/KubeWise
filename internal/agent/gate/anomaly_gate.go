@@ -1,3 +1,4 @@
+// Package gate provides anomaly gate configuration and evaluation types.
 package gate
 
 import (
@@ -119,8 +120,8 @@ func (g *AnomalyGate) ShouldPersist(entity string, metricName string, score floa
 	return r.Pass, r.Reason
 }
 
-// GatePrediction is a single prediction input for batch gate evaluation.
-type GatePrediction struct {
+// Prediction is a single prediction input for batch gate evaluation.
+type Prediction struct {
 	Entity     string
 	MetricName string
 	Score      float64

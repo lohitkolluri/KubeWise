@@ -103,27 +103,6 @@ func buildLogQLCandidates(namespace, pod string) []string {
 	return out
 }
 
-// buildLogQL constructs the primary LogQL query (first candidate).
-func buildLogQL(namespace, pod string) string {
-	candidates := buildLogQLCandidates(namespace, pod)
-	if len(candidates) == 0 {
-		return ""
-	}
-	return candidates[0]
-}
-
-// joinStrings joins strings with sep, skipping empty entries.
-func joinStrings(parts []string, sep string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += sep
-		}
-		result += p
-	}
-	return result
-}
-
 // flattenLogSnippets extracts log lines from the Loki query response.
 func flattenLogSnippets(resp lokiQueryResponse) []LogSnippet {
 	if resp.Status != "success" {

@@ -1,3 +1,4 @@
+// Package collector watches Kubernetes events and resource state changes.
 package collector
 
 import (
@@ -87,7 +88,7 @@ func (ec *EventsCollector) WatchEvents(ctx context.Context) <-chan EventRecord {
 			AddFunc: func(obj any) {
 				ec.filterAndSend(obj, "ADDED", ch)
 			},
-			UpdateFunc: func(oldObj, newObj any) {
+			UpdateFunc: func(_, newObj any) {
 				ec.filterAndSend(newObj, "MODIFIED", ch)
 			},
 		},

@@ -30,7 +30,7 @@ func RunCommand(ctx context.Context, command string, args []string, timeout time
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, command, args...) //nolint:gosec // generic command runner for tool plugins
 
 	stdout := new(strings.Builder)
 	stderr := new(strings.Builder)

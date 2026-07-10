@@ -20,7 +20,7 @@ var connectCmd = &cobra.Command{
 
   kwctl up
   kwctl connect`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		out := cmd.OutOrStdout()
 		printBanner(out)
 		printSection(out, "Agent connectivity")
@@ -50,7 +50,7 @@ var connectCmd = &cobra.Command{
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print kwctl version",
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, _ []string) {
 		out := cmd.OutOrStdout()
 		if writerTTY(out) {
 			_, _ = fmt.Fprintln(out, logoStyle.Render("KubeWise")+mutedStyle.Render(" kwctl ")+brandStyle.Render(version.Version))

@@ -26,7 +26,7 @@ var approvalsCmd = &cobra.Command{
 	Use:   "approvals",
 	Short: "List and manage pending remediation approvals",
 	Long:  `Fetch pending remediation approvals (e.g. Tier-3) and approve or reject them.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}

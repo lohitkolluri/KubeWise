@@ -21,7 +21,7 @@ var profileCmd = &cobra.Command{
 var profileShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show active profile",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		pf, err := loadProfileFile()
 		if err != nil {
 			return err
@@ -48,7 +48,7 @@ var profileShowCmd = &cobra.Command{
 var profileListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List profile names",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		pf, err := loadProfileFile()
 		if err != nil {
 			return err

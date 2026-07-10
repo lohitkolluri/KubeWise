@@ -90,10 +90,10 @@ func restartAgentDeployment() error {
 	}
 	var lastErr error
 	for _, depName := range agentDeploymentCandidates() {
-		if err := kc.RolloutRestart(ctx, agentNS, depName); err == nil {
-			return nil
-		} else {
+		if err := kc.RolloutRestart(ctx, agentNS, depName); err != nil {
 			lastErr = err
+		} else {
+			return nil
 		}
 	}
 	if lastErr != nil {

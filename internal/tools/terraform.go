@@ -91,12 +91,8 @@ func (p *TerraformPlugin) Capabilities() []models.ToolCapability {
 func (p *TerraformPlugin) Validate(action models.ToolAction) error {
 	cmd := action.Command
 
-	if blockedTerraformSubcommands[cmd] {
-		if cmd == "init" && strings.EqualFold(strings.TrimSpace(os.Getenv("KUBEWISE_ALLOW_TERRAFORM_INIT")), "true") {
-			// allowed explicitly
-		} else {
-			return fmt.Errorf("terraform %q is blocked for security reasons", cmd)
-		}
+	if blockedTerraformSubcommands[cmd] && (cmd != "init" || !strings.EqualFold(strings.TrimSpace(os.Getenv("KUBEWISE_ALLOW_TERRAFORM_INIT")), "true")) {
+		return fmt.Errorf("terraform %q is blocked for security reasons", cmd)
 	}
 
 	if _, found := allowedTerraformSubcommands[cmd]; !found {

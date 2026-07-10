@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	bolterrors "go.etcd.io/bbolt/errors"
+
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -294,10 +296,10 @@ func (s *Store) RebuildAnomalyIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
-		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAnomalyIndex)

@@ -121,7 +121,7 @@ func TestCircuitBreakerOpenRequestRejected(t *testing.T) {
 	cb := newCircuitBreaker(1, 30*time.Second)
 	cb.Failure() // opens
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
@@ -146,7 +146,7 @@ func TestCircuitBreakerOpenRequestRejected(t *testing.T) {
 func TestCircuitBreakerOpenRouterProvider(t *testing.T) {
 	// Create a server that returns 502 errors to trigger the circuit breaker.
 	failCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		failCount++
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintln(w, `{"error":"upstream failure"}`)
@@ -175,7 +175,7 @@ func TestCircuitBreakerOllamaProvider(t *testing.T) {
 }
 
 func TestCircuitBreakerSuccessOnHappyPath(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, `{"choices":[{"message":{"content":"{\"answer\":\"hello\"}"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
 	}))
 	defer ts.Close()
@@ -201,7 +201,7 @@ func TestCircuitBreakerSuccessOnHappyPath(t *testing.T) {
 }
 
 func TestCircuitBreakerFailureOnBadResponse(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintln(w, `{"error":"internal error"}`)
 	}))
@@ -225,7 +225,7 @@ func TestCircuitBreakerFailureOnBadResponse(t *testing.T) {
 }
 
 func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintln(w, `{"error":"bad gateway"}`)
 	}))
@@ -260,7 +260,7 @@ func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 func TestCircuitBreakerRecovery(t *testing.T) {
 	var attempt int
 	mu := sync.Mutex{}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		a := attempt
 		attempt++
@@ -332,13 +332,13 @@ func TestCircuitBreakerHalfOpenLimitsProbes(t *testing.T) {
 
 func TestCircuitBreakerString(t *testing.T) {
 	states := []struct {
-		s circuitState
+		s CircuitState
 		e string
 	}{
 		{stateClosed, "closed"},
 		{stateOpen, "open"},
 		{stateHalfOpen, "half-open"},
-		{circuitState(99), "unknown"},
+		{CircuitState(99), "unknown"},
 	}
 	for _, tc := range states {
 		if tc.s.String() != tc.e {
@@ -351,7 +351,7 @@ func TestCircuitBreakerString(t *testing.T) {
 // is properly wired to the OpenAICompatibleProvider and protects against repeated failures.
 func TestOpenAIProviderCircuitBreakerIntegration(t *testing.T) {
 	// Server that always fails.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		fmt.Fprintln(w, `{"error":"rate limited"}`)
 	}))

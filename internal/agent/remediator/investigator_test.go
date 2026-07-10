@@ -130,7 +130,7 @@ func TestGatherExistingPodIncludesDescribe(t *testing.T) {
 	}
 }
 
-func TestGatherTimeoutStillBounded(t *testing.T) {
+func TestGatherTimeoutStillBounded(_ *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	inv := NewInvestigator(fake.NewSimpleClientset())

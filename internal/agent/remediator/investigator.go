@@ -392,7 +392,7 @@ func compactLog(text string, keepLast int) string {
 	}
 
 	errish := make(map[string]struct{})
-	for i := max(0, len(cleaned)-200); i < len(cleaned); i++ {
+	for i := maxint(0, len(cleaned)-200); i < len(cleaned); i++ {
 		l := strings.ToLower(cleaned[i])
 		if strings.Contains(l, "error") || strings.Contains(l, "fail") || strings.Contains(l, "panic") ||
 			strings.Contains(l, "exception") || strings.Contains(l, "timeout") || strings.Contains(l, "crash") {
@@ -400,7 +400,7 @@ func compactLog(text string, keepLast int) string {
 		}
 	}
 
-	start := max(0, len(cleaned)-keepLast)
+	start := maxint(0, len(cleaned)-keepLast)
 	var out []string
 	seen := make(map[string]struct{})
 	for i := start; i < len(cleaned); i++ {
@@ -426,7 +426,7 @@ func compactLog(text string, keepLast int) string {
 	return strings.Join(out, "\n")
 }
 
-func max(a, b int) int {
+func maxint(a, b int) int {
 	if a > b {
 		return a
 	}

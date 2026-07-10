@@ -132,11 +132,11 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		}
 
 		if !installSkipPrometheus {
-			if url, ok := kc.DetectPrometheusURL(ctx, installPrometheusNS); ok {
-				if err := kc.PatchConfigMapPrometheus(ctx, agentNS, url); err != nil {
+			if be := kc.DetectMetricsBackend(ctx, []string{installPrometheusNS}); be != nil {
+				if err := kc.PatchConfigMapPrometheus(ctx, agentNS, be.URL); err != nil {
 					printWarn(out, "could not patch Prometheus URL: %v", err)
 				} else {
-					printOK(out, "Prometheus detected: %s", url)
+					printOK(out, "Prometheus detected: %s", be.URL)
 				}
 			} else if !installYes {
 				printWarn(out, "no Prometheus found in namespace %q — metrics collection may fail until configured", installPrometheusNS)
@@ -305,50 +305,8 @@ func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmCo
 
 // runHelmDepUpdate runs helm dep update on a local chart directory.
 func runHelmDepUpdate(chartDir string) error {
-	cmd := exec.Command("helm", "dep", "update", chartDir)
+	cmd := exec.Command("helm", "dep", "update", chartDir) //nolint:gosec // CLI tool, intentional helm dep update
 	return cmd.Run()
-}
-
-// applyHelmInstall is the original Helm install path (used by non-detection flow).
-func applyHelmInstall(out io.Writer, prometheusURL string) error {
-	if err := requireHelm(); err != nil {
-		return err
-	}
-	chart := installChartPath
-	if chart == "" {
-		if local := findHelmChartDir(); local != "" {
-			chart = local
-		} else {
-			chart = fmt.Sprintf("https://github.com/lohitkolluri/KubeWise/charts/kubewise?ref=%s", installRef)
-		}
-	}
-	_, _ = fmt.Fprintf(out, "Helm install: %s (namespace %s)\n", chart, agentNS)
-
-	values := map[string]any{}
-	if prometheusURL != "" {
-		values["agent"] = map[string]any{"prometheusAddress": prometheusURL}
-	}
-	key := installOpenRouterKey
-	if key == "" {
-		key = os.Getenv("OPENROUTER_API_KEY")
-	}
-	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
-	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
-	if key != "" || apiTok != "" {
-		secrets := map[string]any{}
-		if key != "" {
-			secrets["openrouterApiKey"] = key
-		}
-		if apiTok != "" {
-			secrets["apiToken"] = apiTok
-		}
-		values["secrets"] = secrets
-	}
-	if requireToken {
-		values["security"] = map[string]any{"requireApiToken": true}
-	}
-
-	return helmInstallWithValues(out, chart, values)
 }
 
 // helmInstallWithValues writes values to a temp file and runs helm upgrade --install.
@@ -381,7 +339,7 @@ func helmInstallWithValues(out io.Writer, chart string, values map[string]any) e
 		args = append(args, "-f", tmpPath)
 	}
 
-	c := exec.Command("helm", args...)
+	c := exec.Command("helm", args...) //nolint:gosec // CLI tool, intentional helm install
 	c.Stdout = out
 	c.Stderr = os.Stderr
 	return c.Run()
@@ -401,10 +359,10 @@ func waitForAnyAgentDeployment(ctx context.Context, kc *k8s.Client, namespace, p
 			continue
 		}
 		seen[name] = true
-		if err := kc.WaitForDeploymentAvailable(ctx, namespace, name); err == nil {
-			return nil
-		} else {
+		if err := kc.WaitForDeploymentAvailable(ctx, namespace, name); err != nil {
 			lastErr = err
+		} else {
+			return nil
 		}
 	}
 	if lastErr != nil {
@@ -453,7 +411,7 @@ func runLocalInstall(out io.Writer) error {
 	if script == "" {
 		return fmt.Errorf("hack/bootstrap.sh not found — run from repo root or set KUBEWISE_REPO")
 	}
-	c := exec.Command("bash", script, "--local", "--yes")
+	c := exec.Command("bash", script, "--local", "--yes") //nolint:gosec // CLI tool, intentional local install
 	c.Stdout = out
 	c.Stderr = os.Stderr
 	c.Env = os.Environ()
@@ -470,7 +428,7 @@ func runLocalInstall(out io.Writer) error {
 func findBootstrapScript() string {
 	if repo := os.Getenv("KUBEWISE_REPO"); repo != "" {
 		p := repo + "/hack/bootstrap.sh"
-		if _, err := os.Stat(p); err == nil {
+		if _, err := os.Stat(p); err == nil { //nolint:gosec // CLI tool, bootstrap script detection
 			return p
 		}
 	}
@@ -506,7 +464,7 @@ func findHelmChartDir() string {
 		candidates = append(candidates, wd+"/charts/kubewise")
 	}
 	for _, p := range candidates {
-		if _, err := os.Stat(p + "/Chart.yaml"); err == nil {
+		if _, err := os.Stat(p + "/Chart.yaml"); err == nil { //nolint:gosec // CLI tool, local chart detection
 			return p
 		}
 	}
@@ -522,7 +480,7 @@ func findManifestsDir() string {
 		candidates = append(candidates, wd+"/manifests")
 	}
 	for _, p := range candidates {
-		if _, err := os.Stat(p + "/overlays/dev/kustomization.yaml"); err == nil {
+		if _, err := os.Stat(p + "/overlays/dev/kustomization.yaml"); err == nil { //nolint:gosec // CLI tool, local manifests detection
 			return p
 		}
 	}
@@ -540,7 +498,7 @@ func applyInstallManifests(out io.Writer) error {
 		target = fmt.Sprintf("github.com/lohitkolluri/KubeWise/manifests/overlays/%s?ref=%s", installOverlay, installRef)
 	}
 	_, _ = fmt.Fprintf(out, "Applying: %s\n", target)
-	c := exec.Command("kubectl", "apply", "-k", target)
+	c := exec.Command("kubectl", "apply", "-k", target) //nolint:gosec // CLI tool, intentional kubectl apply
 	c.Stdout = out
 	c.Stderr = os.Stderr
 	return c.Run()
@@ -571,7 +529,7 @@ func applyInstallSecret() error {
 	if apiTok != "" {
 		args = append(args, "--from-literal=api_token="+apiTok)
 	}
-	create := exec.Command("kubectl", args...)
+	create := exec.Command("kubectl", args...) //nolint:gosec // CLI tool, intentional kubectl create secret
 	yaml, err := create.Output()
 	if err != nil {
 		return fmt.Errorf("create secret manifest: %w", err)

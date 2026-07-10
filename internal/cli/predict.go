@@ -31,7 +31,7 @@ var predictCmd = &cobra.Command{
 	Aliases: []string{"predictions"},
 	Short:   "Show active predictions",
 	Long:    `Fetch and display predictions from the agent. Use --watch to tail updates.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}

@@ -1,3 +1,4 @@
+// Package api provides the HTTP API server for the KubeWise agent.
 package api
 
 import (
@@ -13,6 +14,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
+// Store is the data access interface the API server depends on.
 type Store interface {
 	ListAnomalies(limit int) ([]models.AnomalyRecord, error)
 	LoadConfig() (*models.AgentConfig, error)
@@ -38,6 +40,7 @@ type Store interface {
 	Backup(w io.Writer) error
 }
 
+// Server serves the KubeWise HTTP API with middleware for auth, CORS, and rate limiting.
 type Server struct {
 	store        Store
 	remediator   Remediator
@@ -50,6 +53,7 @@ type Server struct {
 	requireToken bool
 }
 
+// NewServer creates an HTTP API server backed by the given store.
 func NewServer(store Store, addr string) (*Server, error) {
 	mux := http.NewServeMux()
 	apiToken := os.Getenv("KUBEWISE_API_TOKEN")
@@ -93,10 +97,12 @@ func (s *Server) SetRemediator(r Remediator) {
 	s.remediator = r
 }
 
+// SetGateStats stores the latest anomaly gate statistics for the /stats endpoint.
 func (s *Server) SetGateStats(stats gate.Stats) {
 	s.gateStats.Store(stats)
 }
 
+// Serve starts the HTTP listener and blocks until the server stops.
 func (s *Server) Serve() error {
 	if s.server == nil {
 		return fmt.Errorf("server not initialized")
@@ -104,6 +110,7 @@ func (s *Server) Serve() error {
 	return s.server.ListenAndServe()
 }
 
+// Shutdown gracefully stops the HTTP server with a context deadline.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.server == nil {
 		return nil
@@ -111,6 +118,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
+// IncrementScrapes records a metrics scrape for the /stats endpoint.
 func (s *Server) IncrementScrapes() {
 	s.scrapes.Add(1)
 	scrapesTotal.Inc()

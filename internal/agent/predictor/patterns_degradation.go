@@ -7,11 +7,14 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
+// DegradationPattern detects pods and nodes showing signs of degraded performance.
 type DegradationPattern struct{}
 
+// Name returns "Degradation" as the pattern identifier.
 func (d *DegradationPattern) Name() string { return "Degradation" }
 
-func (d *DegradationPattern) Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
+// Match checks readiness, disk pressure, and memory pressure for degradation signals.
+func (d *DegradationPattern) Match(metrics []MetricResult, _ []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch {
 	var matches []PatternMatch
 
 	if notReadyResult, ok := findMetric(metrics, "pod_not_ready"); ok {

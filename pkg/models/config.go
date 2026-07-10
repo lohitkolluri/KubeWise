@@ -35,10 +35,12 @@ type DurationValue struct {
 	time.Duration
 }
 
+// MarshalJSON encodes the duration as a JSON string.
 func (d DurationValue) MarshalJSON() ([]byte, error) {
 	return json.Marshal(d.String())
 }
 
+// UnmarshalJSON decodes a JSON string into a DurationValue.
 func (d *DurationValue) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
@@ -52,10 +54,12 @@ func (d *DurationValue) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// MarshalYAML encodes the duration as a YAML string.
 func (d DurationValue) MarshalYAML() (interface{}, error) {
 	return d.String(), nil
 }
 
+// UnmarshalYAML decodes a YAML string into a DurationValue.
 func (d *DurationValue) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	var s string
 	if err := unmarshal(&s); err != nil {

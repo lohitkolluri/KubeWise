@@ -97,12 +97,8 @@ func (p *KubectlPlugin) Capabilities() []models.ToolCapability {
 func (p *KubectlPlugin) Validate(action models.ToolAction) error {
 	cmd := action.Command
 
-	if blockedSubcommands[cmd] {
-		if os.Getenv("KUBEWISE_ALLOW_KUBECTL_DANGEROUS") == "true" {
-			// allowed explicitly
-		} else {
-			return fmt.Errorf("kubectl %q is blocked for security reasons", cmd)
-		}
+	if blockedSubcommands[cmd] && os.Getenv("KUBEWISE_ALLOW_KUBECTL_DANGEROUS") != "true" {
+		return fmt.Errorf("kubectl %q is blocked for security reasons", cmd)
 	}
 
 	if _, ok := allowedSubcommands[cmd]; !ok {

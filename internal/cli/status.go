@@ -21,7 +21,7 @@ var statusCmd = &cobra.Command{
 var healthCmd = &cobra.Command{
 	Use:   "health",
 	Short: "Check agent health endpoint",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		h, err := fetchHealth()
 		if err != nil {
 			return err
@@ -35,7 +35,7 @@ var healthCmd = &cobra.Command{
 	},
 }
 
-func runStatus(cmd *cobra.Command, args []string) error {
+func runStatus(cmd *cobra.Command, _ []string) error {
 	if err := validateOutputFormat(); err != nil {
 		return err
 	}

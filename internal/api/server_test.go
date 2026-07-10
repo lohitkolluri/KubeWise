@@ -37,15 +37,15 @@ func (m *mockStore) SaveConfig(cfg *models.AgentConfig) error {
 	return nil
 }
 
-func (m *mockStore) ListAuditRecords(limit int) ([]models.AuditRecord, error) {
+func (m *mockStore) ListAuditRecords(_ int) ([]models.AuditRecord, error) {
 	return []models.AuditRecord{}, nil
 }
 
-func (m *mockStore) ListAuditRecordsSince(since time.Time, limit int) ([]models.AuditRecord, error) {
+func (m *mockStore) ListAuditRecordsSince(_ time.Time, _ int) ([]models.AuditRecord, error) {
 	return []models.AuditRecord{}, nil
 }
 
-func (m *mockStore) ListAuditRecordsByStatus(status models.AuditStatus, limit int) ([]models.AuditRecord, error) {
+func (m *mockStore) ListAuditRecordsByStatus(_ models.AuditStatus, _ int) ([]models.AuditRecord, error) {
 	return []models.AuditRecord{}, nil
 }
 
@@ -72,11 +72,11 @@ func (m *mockStore) GetLatestHealthScores() ([]models.HealthScore, error) {
 	return []models.HealthScore{}, nil
 }
 
-func (m *mockStore) GetHealthScoresByNamespace(ns string) ([]models.HealthScore, error) {
+func (m *mockStore) GetHealthScoresByNamespace(_ string) ([]models.HealthScore, error) {
 	return []models.HealthScore{}, nil
 }
 
-func (m *mockStore) GetHealthScoreHistory(entity, namespace string, limit int) ([]models.HealthScore, error) {
+func (m *mockStore) GetHealthScoreHistory(_, _ string, _ int) ([]models.HealthScore, error) {
 	return []models.HealthScore{}, nil
 }
 
@@ -93,7 +93,7 @@ func (m *mockStore) GetLatestAccuracySnapshot() (*models.AccuracySnapshot, error
 	}, nil
 }
 
-func (m *mockStore) GetAccuracyHistory(limit int) ([]models.AccuracySnapshot, error) {
+func (m *mockStore) GetAccuracyHistory(_ int) ([]models.AccuracySnapshot, error) {
 	return []models.AccuracySnapshot{}, nil
 }
 
@@ -230,8 +230,8 @@ func TestAnomaliesLimitParam(t *testing.T) {
 
 	resp, _ := http.Get(ts.URL + "/api/v1/anomalies?limit=1")
 	var records []models.AnomalyRecord
-	json.NewDecoder(resp.Body).Decode(&records)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&records)
+	_ = resp.Body.Close()
 
 	if len(records) != 1 {
 		t.Fatalf("expected 1 anomaly with limit=1, got %d", len(records))
@@ -248,8 +248,8 @@ func TestAnomaliesEmptyStore(t *testing.T) {
 
 	resp, _ := http.Get(ts.URL + "/api/v1/anomalies")
 	var records []models.AnomalyRecord
-	json.NewDecoder(resp.Body).Decode(&records)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&records)
+	_ = resp.Body.Close()
 
 	if records == nil {
 		t.Fatal("expected empty array, not null")
@@ -316,8 +316,8 @@ func TestConfigNoConfig(t *testing.T) {
 
 	resp, _ := http.Get(ts.URL + "/api/v1/config")
 	var body map[string]string
-	json.NewDecoder(resp.Body).Decode(&body)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	_ = resp.Body.Close()
 
 	if body["message"] != "no config saved" {
 		t.Fatalf("expected 'no config saved', got %v", body)
@@ -418,8 +418,8 @@ func TestServerScrapes(t *testing.T) {
 
 	resp, _ := http.Get(ts.URL + "/status")
 	var body map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&body)
-	resp.Body.Close()
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	_ = resp.Body.Close()
 
 	scrapes := body["scrapes"].(float64)
 	if scrapes != 3 {
@@ -464,7 +464,7 @@ func TestRateLimitHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("unexpected status: %d", resp.StatusCode)
 	}

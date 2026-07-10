@@ -57,7 +57,7 @@ func TestNotifyPrediction_Slack(t *testing.T) {
 
 func TestNotifyRemediation_Pending(t *testing.T) {
 	var called bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -86,7 +86,7 @@ func TestNotifyRemediation_Pending(t *testing.T) {
 
 func TestNotifyRemediation_DryRunSkippedWhenDisabled(t *testing.T) {
 	called := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		called = true
 	}))
 	defer srv.Close()

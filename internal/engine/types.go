@@ -16,9 +16,13 @@ import (
 type Severity int
 
 const (
+	// SeverityLow indicates a minor anomaly with no immediate impact.
 	SeverityLow Severity = iota
+	// SeverityMedium indicates a moderate anomaly that may require attention.
 	SeverityMedium
+	// SeverityHigh indicates a significant anomaly that needs prompt investigation.
 	SeverityHigh
+	// SeverityCritical indicates a severe anomaly requiring immediate action.
 	SeverityCritical
 )
 
@@ -50,9 +54,9 @@ type RuleResult struct {
 	Parameters map[string]string `json:"parameters,omitempty"` // action-specific params
 }
 
-// EngineInput is the input passed to each rule for evaluation.
+// Input is the input passed to each rule for evaluation.
 // Keep it scoped to what rules actually need — not the full cluster state.
-type EngineInput struct {
+type Input struct {
 	Anomalies []models.AnomalyRecord
 	Metrics   []MetricSummary
 	Resources ResourceSnapshot
@@ -83,7 +87,7 @@ type Rule interface {
 	Name() string
 	// Evaluate checks the input and returns matching results.
 	// Must be safe for concurrent evaluation (rules evaluate in order serial).
-	Evaluate(ctx context.Context, input EngineInput) ([]RuleResult, error)
+	Evaluate(ctx context.Context, input Input) ([]RuleResult, error)
 }
 
 // ValidateResult checks that a RuleResult has all required fields populated.

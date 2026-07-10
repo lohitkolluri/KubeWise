@@ -187,7 +187,7 @@ func TestGitHubPlugin_Validate_RejectsUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestGitHubPlugin_Execute_RequiresToken(t *testing.T) {
+func TestGitHubPlugin_Execute_RequiresToken(_ *testing.T) {
 	p := NewGitHubPlugin("", "")
 	// Without a token, the API call should fail (not crash)
 	action := models.ToolAction{

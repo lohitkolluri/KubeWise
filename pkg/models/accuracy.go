@@ -1,3 +1,4 @@
+// Package models defines shared data types for predictions, config, and remediation.
 package models
 
 import "time"

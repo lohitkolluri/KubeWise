@@ -205,8 +205,8 @@ func paletteGoTab(tab int) func(m *controlModel) paletteOutcome {
 	}
 }
 
-func paletteRefresh() func(m *controlModel) paletteOutcome {
-	return func(m *controlModel) paletteOutcome {
+func paletteRefresh() func(_ *controlModel) paletteOutcome {
+	return func(_ *controlModel) paletteOutcome {
 		return paletteOutcome{msg: "Refreshing…"}
 	}
 }
@@ -242,8 +242,8 @@ func paletteCycleRemediationMode() func(m *controlModel) paletteOutcome {
 	}
 }
 
-func paletteCycleOutputFormat() func(m *controlModel) paletteOutcome {
-	return func(m *controlModel) paletteOutcome {
+func paletteCycleOutputFormat() func(_ *controlModel) paletteOutcome {
+	return func(_ *controlModel) paletteOutcome {
 		current := outputFormat
 		if current == "" {
 			current = "table"
@@ -257,14 +257,14 @@ func paletteCycleOutputFormat() func(m *controlModel) paletteOutcome {
 	}
 }
 
-func paletteRestartAgent() func(m *controlModel) paletteOutcome {
-	return func(m *controlModel) paletteOutcome {
+func paletteRestartAgent() func(_ *controlModel) paletteOutcome {
+	return func(_ *controlModel) paletteOutcome {
 		return paletteOutcome{confirm: confirmRestart, msg: "Confirm agent restart"}
 	}
 }
 
-func paletteHealthCheck() func(m *controlModel) paletteOutcome {
-	return func(m *controlModel) paletteOutcome {
+func paletteHealthCheck() func(_ *controlModel) paletteOutcome {
+	return func(_ *controlModel) paletteOutcome {
 		h, err := fetchHealth()
 		if err != nil {
 			return paletteOutcome{err: err}
@@ -349,13 +349,13 @@ func paletteConfigPrompt(key, title, placeholder string, apply func(*controlMode
 	}
 }
 
-func paletteProfilePrompt(key, title, current string) func(m *controlModel) paletteOutcome {
-	return func(m *controlModel) paletteOutcome {
+func paletteProfilePrompt(key, title, current string) func(_ *controlModel) paletteOutcome {
+	return func(_ *controlModel) paletteOutcome {
 		return paletteOutcome{prompt: &palettePrompt{
 			title:       title,
 			placeholder: current,
 			value:       current,
-			apply: func(m *controlModel, v string) (string, error) {
+			apply: func(_ *controlModel, v string) (string, error) {
 				if err := setProfileField("", key, v); err != nil {
 					return "", err
 				}

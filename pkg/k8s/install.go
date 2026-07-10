@@ -16,11 +16,16 @@ import (
 type BackendType string
 
 const (
+	// BackendVictoriaMetrics identifies VictoriaMetrics as the monitoring backend.
 	BackendVictoriaMetrics BackendType = "victoria-metrics"
-	BackendPrometheus      BackendType = "prometheus"
-	BackendVictoriaLogs    BackendType = "victoria-logs"
-	BackendLoki            BackendType = "loki"
-	BackendTempo           BackendType = "tempo"
+	// BackendPrometheus identifies Prometheus as the monitoring backend.
+	BackendPrometheus BackendType = "prometheus"
+	// BackendVictoriaLogs identifies VictoriaLogs as the log backend.
+	BackendVictoriaLogs BackendType = "victoria-logs"
+	// BackendLoki identifies Loki as the log backend.
+	BackendLoki BackendType = "loki"
+	// BackendTempo identifies Tempo as the tracing backend.
+	BackendTempo BackendType = "tempo"
 )
 
 // DetectedBackend describes a discovered monitoring backend in the cluster.
@@ -41,7 +46,7 @@ type ObservabilityReport struct {
 }
 
 // PingCluster verifies the API server is reachable.
-func (c *Client) PingCluster(ctx context.Context) error {
+func (c *Client) PingCluster(_ context.Context) error {
 	_, err := c.clientset.Discovery().ServerVersion()
 	if err != nil {
 		return fmt.Errorf("kubernetes API unreachable: %w", err)
@@ -66,6 +71,7 @@ func (c *Client) WaitForDeploymentAvailable(ctx context.Context, namespace, name
 }
 
 // DetectPrometheusURL returns an in-cluster Prometheus HTTP URL when a common install is found.
+//
 // Deprecated: use DetectMetricsBackend which checks VictoriaMetrics first.
 func (c *Client) DetectPrometheusURL(ctx context.Context, namespace string) (string, bool) {
 	be := c.DetectMetricsBackend(ctx, []string{namespace})
@@ -217,7 +223,7 @@ func (c *Client) PatchConfigMapPrometheus(ctx context.Context, namespace, url st
 // ---------------------------------------------------------------------------
 
 // discoverObservabilityNamespaces builds the probe list: preferred + defaults.
-func (c *Client) discoverObservabilityNamespaces(ctx context.Context, preferred string) []string {
+func (c *Client) discoverObservabilityNamespaces(_ context.Context, preferred string) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(ns string) {

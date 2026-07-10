@@ -53,11 +53,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	if err := s.store.Ping(); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "store unavailable")
 		return
@@ -65,7 +65,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	stats := s.gateStatsSnapshot()
 	resp := map[string]interface{}{
 		"uptime":        s.uptime().String(),
@@ -78,7 +78,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handlePredictions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePredictions(w http.ResponseWriter, _ *http.Request) {
 	preds, err := s.store.GetLatestPredictions()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get predictions: %v", err))
@@ -214,7 +214,8 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	since := strings.TrimSpace(r.URL.Query().Get("since"))
 
 	var records []models.AuditRecord
-	if status != "" && since != "" {
+	switch {
+	case status != "" && since != "":
 		// Prefer "since" semantics; filter status in-memory for now.
 		ts, err := time.Parse(time.RFC3339, since)
 		if err != nil {
@@ -231,16 +232,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 				records = append(records, rec)
 			}
 		}
-	} else if status != "" {
+	case status != "":
 		records, err = s.store.ListAuditRecordsByStatus(models.AuditStatus(status), limit)
-	} else if since != "" {
+	case since != "":
 		ts, parseErr := time.Parse(time.RFC3339, since)
 		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, "invalid since: must be RFC3339")
 			return
 		}
 		records, err = s.store.ListAuditRecordsSince(ts, limit)
-	} else {
+	default:
 		records, err = s.store.ListAuditRecords(limit)
 	}
 	if err != nil {
@@ -267,7 +268,7 @@ func (s *Server) handleAuditGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sanitizeAuditRecords([]models.AuditRecord{*rec})[0])
 }
 
-func (s *Server) handlePipelineStats(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePipelineStats(w http.ResponseWriter, _ *http.Request) {
 	flags := featureflags.Load()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"features_enabled": map[string]bool{
@@ -282,7 +283,7 @@ func (s *Server) handlePipelineStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCacheStats(w http.ResponseWriter, _ *http.Request) {
 	flags := featureflags.Load()
 	resp := map[string]interface{}{
 		"cache_type":   "semantic",

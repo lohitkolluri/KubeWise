@@ -60,7 +60,7 @@ func (c *Correlator) buildMetricSummaries(anomalies []models.AnomalyRecord) []en
 // evaluateRules runs the rule engine against correlatable anomalies.
 // Returns true if a deterministic match was processed (short-circuit LLM).
 func (c *Correlator) evaluateRules(ctx context.Context, cfg RemediationConfig, correlatable []models.AnomalyRecord) (bool, error) {
-	ruleInput := engine.EngineInput{
+	ruleInput := engine.Input{
 		Anomalies: correlatable,
 		Metrics:   c.buildMetricSummaries(correlatable),
 	}

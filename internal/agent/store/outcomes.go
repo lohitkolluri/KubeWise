@@ -37,7 +37,7 @@ func (s *Store) ListTrackedPredictions(outcome string, limit int) ([]models.Trac
 		if b == nil {
 			return nil
 		}
-		return b.ForEach(func(k, v []byte) error {
+		return b.ForEach(func(_, v []byte) error {
 			var tp models.TrackedPrediction
 			if err := json.Unmarshal(v, &tp); err != nil {
 				return nil

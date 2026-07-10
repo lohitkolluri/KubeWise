@@ -89,7 +89,7 @@ func (s *Server) handleApprovalReject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "rejected", "id": id})
 }
 
-func (s *Server) handleRemediationModeGet(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRemediationModeGet(w http.ResponseWriter, _ *http.Request) {
 	if s.remediator != nil {
 		writeJSON(w, http.StatusOK, s.remediator.RemediationState())
 		return
@@ -133,7 +133,8 @@ func (s *Server) handleRemediationModePut(w http.ResponseWriter, r *http.Request
 		live = !*body.DryRun
 	}
 
-	if body.Mode != "" {
+	switch {
+	case body.Mode != "":
 		if !models.ValidRemediationMode(body.Mode) {
 			writeError(w, http.StatusBadRequest, "invalid remediation mode")
 			return
@@ -142,9 +143,9 @@ func (s *Server) handleRemediationModePut(w http.ResponseWriter, r *http.Request
 		if body.Mode == models.RemediationModeSemi || body.Mode == models.RemediationModeDryRun {
 			live = false
 		}
-	} else if live {
+	case live:
 		cfg.Remediation.Mode = models.RemediationModeAuto
-	} else {
+	default:
 		cfg.Remediation.Mode = models.RemediationModeDryRun
 	}
 	cfg.Remediation.DryRun = !live

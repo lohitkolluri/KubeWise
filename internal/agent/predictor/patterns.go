@@ -1,3 +1,4 @@
+// Package predictor provides failure pattern detection and prediction logic.
 package predictor
 
 import (
@@ -27,6 +28,7 @@ func SetScrapeInterval(d time.Duration) {
 	}
 }
 
+// PodResource describes a pod's resource limits.
 type PodResource struct {
 	Name      string
 	Namespace string
@@ -34,12 +36,14 @@ type PodResource struct {
 	MemLimit  float64
 }
 
+// ResourceSnapshot is a point-in-time view of cluster resource health.
 type ResourceSnapshot struct {
 	FailingPods    []string
 	UnhealthyNodes []string
 	PodResources   []PodResource
 }
 
+// PatternMatch represents a detected failure pattern with confidence and suggested action.
 type PatternMatch struct {
 	Pattern         string
 	Confidence      float64
@@ -49,6 +53,7 @@ type PatternMatch struct {
 	Namespace       string
 }
 
+// PatternMatcher is implemented by types that can detect a specific failure pattern.
 type PatternMatcher interface {
 	Name() string
 	Match(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []PatternMatch

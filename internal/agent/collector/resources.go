@@ -161,7 +161,7 @@ func (rc *ResourcesCollector) HasSynced() bool {
 
 // WaitForSync blocks up to the timeout duration until all informers have synced.
 func (rc *ResourcesCollector) WaitForSync() bool {
-	err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, rc.syncTimeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, rc.syncTimeout, true, func(_ context.Context) (bool, error) {
 		return rc.HasSynced(), nil
 	})
 	return err == nil
@@ -226,7 +226,7 @@ func (rc *ResourcesCollector) handlePodAdd(obj interface{}) {
 	rc.pods[podKey(pod)] = podToState(pod)
 }
 
-func (rc *ResourcesCollector) handlePodUpdate(oldObj, newObj interface{}) {
+func (rc *ResourcesCollector) handlePodUpdate(_, newObj interface{}) {
 	pod, ok := newObj.(*corev1.Pod)
 	if !ok {
 		return
@@ -288,7 +288,7 @@ func (rc *ResourcesCollector) handleNodeAdd(obj interface{}) {
 	rc.nodes[node.Name] = nodeToState(node)
 }
 
-func (rc *ResourcesCollector) handleNodeUpdate(oldObj, newObj interface{}) {
+func (rc *ResourcesCollector) handleNodeUpdate(_, newObj interface{}) {
 	node, ok := newObj.(*corev1.Node)
 	if !ok {
 		return
@@ -340,7 +340,7 @@ func (rc *ResourcesCollector) handleDepAdd(obj interface{}) {
 	rc.deps[depKey(dep)] = deploymentToState(dep)
 }
 
-func (rc *ResourcesCollector) handleDepUpdate(oldObj, newObj interface{}) {
+func (rc *ResourcesCollector) handleDepUpdate(_, newObj interface{}) {
 	dep, ok := newObj.(*appsv1.Deployment)
 	if !ok {
 		return

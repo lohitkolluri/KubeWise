@@ -96,10 +96,6 @@ func (m *controlModel) notify(text string, kind toastKind) {
 	m.toasts.push(text, kind, 3*time.Second)
 }
 
-func (m *controlModel) notifyWarn(text string) {
-	m.toasts.push(text, toastWarn, 4*time.Second)
-}
-
 func (m *controlModel) notifyErr(text string) {
 	m.toasts.push(text, toastError, 5*time.Second)
 }

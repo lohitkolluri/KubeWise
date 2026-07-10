@@ -106,10 +106,13 @@ func (p *OpenRouterProvider) SetSessionID(sessionID string) {
 // SetModel changes the model used for subsequent requests.
 func (p *OpenRouterProvider) SetModel(model string) { p.model = model }
 
+// Name returns "openrouter" as the provider identifier.
 func (p *OpenRouterProvider) Name() string { return "openrouter" }
 
+// HasAPIKey returns true when an API key is configured.
 func (p *OpenRouterProvider) HasAPIKey() bool { return p.apiKey != "" }
 
+// ValidateKey checks that the OpenRouter API key is valid.
 func (p *OpenRouterProvider) ValidateKey(ctx context.Context) error {
 	if p.apiKey == "" {
 		return fmt.Errorf("openrouter API key is empty")
@@ -126,11 +129,13 @@ func (p *OpenRouterProvider) ValidateKey(ctx context.Context) error {
 	return nil
 }
 
+// StructuredOutput sends a prompt and returns a typed JSON response.
 func (p *OpenRouterProvider) StructuredOutput(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) error {
 	_, err := p.StructuredOutputWithUsage(ctx, systemPrompt, userContent, schema, respPtr)
 	return err
 }
 
+// StructuredOutputWithUsage sends a prompt and returns a typed response with token usage.
 func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	if p.sdk == nil {
 		return Usage{}, fmt.Errorf("openrouter client not configured")

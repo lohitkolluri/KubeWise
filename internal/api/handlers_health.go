@@ -55,7 +55,7 @@ func (s *Server) handleHealthScoreHistory(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, history)
 }
 
-func (s *Server) handleClusterHealthSummary(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleClusterHealthSummary(w http.ResponseWriter, _ *http.Request) {
 	summary, err := s.store.ComputeClusterSummary()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("compute cluster summary: %v", err))

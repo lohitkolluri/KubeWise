@@ -22,7 +22,7 @@ var watchCmd = &cobra.Command{
 	Aliases: []string{"w"},
 	Short:   "Live TUI dashboard",
 	Long:    `Real-time control center (alias for kwctl ui).`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		// Keep watch flags in sync with ui behavior.
 		uiMouse = watchMouse
 		uiAltScreen = watchAltScreen

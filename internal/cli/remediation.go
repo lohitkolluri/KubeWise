@@ -24,7 +24,7 @@ var remediationCmd = &cobra.Command{
 	Aliases: []string{"audit", "remediations"},
 	Short:   "Show remediation audit log",
 	Long:    `Fetch and display remediation audit records from the agent.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		if err := validateOutputFormat(); err != nil {
 			return err
 		}

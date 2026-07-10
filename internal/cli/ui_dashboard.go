@@ -159,7 +159,8 @@ func (m controlModel) renderDashBanner() string {
 }
 
 func (m controlModel) dashboardKPIs() []kpiDef {
-	kpis := []kpiDef{
+	kpis := make([]kpiDef, 0, 9)
+	kpis = append(kpis, []kpiDef{
 		{"Uptime", truncUptime(m.status.Uptime), infoStyle, kpiToneInfo},
 		{"Scrapes", fmt.Sprintf("%d", m.status.Scrapes), infoStyle, kpiToneInfo},
 		{"Gate passed", fmt.Sprintf("%d", m.status.GatePassed), successStyle, kpiToneSuccess},
@@ -167,7 +168,7 @@ func (m controlModel) dashboardKPIs() []kpiDef {
 		{"Predictions", fmt.Sprintf("%d", len(m.preds)), kpiValueStyleForCount(len(m.preds), 5), kpiToneFromCount(len(m.preds), 5)},
 		{"Anomalies", fmt.Sprintf("%d", len(m.anomalies)), kpiValueStyleForCount(len(m.anomalies), 3), kpiToneFromCount(len(m.anomalies), 3)},
 		{"Pending", fmt.Sprintf("%d", len(m.pending)), kpiValueStyleForCount(len(m.pending), 1), kpiToneFromCount(len(m.pending), 1)},
-	}
+	}...)
 
 	healthVal := "—"
 	healthSty := mutedStyle
@@ -323,7 +324,7 @@ func renderDashTable(headers []string, rows [][]string, width, maxRows int) stri
 	return t.String()
 }
 
-func dashTableCellStyle(row, col int) lipgloss.Style {
+func dashTableCellStyle(row, _ int) lipgloss.Style {
 	base := lipgloss.NewStyle().Padding(0, 1)
 	if row == lgtable.HeaderRow {
 		return base.Bold(true).Foreground(colorMuted)

@@ -8,7 +8,7 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
-func (s *Server) handleAccuracyLatest(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAccuracyLatest(w http.ResponseWriter, _ *http.Request) {
 	snap, err := s.store.GetLatestAccuracySnapshot()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get accuracy: %v", err))

@@ -136,7 +136,7 @@ func renderStyledTable(headers []string, rows [][]string) string {
 		BorderBottom(true).
 		BorderLeft(false).
 		BorderRight(false).
-		StyleFunc(func(row, col int) lipgloss.Style {
+		StyleFunc(func(row, _ int) lipgloss.Style {
 			if row == table.HeaderRow {
 				return lipgloss.NewStyle().Bold(true).Foreground(colorMuted)
 			}

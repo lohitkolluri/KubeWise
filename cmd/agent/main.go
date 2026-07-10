@@ -1,3 +1,4 @@
+// Command agent runs the KubeWise prediction agent in-cluster.
 package main
 
 import (

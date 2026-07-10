@@ -145,7 +145,7 @@ func TestMultipleSubcommandsInHelp(t *testing.T) {
 
 // Test with a running HTTP server to verify client logic
 func TestStatusWithFakeAgent(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"uptime":"5m","started_at":"2026-07-06T00:00:00Z","scrapes":42}`)
 	}))
@@ -169,7 +169,7 @@ func TestStatusWithFakeAgent(t *testing.T) {
 }
 
 func TestConfigWithFakeAgent(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"scrape_interval":"30s","prometheus_address":"http://localhost:9090","loki_url":"http://loki:3100","tempo_url":"http://tempo:3200","llm_provider":"","llm_model":"","remediation":{"mode":"","dry_run":true,"rate_limit":0,"namespace_denylist":null,"allowlist":null}}`)
 	}))
@@ -192,7 +192,7 @@ func TestConfigWithFakeAgent(t *testing.T) {
 }
 
 func TestConfigNoConfigMessage(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, `{"message":"no config saved"}`)
@@ -213,7 +213,7 @@ func TestConfigNoConfigMessage(t *testing.T) {
 }
 
 func TestPredictEmptyWithFakeAgent(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `[]`)
 	}))
@@ -233,7 +233,7 @@ func TestPredictEmptyWithFakeAgent(t *testing.T) {
 }
 
 func TestPredictWithResults(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `[{"type":"OOM","entity":"pod-a","namespace":"default","action":"restart","confidence":0.85,"eta_seconds":60,"timestamp":"2026-07-06T01:00:00Z","score":0.85}]`)
 	}))

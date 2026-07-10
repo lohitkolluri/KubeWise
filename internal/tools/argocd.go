@@ -103,12 +103,8 @@ func (p *ArgoCDPlugin) Capabilities() []models.ToolCapability {
 func (p *ArgoCDPlugin) Validate(action models.ToolAction) error {
 	cmd := action.Command
 
-	if blockedArgoCDSubcommands[cmd] {
-		if cmd == "app set" && os.Getenv("KUBEWISE_ALLOW_ARGOCD_APP_SET") == "true" {
-			// allowed explicitly
-		} else {
-			return fmt.Errorf("argocd %q is blocked for security reasons", cmd)
-		}
+	if blockedArgoCDSubcommands[cmd] && (cmd != "app set" || os.Getenv("KUBEWISE_ALLOW_ARGOCD_APP_SET") != "true") {
+		return fmt.Errorf("argocd %q is blocked for security reasons", cmd)
 	}
 
 	if _, found := allowedArgoCDSubcommands[cmd]; !found {

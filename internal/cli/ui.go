@@ -58,7 +58,7 @@ anomalies, remediations, config editing, and agent logs in one screen.
     a             approve remediation
     x             reject remediation
 `,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		return runControlCenter(uiInterval)
 	},
 }
@@ -476,8 +476,7 @@ func (m controlModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailVP, cmd = m.detailVP.Update(msg)
 			return m, cmd
 		}
-		switch m.tab {
-		case tabLogs:
+		if m.tab == tabLogs {
 			var cmd tea.Cmd
 			m.logsVP, cmd = m.logsVP.Update(msg)
 			return m, cmd
@@ -693,7 +692,7 @@ func (m *controlModel) handleMainKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					title:       "Reject remediation",
 					placeholder: "reason (required)",
 					value:       "rejected via kwctl",
-					apply: func(m *controlModel, value string) (string, error) {
+					apply: func(_ *controlModel, value string) (string, error) {
 						if strings.TrimSpace(value) == "" {
 							return "", fmt.Errorf("reason must not be empty")
 						}
@@ -754,12 +753,12 @@ func (m *controlModel) clampCursor() {
 	if m.tableForTab(m.tab) != nil {
 		return
 	}
-	max := m.listLen(m.tab) - 1
-	if max < 0 {
-		max = 0
+	maxIdx := m.listLen(m.tab) - 1
+	if maxIdx < 0 {
+		maxIdx = 0
 	}
-	if m.cursor[m.tab] > max {
-		m.cursor[m.tab] = max
+	if m.cursor[m.tab] > maxIdx {
+		m.cursor[m.tab] = maxIdx
 	}
 }
 
@@ -816,14 +815,14 @@ func nextRemediationMode(current string) string {
 	}
 }
 
-func min(a, b int) int {
+func minint(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
 
-func max(a, b int) int {
+func maxint(a, b int) int {
 	if a > b {
 		return a
 	}
@@ -882,11 +881,12 @@ func (m controlModel) View() tea.View {
 	}
 
 	var base string
-	if m.confirmOpen() {
+	switch {
+	case m.confirmOpen():
 		base = m.renderConfirmOverlay()
-	} else if m.palette.phase != paletteClosed {
+	case m.palette.phase != paletteClosed:
 		base = m.renderPalette()
-	} else {
+	default:
 		var b strings.Builder
 		b.WriteString(m.renderHeader())
 		b.WriteString("\n")
@@ -922,11 +922,12 @@ func (m controlModel) View() tea.View {
 
 func (m controlModel) renderHeader() string {
 	var health string
-	if !m.ready {
+	switch {
+	case !m.ready:
 		health = mutedStyle.Render("● connecting")
-	} else if !m.healthOK {
+	case !m.healthOK:
 		health = errStyle.Render("● unreachable")
-	} else {
+	default:
 		health = successStyle.Render("● healthy")
 	}
 
@@ -970,7 +971,7 @@ func (m controlModel) renderHeader() string {
 // ── Tabs with badges ──
 
 func (m controlModel) renderTabs() string {
-	var labels []string
+	labels := make([]string, 0, len(tabLabels))
 	var indicators []string
 	counts := m.tabCounts()
 	for i, label := range tabLabels {
@@ -986,7 +987,7 @@ func (m controlModel) renderTabs() string {
 		w := lipgloss.Width(rendered)
 		labels = append(labels, rendered)
 		if i == m.tab {
-			indicators = append(indicators, tabIndicatorStyle.Width(w).Render(strings.Repeat("─", max(1, w))))
+			indicators = append(indicators, tabIndicatorStyle.Width(w).Render(strings.Repeat("─", maxint(1, w))))
 		} else {
 			indicators = append(indicators, strings.Repeat(" ", w))
 		}
@@ -1121,7 +1122,7 @@ func (m controlModel) renderTabContent() string {
 			follow = "follow=OFF"
 			followSty = mutedStyle
 		}
-		pos := fmt.Sprintf("%d/%d", min(m.logsVP.YOffset()+m.logsVP.Height(), m.logsVP.TotalLineCount()), max(1, m.logsVP.TotalLineCount()))
+		pos := fmt.Sprintf("%d/%d", minint(m.logsVP.YOffset()+m.logsVP.Height(), m.logsVP.TotalLineCount()), maxint(1, m.logsVP.TotalLineCount()))
 		header := mutedStyle.Render(fmt.Sprintf("lines %d", lines)) +
 			mutedStyle.Render(" · ") +
 			followSty.Render(follow) +
@@ -1644,7 +1645,7 @@ func (m controlModel) renderPalette() string {
 		b.WriteString(m.palette.list.View())
 	}
 	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		confirmBoxStyle.Width(min(60, m.width-4)).Render(b.String()))
+		confirmBoxStyle.Width(minint(60, m.width-4)).Render(b.String()))
 	return overlay
 }
 

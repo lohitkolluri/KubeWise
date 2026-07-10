@@ -6,6 +6,7 @@ package forecaster
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"google.golang.org/grpc"
@@ -93,6 +94,9 @@ func (c *Client) Forecast(ctx context.Context, req *ForecastRequest) (*ForecastR
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
+	if req.Horizon > math.MaxInt32 || req.Horizon < math.MinInt32 {
+		return nil, fmt.Errorf("horizon %d overflows int32 range", req.Horizon)
+	}
 	pbReq := &pb.ForecastRequest{
 		MetricName:      req.MetricName,
 		Values:          req.Values,

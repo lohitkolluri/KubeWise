@@ -77,7 +77,7 @@ func (s *Store) Backup(w io.Writer) error {
 
 // Ping verifies the database is readable.
 func (s *Store) Ping() error {
-	return s.db.View(func(tx *bolt.Tx) error { return nil })
+	return s.db.View(func(_ *bolt.Tx) error { return nil })
 }
 
 // Close shuts down the database.
