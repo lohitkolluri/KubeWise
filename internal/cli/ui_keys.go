@@ -97,15 +97,15 @@ func defaultUIKeys() uiKeyMap {
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "show detail"),
 		),
-	Back: key.NewBinding(
-		key.WithKeys("esc"),
-		key.WithHelp("esc", "back / close"),
-	),
-	Copy: key.NewBinding(
-		key.WithKeys("c"),
-		key.WithHelp("c", "copy detail to clipboard"),
-	),
-	Refresh: key.NewBinding(
+		Back: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "back / close"),
+		),
+		Copy: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "copy detail to clipboard"),
+		),
+		Refresh: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh data"),
 		),

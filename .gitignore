@@ -61,3 +61,4 @@ data/db/
 # Codex / OpenCode agent session state
 .omo/
 .serena/
+manifest.json

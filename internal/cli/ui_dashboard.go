@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	dashKPICols       = 4
-	dashKPIColsWide   = 8 // single row on wide terminals
-	dashSectionBlank  = 1 // empty lines between sections
-	dashRecentLimit   = 5 // recent activity rows on dashboard
+	dashKPICols      = 4
+	dashKPIColsWide  = 8 // single row on wide terminals
+	dashSectionBlank = 1 // empty lines between sections
+	dashRecentLimit  = 5 // recent activity rows on dashboard
 )
 
 // dashSectionSep is the join delimiter that leaves dashSectionBlank empty lines.

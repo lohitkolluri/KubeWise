@@ -51,6 +51,6 @@ func (c *Correlator) executePlanAndVerify(
 
 	c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
 	c.logAudit(&plan, matched, tier, models.AuditVerifyFailed, verifyNote, prompt, result)
-		slog.Warn("remediator: executed runbook but verification failed", "note", verifyNote)
+	slog.Warn("remediator: executed runbook but verification failed", "note", verifyNote)
 	return nil
 }

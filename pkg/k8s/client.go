@@ -274,5 +274,3 @@ func (c *Client) RolloutRestart(ctx context.Context, namespace, name string) err
 	}
 	return nil
 }
-
-

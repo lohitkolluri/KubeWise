@@ -166,11 +166,11 @@ type controlModel struct {
 	confirmAffirm   bool   // true = primary action focused
 
 	// Tables (kwtable — bubbles/table fork with full-row selection styling)
-	predTable         kwtable.Model
-	anomTable         kwtable.Model
-	auditTable        kwtable.Model
-	approvalTable     kwtable.Model
-	healthTable       kwtable.Model
+	predTable     kwtable.Model
+	anomTable     kwtable.Model
+	auditTable    kwtable.Model
+	approvalTable kwtable.Model
+	healthTable   kwtable.Model
 
 	// UI components
 	cursor [tabCount]int
