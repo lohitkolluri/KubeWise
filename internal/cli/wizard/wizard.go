@@ -54,6 +54,8 @@ type Model struct {
 
 	// Text inputs (lazily initialized)
 	apiTokenInput textinput.Model
+
+	detecting bool // true while cluster detection is running
 }
 
 // stepNames for rendering step indicators.
@@ -115,6 +117,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stepWelcome:
 		return m.updateWelcome(msg)
 	case stepDetect:
+		// Auto-start detection on first entry.
+		if !m.detecting && m.state.ClusterType == "" {
+			m.detecting = true
+			return m, detectClusterCmd()
+		}
 		return m.updateDetect(msg)
 	case stepLLM:
 		return m.updateLLM(msg)
@@ -230,27 +237,53 @@ func (m Model) viewWelcome() string {
 // ── Step: Detect ──
 
 func (m Model) updateDetect(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
-		m.step = stepLLM
+	switch msg := msg.(type) {
+	case detectResult:
+		m.detecting = false
+		if msg.Error != nil {
+			m.state.ClusterType = "error: " + msg.Error.Error()
+		} else {
+			m.state.ClusterType = msg.ClusterType
+		}
+		return m, nil
+	case tea.KeyPressMsg:
+		if msg.String() == "enter" {
+			m.step = stepLLM
+		}
 	}
 	return m, nil
 }
 
 func (m Model) viewDetect() string {
-	cluster := m.state.ClusterType
-	if cluster == "" {
-		cluster = "detecting..."
-	}
-	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
+	lines := []string{
 		stepStyle.Render("Step 2/9: Environment Detection"),
 		"",
-		infoStyle.Render("Detecting your Kubernetes environment..."),
-		"",
-		fmt.Sprintf("Cluster type: %s", cluster),
-		"",
-		buttonStyle.Render("Press Enter to continue ▶"),
-		helpStyle.Render("Auto-detection will be implemented in a later sub-phase."),
-	))
+	}
+	if m.detecting {
+		lines = append(lines,
+			spinnerStyle.Render("⏳ Detecting Kubernetes environment..."),
+			"",
+			mutedStyle("Running kubectl probes..."),
+		)
+	} else if m.state.ClusterType != "" {
+		isErr := strings.HasPrefix(m.state.ClusterType, "error:")
+		lines = append(lines,
+			inputValueStyle.Render("Cluster:"),
+			"  "+m.state.ClusterType,
+			"",
+		)
+		if isErr {
+			lines = append(lines,
+				warnStyle.Render("⚠ Unable to fully detect environment"),
+				"",
+				helpStyle.Render("Make sure kubectl is connected to a cluster."),
+			)
+		}
+		lines = append(lines,
+			buttonStyle.Render("Press Enter to continue ▶"),
+		)
+	}
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Top, lines...))
 }
 
 // ── Step: LLM ──

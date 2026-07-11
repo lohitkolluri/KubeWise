@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	yaml "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 
@@ -22,6 +24,40 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/version"
 	"github.com/lohitkolluri/KubeWise/pkg/k8s"
 )
+
+// generateAPIToken returns a random hex token for agent HTTP auth.
+// Returns empty string if neither KUBEWISE_API_TOKEN env var nor crypto/rand.Read works.
+// The caller should prompt the user or fail when the token is required.
+func generateAPIToken() string {
+	if tok := os.Getenv("KUBEWISE_API_TOKEN"); tok != "" {
+		return tok
+	}
+	tok := make([]byte, 24)
+	if _, err := rand.Read(tok); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(tok)
+}
+
+// promptAPIToken asks the user to enter an API token interactively.
+// If stdin is not a terminal (piped input), returns empty string.
+// If the user enters nothing, auto-generates one.
+func promptAPIToken(_ io.Writer) string {
+	if !isTerminal(os.Stdin) {
+		return ""
+	}
+	_, _ = fmt.Fprint(os.Stderr, mutedStyle.Render("Enter API token for agent auth (leave empty to auto-generate): "))
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	_, _ = fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return ""
+	}
+	tok := strings.TrimSpace(string(raw))
+	if tok == "" {
+		return generateAPIToken()
+	}
+	return tok
+}
 
 const (
 	defaultInstallRef     = "main"
@@ -122,6 +158,21 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	}
 	printOK(out, "Kubernetes cluster reachable")
 
+	// Pre-load chart images into kind when running on a kind cluster.
+	// Images available in local Docker get loaded; otherwise kubelet pulls from registry.
+	if isKindCluster(kc) {
+		printWarn(out, "Kind cluster detected — images may need to be pulled from remote registry")
+		chartDir := installChartPath
+		if chartDir == "" {
+			chartDir = findHelmChartDir()
+		}
+		if chartDir != "" {
+			if images := chartImages(chartDir); len(images) > 0 {
+				_ = loadImagesIntoKind(images)
+			}
+		}
+	}
+
 	if installHelm {
 		if err := runHelmInstallWithObservability(ctx, out, kc); err != nil {
 			printPodStatus(out, kc, agentNS)
@@ -179,6 +230,93 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 }
 
 // ---------------------------------------------------------------------------
+// Kind cluster helpers
+// ---------------------------------------------------------------------------
+
+// isKindCluster returns true when the target cluster is a kind cluster.
+func isKindCluster(kc *k8s.Client) bool {
+	if os.Getenv("KUBEWISE_SKIP_KIND_LOAD") != "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	nodes, err := kc.GetNodes(ctx)
+	if err != nil {
+		return false
+	}
+	for _, n := range nodes.Items {
+		if _, ok := n.Labels["kind.x-k8s.io/cluster"]; ok {
+			return true
+		}
+		// Fallback: node names like "kubewise-control-plane".
+		if strings.Contains(n.Name, "-control-plane") {
+			return true
+		}
+	}
+	return false
+}
+
+// chartImages reads the default image references from a local chart's values.yaml.
+func chartImages(chartDir string) []string {
+	data, err := os.ReadFile(filepath.Join(chartDir, "values.yaml")) //nolint:gosec // path from user flag or cwd
+	if err != nil {
+		return nil
+	}
+	var v struct {
+		Image struct {
+			Agent      imageRef `yaml:"agent"`
+			Forecaster imageRef `yaml:"forecaster"`
+		} `yaml:"image"`
+	}
+	if err := yaml.Unmarshal(data, &v); err != nil {
+		return nil
+	}
+	var images []string
+	for _, ref := range []imageRef{v.Image.Agent, v.Image.Forecaster} {
+		if ref.Repository != "" {
+			tag := ref.Tag
+			if tag == "" {
+				tag = "latest"
+			}
+			images = append(images, ref.Repository+":"+tag)
+		}
+	}
+	return images
+}
+
+// imageRef maps a subset of a Helm values image block.
+type imageRef struct {
+	Repository string `yaml:"repository"`
+	Tag        string `yaml:"tag"`
+}
+
+// loadImagesIntoKind attempts to "kind load docker-image" for each image.
+// Images not available in local Docker are silently skipped — the kubelet
+// pulls them from the remote registry instead.
+func loadImagesIntoKind(images []string) error {
+	kindPath, err := exec.LookPath("kind")
+	if err != nil {
+		return nil // kind CLI not on PATH; nothing to do
+	}
+	cluster := os.Getenv("KIND_CLUSTER")
+	if cluster == "" {
+		cluster = "kubewise"
+	}
+	var loaded int
+	for _, img := range images {
+		cmd := exec.Command(kindPath, "load", "docker-image", img, "--name", cluster) //nolint:gosec // CLI tool, kind image load
+		cmd.Stderr = io.Discard
+		cmd.Stdout = io.Discard
+		if cmd.Run() == nil {
+			loaded++
+		}
+	}
+	if loaded == 0 {
+		return nil // silently skip; kubelet falls back to remote pull
+	}
+	return nil
+}
+
 // Observability auto-detection + install orchestration
 // ---------------------------------------------------------------------------
 
@@ -261,14 +399,14 @@ func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmCo
 	if key == "" {
 		key = os.Getenv("OPENROUTER_API_KEY")
 	}
-	apiTok := os.Getenv("KUBEWISE_API_TOKEN")
-	if apiTok == "" {
-		tok := make([]byte, 24)
-		if _, err := rand.Read(tok); err == nil {
-			apiTok = hex.EncodeToString(tok)
-		}
+	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" || true // chart default
+	apiTok := generateAPIToken()
+	if apiTok == "" && requireToken {
+		apiTok = promptAPIToken(out)
 	}
-	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true"
+	if apiTok == "" && requireToken {
+		return fmt.Errorf("API token required — set KUBEWISE_API_TOKEN or run in a terminal to enter one interactively")
+	}
 
 	// Subchart toggles: if we have an explicit override URL, disable the subchart.
 	// If no override URL, enable the subchart to install the backend.
