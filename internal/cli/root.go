@@ -34,7 +34,7 @@ Profiles: ~/.config/kwctl/config.yaml`,
 	SilenceUsage:  true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if isTerminal(os.Stdout) {
-			return runControlCenter(2 * time.Second)
+			return runControlCenter(2*time.Second, false)
 		}
 		return cmd.Help()
 	},
@@ -59,6 +59,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "kwctl profile name (from ~/.config/kwctl/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&agentURL, "agent-url", "", "agent base URL (overrides profile)")
 	rootCmd.PersistentFlags().IntVar(&httpTimeout, "timeout", 0, "HTTP timeout in seconds")
+	rootCmd.PersistentFlags().StringVar(&cachedPassword, "pass", "", "password for agent authentication (skips prompt if provided)")
 }
 
 func isTerminal(f *os.File) bool {

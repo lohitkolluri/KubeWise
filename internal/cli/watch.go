@@ -26,6 +26,6 @@ var watchCmd = &cobra.Command{
 		// Keep watch flags in sync with ui behavior.
 		uiMouse = watchMouse
 		uiAltScreen = watchAltScreen
-		return runControlCenter(watchInterval)
+		return runControlCenter(watchInterval, watchMouse)
 	},
 }

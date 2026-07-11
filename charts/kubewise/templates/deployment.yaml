@@ -79,6 +79,12 @@ spec:
                   name: {{ include "kubewise.secretName" . }}
                   key: api_token
                   optional: true
+            - name: CLIENT_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubewise.secretName" . }}
+                  key: client_password_hash
+                  optional: true
             - name: KUBEWISE_REQUIRE_API_TOKEN
               value: {{ .Values.security.requireApiToken | quote }}
             - name: KUBEWISE_ALLOW_UNAUTH
