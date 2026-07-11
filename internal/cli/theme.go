@@ -191,7 +191,6 @@ var (
 	// ── Status bar ──
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(colorSubtle).
-			Background(colorStatusBar).
 			Padding(0, 1)
 
 	statusBarActiveStyle = lipgloss.NewStyle().
