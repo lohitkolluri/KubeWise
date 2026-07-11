@@ -26,6 +26,20 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/k8s"
 )
 
+// exchangePasswordForToken tries to exchange a cached password for an API
+// token via the agent's auth endpoint. Returns empty on failure so callers
+// can fall back to prompting at runtime.
+func exchangePasswordForToken() string {
+	if cachedPassword == "" {
+		return ""
+	}
+	tok, err := tryPasswordAuth(context.Background(), resolveAgentURL())
+	if err != nil || tok == "" {
+		return ""
+	}
+	return tok
+}
+
 // generateAPIToken returns a random hex token for agent HTTP auth.
 // Returns empty string if neither KUBEWISE_API_TOKEN env var nor crypto/rand.Read works.
 // The caller should prompt the user or fail when the token is required.
@@ -870,6 +884,8 @@ func saveInstallProfile() error {
 		prof.TimeoutSeconds = 15
 	}
 	if tok := os.Getenv("KUBEWISE_API_TOKEN"); tok != "" {
+		prof.APIToken = tok
+	} else if tok := exchangePasswordForToken(); tok != "" {
 		prof.APIToken = tok
 	}
 	if kubeconfig != "" {
