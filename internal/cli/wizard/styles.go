@@ -16,7 +16,6 @@ var (
 	colorSubtle    = compat.AdaptiveColor{Light: lipgloss.Color("#4B5563"), Dark: lipgloss.Color("#D1D5DB")} //nolint:unused
 	colorMuted     = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")}
 	colorSurface   = compat.AdaptiveColor{Light: lipgloss.Color("#F9FAFB"), Dark: lipgloss.Color("#1F2937")} //nolint:unused
-	colorCardBG    = compat.AdaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("#1F2937")}
 	colorBorder    = compat.AdaptiveColor{Light: lipgloss.Color("#D1D5DB"), Dark: lipgloss.Color("#374151")}
 	colorHighlight = compat.AdaptiveColor{Light: lipgloss.Color("#111827"), Dark: lipgloss.Color("#F9FAFB")}
 
