@@ -64,21 +64,7 @@ func agentRequest(ctx context.Context, method, path string, body any) ([]byte, i
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	token := apiToken
-	if token == "" {
-		token = os.Getenv("KUBEWISE_API_TOKEN")
-	}
-	if token == "" && !passwordAttempted {
-		passwordAttempted = true
-		exchanged, err := tryPasswordAuth(ctx, resolveAgentURL())
-		if err == nil && exchanged != "" {
-			apiToken = exchanged
-			token = exchanged
-			// Persist the exchanged token so future runs authenticate without
-			// re-supplying --pass or prompting interactively.
-			_ = saveAPIToken(exchanged)
-		}
-	}
+	token, authErr := resolveRequestToken(ctx)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -106,12 +92,55 @@ func agentRequest(ctx context.Context, method, path string, body any) ([]byte, i
 				msg = apiErr.Message
 			}
 		}
+		// If auth clearly failed and we know why, surface the underlying cause
+		// instead of a generic 401 (e.g. wrong password, agent missing token).
+		if resp.StatusCode == http.StatusUnauthorized && authErr != nil {
+			return respBody, resp.StatusCode, fmt.Errorf("authentication failed: %w", authErr)
+		}
 		if resp.StatusCode == http.StatusMethodNotAllowed {
 			return respBody, resp.StatusCode, fmt.Errorf("agent returned 405 method not allowed — rebuild and redeploy the agent, or check the API path: %s", msg)
 		}
 		return respBody, resp.StatusCode, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, msg)
 	}
 	return respBody, resp.StatusCode, nil
+}
+
+// resolveRequestToken picks the API token for a request. An explicit --pass
+// takes precedence over any saved profile/env token, so re-running with
+// --pass always re-authenticates even when a stale token is cached. The
+// returned error is non-nil only when no token could be obtained; it is
+// surfaced by the caller on a 401 so the user sees the real cause.
+func resolveRequestToken(ctx context.Context) (string, error) {
+	var authErr error
+	if cachedPassword != "" && !passwordAttempted {
+		passwordAttempted = true
+		tok, err := tryPasswordAuth(ctx, resolveAgentURL())
+		if err != nil {
+			authErr = err
+		} else if tok != "" {
+			apiToken = tok
+			_ = saveAPIToken(tok)
+			return tok, nil
+		}
+	}
+	if apiToken != "" {
+		return apiToken, nil
+	}
+	if t := os.Getenv("KUBEWISE_API_TOKEN"); t != "" {
+		return t, nil
+	}
+	if !passwordAttempted {
+		passwordAttempted = true
+		tok, err := tryPasswordAuth(ctx, resolveAgentURL())
+		if err != nil {
+			authErr = err
+		} else if tok != "" {
+			apiToken = tok
+			_ = saveAPIToken(tok)
+			return tok, nil
+		}
+	}
+	return "", authErr
 }
 
 func agentGet(ctx context.Context, path string) ([]byte, int, error) {
