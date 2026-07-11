@@ -114,7 +114,7 @@ func TestTryPasswordAuth_ReturnsToken(t *testing.T) {
 
 func TestTryPasswordAuth_NotConfigured(t *testing.T) {
 	defer saveResetGlobals(t)()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer ts.Close()
@@ -131,7 +131,7 @@ func TestTryPasswordAuth_NotConfigured(t *testing.T) {
 
 func TestTryPasswordAuth_WrongPassword(t *testing.T) {
 	defer saveResetGlobals(t)()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `{"error":"invalid password"}`)
@@ -320,7 +320,7 @@ func TestAgentRequest_POSTWithBody(t *testing.T) {
 
 func TestAgentRequest_ErrorResponse(t *testing.T) {
 	defer saveResetGlobals(t)()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error":"bad request"}`)
 	}))
@@ -338,7 +338,7 @@ func TestAgentRequest_ErrorResponse(t *testing.T) {
 
 func TestAgentRequest_405Error(t *testing.T) {
 	defer saveResetGlobals(t)()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprint(w, `{"error":"method not allowed"}`)
 	}))
@@ -377,19 +377,18 @@ func TestAgentRequest_EmptyPasswordSkipsAuth(t *testing.T) {
 	}
 }
 
-func TestAgentRequest_NilContext(t *testing.T) {
+func TestAgentRequest_BackgroundContext(t *testing.T) {
 	defer saveResetGlobals(t)()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{}`)
 	}))
 	defer ts.Close()
 
 	agentURL = ts.URL
-	// Passing nil context should use background ctx internally
-	_, _, err := agentRequest(nil, http.MethodGet, "/test", nil)
+	_, _, err := agentRequest(context.Background(), http.MethodGet, "/test", nil)
 	if err != nil {
-		t.Fatalf("unexpected error with nil context: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -441,7 +440,7 @@ func TestAgentWrite_PutThenPostThenPatch(t *testing.T) {
 func TestAgentWrite_AllFail(t *testing.T) {
 	defer saveResetGlobals(t)()
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprint(w, `{"error":"nope"}`)
 	}))

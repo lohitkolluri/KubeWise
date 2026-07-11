@@ -54,7 +54,7 @@ func TestApplyProfileDefaults_TokenFromEnv(t *testing.T) {
 	apiToken = ""
 	agentURL = ""
 	applyProfileDefaults()
-	if apiToken != "env-token-from-test" {
+	if apiToken != "env-token-from-test" { //nolint:gosec // test token, not a real credential
 		t.Fatalf("expected token from env, got %q", apiToken)
 	}
 }
@@ -129,7 +129,7 @@ func TestProfilePath_UsesXDG(t *testing.T) {
 	if path != "/tmp/test-xdg-kwctl/kwctl/config.yaml" {
 		t.Fatalf("expected path under XDG_CONFIG_HOME, got %q", path)
 	}
-	os.RemoveAll("/tmp/test-xdg-kwctl")
+	_ = os.RemoveAll("/tmp/test-xdg-kwctl")
 }
 
 func TestSetProfileField_UnknownKey(t *testing.T) {

@@ -252,7 +252,7 @@ func TestAuthMiddleware_PublicPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/api/v1/auth: expected 200, got %d", resp.StatusCode)
 	}
@@ -261,7 +261,7 @@ func TestAuthMiddleware_PublicPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("/api/v1/stats: expected 401, got %d", resp.StatusCode)
 	}
