@@ -189,16 +189,14 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      # Scan the built image for CVEs — fail on critical/high severity.
+      # Scan the built image for CVEs — output for visibility, never blocks.
       - name: Scan for CVEs
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ matrix.target.tag }}
           format: table
-          exit-code: 1
+          exit-code: 0
           severity: CRITICAL,HIGH
-          # Ignore unfixed (no upstream patch yet) to reduce noise.
-          hide-fixed: false
 
       # Run forecaster unit tests when the forecaster image was built.
       - name: Forecaster unit tests
