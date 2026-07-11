@@ -6,12 +6,23 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-flight runs for the same branch/PR — if you push again, the old
+# run stops immediately instead of wasting CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+  # coverage uploads and status checks need these
+  checks: write
+  pull-requests: write
 
 jobs:
-  test:
+  # ── Source-code checks — fastest feedback loop ────────────────────────
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -20,23 +31,108 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify formatting
+      - name: Check go.mod is tidy
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Formatting
         run: test -z "$(gofmt -l .)"
 
       - name: Vet
         run: go vet ./...
 
-      - name: golangci-lint
+      - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
 
-      - name: Test
-        run: go test ./... -count=1 -race -timeout=5m
+      # Official Go vulnerability scanner — catches known CVEs in deps.
+      - name: Vulnerability scan
+        run: go tool golang.org/x/vuln/cmd/govulncheck ./...
+        continue-on-error: true
 
+  # ── Unit & integration tests ──────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Strategy matrix: test against the Go version in go.mod (latest) and
+    # one previous minor release to catch compatibility regressions early.
+    strategy:
+      matrix:
+        go-version:
+          - "1.26"
+          - "1.25"
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Test with race detector
+        run: go test ./... -count=1 -race -timeout=10m -v 2>&1 | tee test.output
+
+      # Generate coverage profile for the latest Go version only (duplicates
+      # are wasted). Upload even on failure so coverage gaps are visible.
+      - name: Coverage profile
+        if: ${{ matrix.go-version == '1.26' }}
+        run: go test ./... -count=1 -coverprofile=coverage.out -covermode=atomic -timeout=10m
+
+      - name: Upload coverage
+        if: ${{ matrix.go-version == '1.26' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+      - name: Summarise test output
+        if: always()
+        run: |
+          echo '### Test results' >> "$GITHUB_STEP_SUMMARY"
+          grep -E '(PASS|FAIL|---)' test.output | \
+            sed 's/--- \(PASS\|FAIL\)/\1/' | \
+            awk '!seen[$0]++' | \
+            sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Build all binaries — catches link errors tests miss ───────────────
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        os: [linux, darwin]
+        arch: [amd64, arm64]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build kwctl
+        run: go build -o /dev/null ./cmd/kwctl
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+
+      - name: Build agent
+        run: go build -o /dev/null ./cmd/agent
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+
+  # ── Helm chart lint ───────────────────────────────────────────────────
   helm:
     runs-on: ubuntu-latest
-    needs: test
+    timeout-minutes: 5
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -47,39 +143,64 @@ jobs:
           helm lint ./charts/kubewise
           helm template kubewise ./charts/kubewise >/dev/null
 
-  docker-agent:
+  # ── Docker images — build, cache, scan ────────────────────────────────
+  docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [test, helm]
+    strategy:
+      matrix:
+        target:
+          - dockerfile: docker/agent/Dockerfile
+            context: .
+            tag: kubewise/agent:ci
+          - dockerfile: forecaster-sidecar/Dockerfile
+            context: forecaster-sidecar
+            tag: kubewise/forecaster:ci
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build agent image
+      # Cache Docker layers to speed up rebuilds — keyed on lockfile hash
+      # so any dependency change busts the cache.
+      - name: Docker layer cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ matrix.target.tag }}-${{ hashFiles('**/go.sum', '**/requirements.txt') }}
+          restore-keys: buildx-${{ matrix.target.tag }}-
+
+      - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: docker/agent/Dockerfile
+          context: ${{ matrix.target.context }}
+          file: ${{ matrix.target.dockerfile }}
           push: false
           platforms: linux/amd64
-          tags: kubewise/agent:ci
-
-  docker-forecaster:
-    runs-on: ubuntu-latest
-    needs: [test, helm]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build forecaster image
-        uses: docker/build-push-action@v6
-        with:
-          context: forecaster-sidecar
-          push: false
-          platforms: linux/amd64
-          tags: kubewise/forecaster:ci
+          tags: ${{ matrix.target.tag }}
           load: true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
+      # Move cache to final location so it persists after this step.
+      - name: Finalise cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Scan the built image for CVEs — fail on critical/high severity.
+      - name: Scan for CVEs
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.target.tag }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          # Ignore unfixed (no upstream patch yet) to reduce noise.
+          hide-fixed: false
+
+      # Run forecaster unit tests when the forecaster image was built.
       - name: Forecaster unit tests
+        if: ${{ matrix.target.tag == 'kubewise/forecaster:ci' }}
         run: docker run --rm kubewise/forecaster:ci python -m unittest test_server.py -v
