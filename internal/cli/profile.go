@@ -103,6 +103,23 @@ func saveProfileFile(pf *profileFile) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// saveAPIToken persists an API token to the active profile so subsequent
+// kwctl runs authenticate without re-supplying credentials. Errors are
+// non-fatal: the caller should not block on a profile write failure.
+func saveAPIToken(token string) error {
+	pf, err := loadProfileFile()
+	if err != nil {
+		return err
+	}
+	prof := pf.Profiles[pf.Current]
+	if prof.AgentURL == "" {
+		prof = defaultProfileFile().Profiles["default"]
+	}
+	prof.APIToken = token
+	pf.Profiles[pf.Current] = prof
+	return saveProfileFile(pf)
+}
+
 func activeProfile() Profile {
 	pf, err := loadProfileFile()
 	if err != nil {

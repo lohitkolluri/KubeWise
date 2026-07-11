@@ -74,6 +74,9 @@ func agentRequest(ctx context.Context, method, path string, body any) ([]byte, i
 		if err == nil && exchanged != "" {
 			apiToken = exchanged
 			token = exchanged
+			// Persist the exchanged token so future runs authenticate without
+			// re-supplying --pass or prompting interactively.
+			_ = saveAPIToken(exchanged)
 		}
 	}
 	if token != "" {

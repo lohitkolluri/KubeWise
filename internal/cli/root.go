@@ -59,7 +59,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "kwctl profile name (from ~/.config/kwctl/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&agentURL, "agent-url", "", "agent base URL (overrides profile)")
 	rootCmd.PersistentFlags().IntVar(&httpTimeout, "timeout", 0, "HTTP timeout in seconds")
-	rootCmd.PersistentFlags().StringVar(&cachedPassword, "pass", "", "password for agent authentication (skips prompt if provided)")
+	rootCmd.PersistentFlags().StringVar(&cachedPassword, "pass", "", "password for agent authentication; exchanges it for a token saved to the profile so future runs skip the prompt")
 }
 
 func isTerminal(f *os.File) bool {
