@@ -108,7 +108,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 
 func publicPath(path string) bool {
 	switch path {
-	case "/health", "/readyz", "/metrics", "/status":
+	case "/health", "/readyz", "/metrics", "/status", "/api/v1/auth":
 		return true
 	default:
 		return false

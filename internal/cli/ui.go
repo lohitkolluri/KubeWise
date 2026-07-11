@@ -59,15 +59,15 @@ anomalies, remediations, config editing, and agent logs in one screen.
     x             reject remediation
 `,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		return runControlCenter(uiInterval)
+		return runControlCenter(uiInterval, uiMouse)
 	},
 }
 
-func runControlCenter(interval time.Duration) error {
+func runControlCenter(interval time.Duration, mouseEnabled bool) error {
 	if interval < time.Second {
 		interval = 2 * time.Second
 	}
-	m := newControlModel(interval)
+	m := newControlModel(interval, mouseEnabled)
 	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
@@ -211,7 +211,7 @@ type kpiDef struct {
 	tone  kpiTone
 }
 
-func newControlModel(interval time.Duration) controlModel {
+func newControlModel(interval time.Duration, mouseEnabled bool) controlModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorAccent)
@@ -225,7 +225,7 @@ func newControlModel(interval time.Duration) controlModel {
 		refreshProg:   newRefreshProgress(),
 		actionProg:    newActionProgress(),
 		logsFollow:    true,
-		mouseEnabled:  true,
+		mouseEnabled:  mouseEnabled,
 		detailVP:      viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)),
 		predTable:     initTable(predCols()),
 		anomTable:     initTable(anomCols()),
@@ -242,6 +242,9 @@ func newControlModel(interval time.Duration) controlModel {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(0, 1)
+	if mouseEnabled {
+		m.toasts.push("mouse capture ON — press Ctrl+S to select text", toastInfo, 5*time.Second)
+	}
 	return m
 }
 
@@ -1561,6 +1564,13 @@ func (m controlModel) renderFooter() string {
 		b.WriteString(m.help.ShortHelpView(m.keys.ShortHelp()))
 		b.WriteString(" ")
 	}
+
+	if m.mouseEnabled {
+		b.WriteString(mutedStyle.Render("[🖱 ON]"))
+	} else {
+		b.WriteString(mutedStyle.Render("[🖱 OFF]"))
+	}
+	b.WriteString(" ")
 
 	return statusBarStyle.Width(m.width).Render(strings.TrimRight(b.String(), "\n"))
 }

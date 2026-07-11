@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 	yaml "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
@@ -114,6 +115,7 @@ func init() {
 	installCmd.Flags().StringVar(&installPrometheusNS, "prometheus-namespace", "monitoring", "namespace to search for Prometheus")
 	installCmd.Flags().DurationVar(&installWaitTimeout, "wait", 10*time.Minute, "timeout waiting for agent rollout (first install may need 5-10m to pull images)")
 	installCmd.Flags().StringVar(&installObsNamespace, "observability-namespace", "", "namespace to probe for existing observability backends (default: monitoring)")
+	installCmd.Flags().StringVar(&cachedPassword, "pass", "", "set a password for CLI authentication to the agent (enables auto-discovery of API token)")
 	rootCmd.AddCommand(installCmd)
 }
 
@@ -445,15 +447,21 @@ func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmCo
 		},
 	}
 
-	if key != "" || apiTok != "" {
-		secrets := map[string]any{}
-		if key != "" {
-			secrets["openrouterApiKey"] = key
+	secretValues := map[string]any{}
+	if key != "" {
+		secretValues["openrouterApiKey"] = key
+	}
+	if apiTok != "" {
+		secretValues["apiToken"] = apiTok
+	}
+	if cachedPassword != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(cachedPassword), bcrypt.DefaultCost)
+		if err == nil {
+			secretValues["clientPasswordHash"] = string(hash)
 		}
-		if apiTok != "" {
-			secrets["apiToken"] = apiTok
-		}
-		values["secrets"] = secrets
+	}
+	if len(secretValues) > 0 {
+		values["secrets"] = secretValues
 	}
 	if requireToken {
 		values["security"] = map[string]any{"requireApiToken": true}

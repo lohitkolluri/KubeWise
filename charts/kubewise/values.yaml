@@ -131,6 +131,7 @@ secrets:
   # Set via --set secrets.openrouterApiKey=... or existingSecret
   openrouterApiKey: ''
   apiToken: ''
+  clientPasswordHash: ''
   existingSecret: ''
 
 security:

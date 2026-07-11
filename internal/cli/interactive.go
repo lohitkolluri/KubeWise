@@ -14,6 +14,6 @@ var interactiveCmd = &cobra.Command{
 	Short:   "Interactive control center",
 	Long:    `Launch the KubeWise control center TUI (alias for kwctl ui).`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		return runControlCenter(uiInterval)
+		return runControlCenter(uiInterval, false)
 	},
 }
