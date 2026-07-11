@@ -300,7 +300,7 @@ func (m Model) viewLLM() string {
 			inputValueStyle.Render(ollama),
 		),
 		"",
-		lipgloss.NewStyle().Foreground(colorMuted).Render("API Token") + mutedStyle("  (for secure agent API access)"),
+		lipgloss.NewStyle().Foreground(colorMuted).Render("API Token")+mutedStyle("  (for secure agent API access)"),
 		m.apiTokenInput.View(),
 		mutedStyle("  Leave empty to auto-generate"),
 		"",
@@ -515,11 +515,11 @@ func (m Model) viewReview() string {
 		warnLines = append(warnLines, warnStyle.Render("⚠ "+w))
 	}
 
-	maskedToken := m.state.APIToken
-	if len(maskedToken) > 8 {
-		maskedToken = maskedToken[:4] + "···" + maskedToken[len(maskedToken)-4:]
-	} else if maskedToken != "" {
-		maskedToken = "··set··"
+	var maskedToken string
+	if len(m.state.APIToken) > 8 {
+		maskedToken = m.state.APIToken[:4] + "···" + m.state.APIToken[len(m.state.APIToken)-4:]
+	} else if m.state.APIToken != "" {
+		maskedToken = "··set··" //nolint:gosec // display mask, not a credential
 	}
 
 	lines := []string{
@@ -528,7 +528,7 @@ func (m Model) viewReview() string {
 		summarySectionStyle.Render("LLM Provider & Security"),
 		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("OpenRouter:"), m.summaryBool(m.state.OpenRouterKey != "")),
 		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("Ollama:"), m.state.OllamaURL),
-		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("API Token:"), m.summaryBool(m.state.APIToken != "")),
+		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("API Token:"), inputValueStyle.Render(maskedToken)),
 		"",
 		summarySectionStyle.Render("Observability"),
 		fmt.Sprintf("  %s %s", summaryKeyStyle.Render("Loki:"), m.summaryBool(m.state.EnableLoki)),
