@@ -344,6 +344,19 @@ func (a *Agent) buildResourceSnapshot() predictor.ResourceSnapshot {
 	return snap
 }
 
+// resolveOwnerForEntity looks up the pod owning controller from the resource informer.
+// Returns ("", "") when the informer isn't synced or the pod isn't tracked.
+func (a *Agent) resolveOwnerForEntity(namespace, entity string) (kind, name string) {
+	if a.resourcesCollector == nil || !a.resourcesCollector.HasSynced() {
+		return "", ""
+	}
+	podName := entity
+	if namespace == "" {
+		_, podName = models.ParseEntity(entity)
+	}
+	return a.resourcesCollector.GetPodOwner(namespace, podName)
+}
+
 func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now time.Time, scrapeNum int64) {
 	entity := models.FormatEntity(p.Namespace, p.Entity)
 	if p.Namespace == "" {
@@ -373,6 +386,8 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 		pattern = p.MetricName
 	}
 
+	ownerKind, ownerName := a.resolveOwnerForEntity(ns, entity)
+
 	anomaly := &models.AnomalyRecord{
 		ID:         a.nextAnomalyID(prefix),
 		Entity:     entity,
@@ -382,6 +397,8 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 		Pattern:    pattern,
 		Status:     models.AnomalyStatusDetected,
 		DetectedAt: &now,
+		OwnerKind:  ownerKind,
+		OwnerName:  ownerName,
 	}
 	if _, err := a.store.UpsertOpenAnomaly(anomaly); err != nil {
 		slog.Error("agent: save anomaly", "scrape_num", scrapeNum, "error", err)

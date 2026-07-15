@@ -27,6 +27,8 @@ type PodState struct {
 	RestartCount  int32    `json:"restart_count"`
 	MemLimitBytes float64  `json:"mem_limit_bytes"`
 	Conditions    []string `json:"conditions,omitempty"`
+	OwnerKind     string   `json:"owner_kind,omitempty"`
+	OwnerName     string   `json:"owner_name,omitempty"`
 }
 
 // NodeState represents a snapshot of a node's current state.
@@ -192,6 +194,18 @@ func (rc *ResourcesCollector) Snapshot() (failing []PodState, unhealthy []string
 	return failing, unhealthy, pods
 }
 
+// GetPodOwner returns the controlling owner kind and name for a pod, or ("", "") if not found.
+func (rc *ResourcesCollector) GetPodOwner(namespace, name string) (kind, ownerName string) {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	for _, p := range rc.pods {
+		if p.Namespace == namespace && p.Name == name {
+			return p.OwnerKind, p.OwnerName
+		}
+	}
+	return "", ""
+}
+
 // GetFailingPods returns pods that are not Running or are Running but not Ready.
 func (rc *ResourcesCollector) GetFailingPods() []PodState {
 	failing, _, _ := rc.Snapshot()
@@ -258,6 +272,19 @@ func podToState(pod *corev1.Pod) PodState {
 		Namespace: pod.Namespace,
 		Phase:     string(pod.Status.Phase),
 	}
+	// Extract controlling owner reference for workload correlation.
+	for _, ref := range pod.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller {
+			s.OwnerKind = ref.Kind
+			s.OwnerName = ref.Name
+			break
+		}
+	}
+	if s.OwnerKind == "" && len(pod.OwnerReferences) > 0 {
+		ref := pod.OwnerReferences[0]
+		s.OwnerKind = ref.Kind
+		s.OwnerName = ref.Name
+	}
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.PodReady {
 			s.Ready = c.Status == corev1.ConditionTrue
@@ -272,6 +299,13 @@ func podToState(pod *corev1.Pod) PodState {
 			if mem, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
 				s.MemLimitBytes += float64(mem.Value())
 			}
+		}
+	}
+	for _, ref := range pod.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller {
+			s.OwnerKind = ref.Kind
+			s.OwnerName = ref.Name
+			break
 		}
 	}
 	return s

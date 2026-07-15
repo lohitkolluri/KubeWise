@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/lohitkolluri/KubeWise/pkg/k8s"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -119,40 +120,13 @@ func defaultVerificationChecks(plan models.RemediationPlan, clientset ...kuberne
 }
 
 // inferDeploymentFromPodName attempts to derive the deployment/owner name from a pod name.
+// Delegates to the shared k8s.InferWorkloadFromPodName for standard K8s naming conventions.
 // Typical pod name shapes:
 //   - Deployment:  <name>-<replicasetHash>-<podHash>      (2 trailing segments)
 //   - DaemonSet:   <name>-<hash>                           (1 trailing hash segment)
 //   - StatefulSet: <name>-<ordinal>                        (1 trailing numeric segment)
-// Returns "" when the name is ambiguous (< 3 segments and not clearly DaemonSet/StatefulSet).
 func inferDeploymentFromPodName(pod string) string {
-	parts := strings.Split(pod, "-")
-	if len(parts) < 2 {
-		return ""
-	}
-	if len(parts) >= 3 {
-		// Deployment-style: drop last two segments (hash + suffix).
-		return strings.Join(parts[:len(parts)-2], "-")
-	}
-	// Exactly 2 segments: check if the last segment is numeric (StatefulSet ordinal)
-	// or alphanumeric (DaemonSet hash). Strip only 1 segment.
-	last := parts[len(parts)-1]
-	if isAllDigits(last) {
-		return parts[0] // StatefulSet: <name>-<ordinal>
-	}
-	if len(last) >= 4 && len(last) <= 10 {
-		return parts[0] // DaemonSet: <name>-<hash>
-	}
-	return ""
-}
-
-// isAllDigits reports whether s consists entirely of decimal digits.
-func isAllDigits(s string) bool {
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return len(s) > 0
+	return k8s.InferWorkloadFromPodName(pod)
 }
 
 // inferOwnerFromPod queries the Kubernetes API for a pod and reads its OwnerReferences

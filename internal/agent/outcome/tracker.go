@@ -9,6 +9,7 @@ import (
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/predictor"
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
+	"github.com/lohitkolluri/KubeWise/pkg/k8s"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -136,33 +137,15 @@ func predictionHit(tp models.TrackedPrediction, failing map[string]struct{}, res
 }
 
 // inferDeploymentFromPodName attempts to derive the owner name from a pod name.
-// Duplicated from remediator package since outcome can't import it.
+// Delegates to the shared k8s.InferWorkloadFromPodName.
 func inferDeploymentFromPodName(pod string) string {
-	if pod == "" {
-		return ""
-	}
-	parts := strings.Split(pod, "-")
-	if len(parts) < 2 {
-		return ""
-	}
-	if len(parts) >= 3 {
-		return strings.Join(parts[:len(parts)-2], "-")
-	}
-	return parts[0] // 2 segments: treat first segment as owner name (DaemonSet/StatefulSet)
+	return k8s.InferWorkloadFromPodName(pod)
 }
 
 // podBelongsToDeployment checks if a pod name belongs to a deployment/owner.
+// Delegates to the shared k8s.PodBelongsToWorkload.
 func podBelongsToDeployment(podName, deployment string) bool {
-	if deployment == "" || podName == "" {
-		return false
-	}
-	parts := strings.Split(podName, "-")
-	for i := len(parts) - 1; i >= 1; i-- {
-		if strings.Join(parts[:i], "-") == deployment {
-			return true
-		}
-	}
-	return false
+	return k8s.PodBelongsToWorkload(podName, deployment)
 }
 
 func shortID() string {

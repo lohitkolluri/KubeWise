@@ -23,4 +23,6 @@ type AnomalyRecord struct {
 	DetectedAt   *time.Time `json:"detected_at,omitempty"`
 	RemediatedAt *time.Time `json:"remediated_at,omitempty"`
 	Status       string     `json:"status"`
+	OwnerKind    string     `json:"owner_kind,omitempty"`
+	OwnerName    string     `json:"owner_name,omitempty"`
 }

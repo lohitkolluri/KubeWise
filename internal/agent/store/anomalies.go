@@ -162,6 +162,38 @@ func (s *Store) listAllAnomalies() ([]models.AnomalyRecord, error) {
 	return records, err
 }
 
+// ListAnomaliesByOwner returns anomalies matching an owner kind and name, up to limit.
+// This enables querying anomalies across pod restarts for the same owner (e.g. a Deployment).
+func (s *Store) ListAnomaliesByOwner(ownerKind, ownerName string, limit int) ([]models.AnomalyRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var records []models.AnomalyRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAnomalies)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var r models.AnomalyRecord
+			if err := json.Unmarshal(v, &r); err != nil {
+				return nil // skip corrupt records
+			}
+			if r.OwnerKind == ownerKind && r.OwnerName == ownerName {
+				records = append(records, r)
+				if len(records) >= limit {
+					return fmt.Errorf("limit reached")
+				}
+			}
+			return nil
+		})
+	})
+	if err != nil && err.Error() == "limit reached" {
+		return records, nil
+	}
+	return records, err
+}
+
 // GetAnomaly retrieves a single anomaly record by ID.
 func (s *Store) GetAnomaly(id string) (*models.AnomalyRecord, error) {
 	var record *models.AnomalyRecord
