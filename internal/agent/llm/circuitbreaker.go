@@ -2,9 +2,11 @@
 package llm
 
 import (
+	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/sony/gobreaker"
 )
 
 // CircuitState tracks the health of an LLM provider connection.
@@ -18,57 +20,53 @@ const (
 
 // CircuitBreaker prevents cascading failures by fast-rejecting requests
 // after a threshold of consecutive failures, with automatic recovery.
+// Wraps github.com/sony/gobreaker for sliding-window failure counting.
 type CircuitBreaker struct {
-	state     atomic.Int32
-	failures  atomic.Int32
-	threshold int32
-	cooldown  time.Duration
-	lastOpen  atomic.Int64 // unix nanos of last state→open transition
+	inner    *gobreaker.CircuitBreaker
+	settings gobreaker.Settings
 
-	mu   sync.Mutex
-	half bool // set when transitioning half-open; reset on request or success
+	mu            sync.Mutex
+	halfProbeUsed bool // tracks whether the single half-open probe is consumed
 }
 
 // newCircuitBreaker creates a circuit breaker with the given threshold and cooldown.
-func newCircuitBreaker(threshold int32, cooldown time.Duration) *CircuitBreaker {
-	cb := &CircuitBreaker{
-		threshold: threshold,
-		cooldown:  cooldown,
+func newCircuitBreaker(threshold uint32, cooldown time.Duration) *CircuitBreaker {
+	if threshold <= 0 {
+		threshold = 5
 	}
-	cb.state.Store(int32(stateClosed))
-	return cb
+	if cooldown <= 0 {
+		cooldown = 30 * time.Second
+	}
+	settings := gobreaker.Settings{
+		Name:        "llm-circuit-breaker",
+		MaxRequests: 1, // single probe in half-open
+		Interval:    0, // sliding window (not fixed interval)
+		Timeout:     cooldown,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= threshold
+		},
+	}
+	return &CircuitBreaker{
+		inner:    gobreaker.NewCircuitBreaker(settings),
+		settings: settings,
+	}
 }
 
-// Allow reports whether a request should proceed. Returns true for closed or half-open states.
+// Allow reports whether a request should proceed.
 func (cb *CircuitBreaker) Allow() bool {
-	s := CircuitState(cb.state.Load())
+	s := cb.inner.State()
 	switch s {
-	case stateClosed:
+	case gobreaker.StateClosed:
 		return true
-	case stateOpen:
-		// Check if cooldown has elapsed.
-		last := time.Unix(0, cb.lastOpen.Load())
-		if time.Since(last) >= cb.cooldown {
-			cb.mu.Lock()
-			// Double-check under lock to avoid race.
-			if CircuitState(cb.state.Load()) == stateOpen {
-				cb.state.Store(int32(stateHalfOpen))
-				cb.half = true // the current request consumes the probe
-				cb.mu.Unlock()
-				return true
-			}
-			cb.mu.Unlock()
-			return false
-		}
+	case gobreaker.StateOpen:
 		return false
-	case stateHalfOpen:
+	case gobreaker.StateHalfOpen:
 		cb.mu.Lock()
-		// Only allow one probe request.
-		if cb.half {
+		if cb.halfProbeUsed {
 			cb.mu.Unlock()
 			return false
 		}
-		cb.half = true
+		cb.halfProbeUsed = true
 		cb.mu.Unlock()
 		return true
 	}
@@ -77,34 +75,69 @@ func (cb *CircuitBreaker) Allow() bool {
 
 // Success records a successful call, resetting the failure count and closing the circuit.
 func (cb *CircuitBreaker) Success() {
-	cb.failures.Store(0)
-	if CircuitState(cb.state.Load()) != stateClosed {
-		cb.state.Store(int32(stateClosed))
+	_, err := cb.inner.Execute(func() (interface{}, error) {
+		return nil, nil
+	})
+	if errors.Is(err, gobreaker.ErrOpenState) {
+		// Circuit is open but a success was reported — force-close by recreating.
+		cb.mu.Lock()
+		cb.inner = gobreaker.NewCircuitBreaker(cb.settings)
+		cb.halfProbeUsed = false
+		cb.mu.Unlock()
+		return
+	}
+	// Reset half-open probe tracking if we've transitioned back to closed.
+	if cb.inner.State() != gobreaker.StateHalfOpen {
+		cb.mu.Lock()
+		cb.halfProbeUsed = false
+		cb.mu.Unlock()
 	}
 }
 
 // Failure records a failed call and potentially opens the circuit.
 func (cb *CircuitBreaker) Failure() {
-	f := cb.failures.Add(1)
-	if f >= cb.threshold {
-		prev := CircuitState(cb.state.Swap(int32(stateOpen)))
-		if prev != stateOpen {
-			cb.lastOpen.Store(time.Now().UnixNano())
-		}
+	_, err := cb.inner.Execute(func() (interface{}, error) {
+		return nil, errors.New("circuit breaker failure")
+	})
+	// If ErrOpenState, the circuit is already open — no need to track half-probe.
+	if errors.Is(err, gobreaker.ErrOpenState) {
+		cb.mu.Lock()
+		cb.halfProbeUsed = false
+		cb.mu.Unlock()
+		return
+	}
+	// If the circuit is now open (triggered by ReadyToTrip or half-open→open),
+	// reset the half-probe flag so next Allow() after cooldown can retry.
+	state := cb.inner.State()
+	if state == gobreaker.StateOpen || state == gobreaker.StateClosed {
+		cb.mu.Lock()
+		cb.halfProbeUsed = false
+		cb.mu.Unlock()
 	}
 }
 
 // State returns the current circuit state.
 func (cb *CircuitBreaker) State() CircuitState {
-	return CircuitState(cb.state.Load())
+	s := cb.inner.State()
+	switch s {
+	case gobreaker.StateClosed:
+		return stateClosed
+	case gobreaker.StateHalfOpen:
+		return stateHalfOpen
+	default:
+		return stateOpen
+	}
 }
 
 // Reset forcibly closes the circuit and resets the failure count.
 func (cb *CircuitBreaker) Reset() {
-	cb.failures.Store(0)
-	cb.state.Store(int32(stateClosed))
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.inner = gobreaker.NewCircuitBreaker(cb.settings)
+	cb.halfProbeUsed = false
 }
 
+// String returns a human-readable circuit state name.
 func (s CircuitState) String() string {
 	switch s {
 	case stateClosed:

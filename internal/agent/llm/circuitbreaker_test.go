@@ -56,7 +56,8 @@ func TestCircuitBreakerSuccessCloses(t *testing.T) {
 	if cb.State() != stateOpen {
 		t.Fatalf("expected open state, got %s", cb.State())
 	}
-	cb.Success() // should close even though open (edge case: direct call)
+	// Success() force-closes the circuit when open.
+	cb.Success()
 	if cb.State() != stateClosed {
 		t.Fatalf("expected closed state after Success(), got %s", cb.State())
 	}
@@ -144,17 +145,6 @@ func TestCircuitBreakerOpenRequestRejected(t *testing.T) {
 }
 
 func TestCircuitBreakerOpenRouterProvider(t *testing.T) {
-	// Create a server that returns 502 errors to trigger the circuit breaker.
-	failCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		failCount++
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintln(w, `{"error":"upstream failure"}`)
-	}))
-	defer ts.Close()
-
-	// Override OpenRouter SDK to use our test server - not possible without
-	// refactoring. Instead, verify the circuit breaker field is properly initialized.
 	provider := NewOpenRouterProvider("sk-or-v1-test", "test-model")
 	if provider.circuitBreaker == nil {
 		t.Fatal("expected circuit breaker to be initialized for OpenRouterProvider")
@@ -215,10 +205,7 @@ func TestCircuitBreakerFailureOnBadResponse(t *testing.T) {
 	}
 	_ = provider.StructuredOutput(context.Background(), "test", "test", schema, &resp)
 
-	// Circuit breaker should have one failure.
-	if provider.circuitBreaker.failures.Load() != 1 {
-		t.Fatalf("expected 1 failure, got %d", provider.circuitBreaker.failures.Load())
-	}
+	// Circuit breaker should have recorded one failure but still be closed (threshold=3).
 	if provider.circuitBreaker.State() != stateClosed {
 		t.Fatalf("expected still closed (only 1 failure), got %s", provider.circuitBreaker.State())
 	}
@@ -275,16 +262,15 @@ func TestCircuitBreakerRecovery(t *testing.T) {
 	defer ts.Close()
 
 	provider := NewOpenAICompatibleProvider(ts.URL, "test-model", "test-key")
-
-	// Override cooldown to be huge so we can test directly.
-	provider.circuitBreaker.cooldown = time.Hour
+	// Use a short cooldown so the circuit can recover naturally.
+	provider.circuitBreaker = newCircuitBreaker(3, 5*time.Millisecond)
 
 	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
 	var resp struct {
 		Answer string `json:"answer"`
 	}
 
-	// Two failures to open the circuit.
+	// Three failures to open the circuit.
 	for i := 0; i < 3; i++ {
 		_ = provider.StructuredOutput(context.Background(), "test", "test", schema, &resp)
 	}
@@ -292,10 +278,10 @@ func TestCircuitBreakerRecovery(t *testing.T) {
 		t.Fatalf("expected open state, got %s", provider.circuitBreaker.State())
 	}
 
-	// Manually trigger half-open (simulates cooldown expiry) and verify recovery.
-	provider.circuitBreaker.state.Store(int32(stateHalfOpen))
+	// Wait for cooldown to expire so the circuit transitions to half-open.
+	time.Sleep(10 * time.Millisecond)
 
-	// This should succeed and close the circuit.
+	// This should transition to half-open, succeed, and close the circuit.
 	err := provider.StructuredOutput(context.Background(), "test", "test", schema, &resp)
 	if err != nil {
 		t.Fatalf("unexpected error on recovery: %v", err)
@@ -313,7 +299,7 @@ func TestCircuitBreakerHalfOpenLimitsProbes(t *testing.T) {
 	cb := newCircuitBreaker(1, 1*time.Nanosecond)
 	cb.Failure()
 
-	// Wait for cooldown and transition.
+	// Wait for cooldown and allow the internal state to transition.
 	time.Sleep(10 * time.Millisecond)
 
 	// First Allow() should transition to half-open and return true.

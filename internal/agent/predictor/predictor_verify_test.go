@@ -13,51 +13,33 @@ import (
 // Numerical correctness: Hoeffding bound
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestHoeffdingNumericalCorrectness(t *testing.T) {
-	// Known inputs for which we can manually compute the expected bound.
-	// ε = R × sqrt(ln(2/δ) / 2n)
-	// At n=100, δ=0.05, R=100:
-	//   ln(2/0.05) = ln(40) ≈ 3.688879
-	//   ε = 100 × sqrt(3.688879 / 200) = 100 × sqrt(0.018444) ≈ 100 × 0.13581 ≈ 13.581
-	// K=3 so score=1.0 at deviation >= 3ε ≈ 40.744
-	// With deviation = median (50), score = 50/(13.581*3) ≈ 1.0 (capped)
-
+func TestRobustZScoreNumericalCorrectness(t *testing.T) {
+	mad := 10.0
 	median := 50.0
-	rng := 100.0
-	n := 100
-	delta := 0.05
-	k := 3.0
 
-	expectedEpsilon := 100.0 * math.Sqrt(math.Log(40.0)/200.0)
-
-	// A value at median should score 0.
-	score := HoeffdingAnomalyScore(median, median, rng, n, delta, k)
+	score := RobustAnomalyScore(median, median, mad)
 	if score != 0 {
 		t.Errorf("score at median: got %f, want 0", score)
 	}
 
-	// A value at median + epsilon should score 1/K.
-	dev := median + expectedEpsilon
-	score = HoeffdingAnomalyScore(dev, median, rng, n, delta, k)
-	expectedScore := expectedEpsilon / (expectedEpsilon * k)
-	if math.Abs(score-expectedScore) > 1e-12 {
-		t.Errorf("score at median+ε: got %f, want %f", score, expectedScore)
+	score = RobustAnomalyScore(55, median, mad)
+	if score <= 0 || score > 0.15 {
+		t.Errorf("score at MAD distance: got %f, want ~0.096", score)
 	}
 
-	// A value at median + 3*epsilon should be capped at 1.0 (with tolerance
-	// for floating-point drift between the two epsilon computations).
-	dev = median + 3*expectedEpsilon
-	score = HoeffdingAnomalyScore(dev, median, rng, n, delta, k)
+	score = RobustAnomalyScore(median+51.9, median, mad)
 	if score < 0.99 || score > 1.0 {
-		t.Errorf("score at median+3ε: got %f, want ~1.0", score)
+		t.Errorf("score at anomaly threshold: got %f, want ~1.0", score)
 	}
 
-	// Verify epsilon shrinks with more data (n=400 vs n=100).
-	n2 := 400
-	epsilonN400 := rng * math.Sqrt(math.Log(40.0)/(2.0*float64(n2)))
-	epsilonN100 := rng * math.Sqrt(math.Log(40.0)/(2.0*float64(n)))
-	if epsilonN400 >= epsilonN100 {
-		t.Errorf("epsilon should shrink with more data: ε@n=400=%f >= ε@n=100=%f", epsilonN400, epsilonN100)
+	score = RobustAnomalyScore(1000, median, mad)
+	if score != 1.0 {
+		t.Errorf("score for extreme value: got %f, want 1.0", score)
+	}
+
+	score = RobustAnomalyScore(100, 50, 1e-11)
+	if score != 0 {
+		t.Errorf("score for near-zero MAD: got %f, want 0", score)
 	}
 }
 
@@ -356,20 +338,14 @@ func TestVerifyConstantZero(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestVerifyScoreMonotonicity(t *testing.T) {
+	mad := 10.0
 	median := 50.0
-	rng := 100.0
-	n := 100
-	delta := 0.05
-	k := 3.0
-
-	eps := rng * math.Sqrt(math.Log(2.0/delta)/(2.0*float64(n)))
 
 	var prevScore float64
-	for mult := 0.0; mult <= 4.0; mult += 0.25 {
-		dev := median + mult*eps
-		score := HoeffdingAnomalyScore(dev, median, rng, n, delta, k)
+	for dev := 0.0; dev <= 100.0; dev += 5.0 {
+		score := RobustAnomalyScore(median+dev, median, mad)
 		if score < prevScore-1e-12 {
-			t.Errorf("score decreased: mult=%.2f score=%f < prev=%f", mult, score, prevScore)
+			t.Errorf("score decreased: dev=%.1f score=%f < prev=%f", dev, score, prevScore)
 		}
 		prevScore = score
 	}

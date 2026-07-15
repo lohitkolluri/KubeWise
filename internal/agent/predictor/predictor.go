@@ -280,7 +280,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			cp, ok := p.changepoints[key]
 			if !ok {
-				cp = NewChangepointDetector(DefaultChangepointMinSeg, DefaultChangepointInterval)
+				cp = NewChangepointDetector(DefaultChangepointWindow, DefaultChangepointMinSample, DefaultChangepointBlockSize, DefaultChangepointConfidence)
 				p.changepoints[key] = cp
 			}
 
@@ -315,23 +315,14 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				continue
 			}
 
-			// --- adaptive-median + Hoeffding scoring -------------------------------
-			median, mad, rng, n, ok := est.Stats()
+			// --- adaptive-median + robust Z-score scoring ----------------------------
+			median, mad, _, n, ok := est.Stats()
 			if !ok || n < p.config.MinWarmup {
 				continue
 			}
 
-			dispersion := rng
-			if mad > 0 {
-				madSpread := mad * 6
-				if madSpread > dispersion {
-					dispersion = madSpread
-				}
-			}
-			primaryScore := HoeffdingAnomalyScore(
-				pt.Value, median, dispersion, n,
-				p.config.HoeffdingDelta,
-				p.config.HoeffdingK,
+			primaryScore := RobustAnomalyScore(
+				pt.Value, median, mad,
 			)
 
 			// --- rate-of-change boost -----------------------------------------------

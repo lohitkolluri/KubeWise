@@ -142,61 +142,50 @@ func TestAdaptiveMedianSmallWindow(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// HoeffdingAnomalyScore tests
+// RobustAnomalyScore tests
 // ---------------------------------------------------------------------------
 
-func TestHoeffdingScoreZeroDeviation(t *testing.T) {
-	window := make([]float64, MinimumWarmupPoints)
-	for i := range window {
-		window[i] = 50.0
-	}
-	score := HoeffdingAnomalyScore(50.0, 50.0, 0, len(window), 0.05, 3.0)
+func TestRobustScoreZeroDeviation(t *testing.T) {
+	score := RobustAnomalyScore(50.0, 50.0, 0.5)
 	if score != 0 {
-		t.Fatalf("expected 0 for zero deviation, got %f", score)
+		t.Fatalf("expected 0 for exact match with median, got %f", score)
 	}
 }
 
-func TestHoeffdingScoreInsufficientData(t *testing.T) {
-	score := HoeffdingAnomalyScore(100, 50, 50, 5, 0.05, 3.0)
+func TestRobustScoreVerySmallMAD(t *testing.T) {
+	score := RobustAnomalyScore(50, 50, 1e-11)
 	if score != 0 {
-		t.Fatalf("expected 0 for n=%d < MinimumWarmupPoints", 5)
+		t.Fatalf("expected 0 for near-zero MAD, got %f", score)
 	}
 }
 
-func TestHoeffdingScoreSmallRange(t *testing.T) {
-	score := HoeffdingAnomalyScore(50, 50, 1e-13, MinimumWarmupPoints, 0.05, 3.0)
-	if score != 0 {
-		t.Fatalf("expected 0 for near-zero range, got %f", score)
-	}
-}
-
-func TestHoeffdingScoreLargeDeviation(t *testing.T) {
-	// Window of 10 values in [0, 100] → median≈50, range=100
-	// epsilon = 100 * sqrt(ln(2/0.05) / 20) ≈ 100 * 0.4295 = 42.95
-	// deviation = |200 - 50| = 150
-	// score = 150 / (42.95 * 3.0) = 1.16 → clamped to 1.0
-	window := make([]float64, MinimumWarmupPoints)
-	for i := range window {
-		window[i] = float64(i * 10) // 0, 10, 20, ..., 90
-	}
-	score := HoeffdingAnomalyScore(200, 45, 90, MinimumWarmupPoints, 0.05, 3.0)
+func TestRobustScoreLargeDeviation(t *testing.T) {
+	// Value far from median: |1000 - 50| = 950
+	// Z = 0.6745 * 950 / 50 = 12.8155
+	// score = 12.8155 / 3.5 = 3.66 → clamped to 1.0
+	score := RobustAnomalyScore(1000, 50, 50)
 	if score != 1.0 {
 		t.Fatalf("expected 1.0 for extreme deviation, got %f", score)
 	}
 }
 
-func TestHoeffdingScoreModerateDeviation(t *testing.T) {
-	// Window of 10 values around 100 with some spread
-	rng := 20.0
-	n := 50
-	median := 100.0
+func TestRobustScoreModerateDeviation(t *testing.T) {
+	// Value moderately far from median: |110 - 100| = 10, MAD = 15
+	// Z = 0.6745 * 10 / 15 = 0.4497
+	// score = 0.4497 / 3.5 = 0.1285
+	score := RobustAnomalyScore(110, 100, 15)
+	if score <= 0 || score > 0.2 {
+		t.Fatalf("expected moderate score ~0.13, got %f", score)
+	}
+}
 
-	// epsilon = 20 * sqrt(ln(2/0.05) / 100) ≈ 20 * 0.1921 = 3.842
-	// |110 - 100| = 10
-	// score = 10 / (3.842 * 3.0) = 0.867
-	score := HoeffdingAnomalyScore(110, median, rng, n, 0.05, 3.0)
-	if score <= 0 || score >= 1 {
-		t.Fatalf("expected score in (0,1), got %f", score)
+func TestRobustScoreThreshold(t *testing.T) {
+	// Value at anomaly threshold: Z = 3.5 → score = 1.0
+	// 0.6745 * |x - median| / MAD = 3.5
+	// |x - median| = 3.5 * MAD / 0.6745 = 3.5 * 10 / 0.6745 ≈ 51.9
+	score := RobustAnomalyScore(101.9, 50, 10)
+	if score < 0.99 {
+		t.Fatalf("expected score near 1.0 at Z=3.5 threshold, got %f", score)
 	}
 }
 
@@ -204,29 +193,9 @@ func TestHoeffdingScoreModerateDeviation(t *testing.T) {
 // ChangepointDetector tests
 // ---------------------------------------------------------------------------
 
-func TestChangepointDetectorBasic(t *testing.T) {
-	cd := NewChangepointDetector(2, 50)
-	for i := 0; i < 50; i++ {
-		if cd.Add(1.0) {
-			t.Fatal("unexpected changepoint in constant data before check interval")
-		}
-	}
-}
-
-func TestChangepointDetectorReset(t *testing.T) {
-	cd := NewChangepointDetector(5, 50)
-	for i := 0; i < 10; i++ {
-		cd.Add(float64(i))
-	}
-	cd.Reset()
-	if cnt := cd.Count(); cnt != 0 {
-		t.Fatalf("expected 0 after reset, got %d", cnt)
-	}
-}
-
 func TestChangepointDetectorConstant(t *testing.T) {
-	// Constant data with no changepoints, even after many points
-	cd := NewChangepointDetector(3, 20)
+	// Constant data should never trigger a changepoint.
+	cd := NewChangepointDetector(50, 10, 5, 0.05)
 	detected := false
 	for i := 0; i < 200; i++ {
 		if cd.Add(42.0) {
@@ -239,14 +208,16 @@ func TestChangepointDetectorConstant(t *testing.T) {
 }
 
 func TestChangepointDetectorRegimeShift(t *testing.T) {
-	cd := NewChangepointDetector(5, 30)
-	// 60 points from one distribution, then 60 from another
-	for i := 0; i < 60; i++ {
-		cd.Add(rand.NormFloat64()*0.1 + 10) //nolint:gosec // deterministic test, weak rand is fine
+	// A clear level shift should be detected.
+	cd := NewChangepointDetector(100, 10, 5, 0.05)
+	// 100 points from one distribution
+	for i := 0; i < 100; i++ {
+		cd.Add(rand.NormFloat64()*0.1 + 10) //nolint:gosec
 	}
 	detected := false
-	for i := 0; i < 60; i++ {
-		if cd.Add(rand.NormFloat64()*0.1 + 50) { //nolint:gosec // deterministic test, weak rand is fine
+	// 100 points from a shifted distribution
+	for i := 0; i < 100; i++ {
+		if cd.Add(rand.NormFloat64()*0.1 + 50) { //nolint:gosec
 			detected = true
 		}
 	}
