@@ -63,7 +63,10 @@ type promQuery struct {
 func queries() []promQuery {
 	return []promQuery{
 		{Name: "pod_cpu_usage", Query: `rate(container_cpu_usage_seconds_total{container!=""}[5m])`},
-		{Name: "pod_memory_usage", Query: `container_memory_working_set_bytes{container!=""}`},
+		// Memory usage omitted from statistical detection — gradual trends
+		// (F1=0.005 with RZ) are better handled by the LLM correlator path
+		// when triggered by related symptoms (OOM, restarts). The data is
+		// still available via kwctl's direct metric queries.
 		{Name: "restart_rate", Query: `rate(kube_pod_container_status_restarts_total[5m])`},
 		{Name: "oomkilled", Query: `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}`},
 		{Name: "crashloop", Query: `kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}`},
