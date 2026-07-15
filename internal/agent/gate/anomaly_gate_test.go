@@ -10,6 +10,7 @@ func TestGate_SustainedScore(t *testing.T) {
 	g.config.SustainCount = 3
 	g.config.ScrapeInterval = 30 * time.Second
 	g.config.Threshold = 0.3
+	g.config.PersistThreshold = 0.3
 	g.config.CooldownDuration = 5 * time.Minute
 	now := time.Now()
 
@@ -212,6 +213,7 @@ func TestGate_ObserveScoreThenFilter(t *testing.T) {
 	g := NewGate(DefaultConfig())
 	g.config.SustainCount = 3
 	g.config.Threshold = 0.3
+	g.config.PersistThreshold = 0.3
 	g.config.CooldownDuration = 5 * time.Minute
 	now := time.Now()
 
@@ -234,6 +236,7 @@ func TestGate_SustainResetsOnSubthreshold(t *testing.T) {
 	g := NewGate(DefaultConfig())
 	g.config.SustainCount = 3
 	g.config.Threshold = 0.3
+	g.config.PersistThreshold = 0.3
 	now := time.Now()
 
 	// Two good scrapes, then a bad one resets the counter.

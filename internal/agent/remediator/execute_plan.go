@@ -25,19 +25,21 @@ func (c *Correlator) executePlanAndVerify(
 	}
 
 	steps := plan.EffectiveSteps()
-	result, err := c.executor.Execute(ctx, plan)
-	if err != nil {
-		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), prompt, result)
-		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
-		return fmt.Errorf("execute runbook: %w", err)
-	}
 
+	// Set cooldown BEFORE execution (claim at gate time, extend after success).
 	if tier == models.RiskTier2 {
 		for _, step := range steps {
 			if step.Type != waitActionType {
 				c.tierAssigner.SetCooldown(step.Namespace, step.Type)
 			}
 		}
+	}
+
+	result, err := c.executor.Execute(ctx, plan)
+	if err != nil {
+		c.logAudit(&plan, matched, tier, models.AuditFailed, err.Error(), prompt, result)
+		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
+		return fmt.Errorf("execute runbook: %w", err)
 	}
 
 	now := time.Now()

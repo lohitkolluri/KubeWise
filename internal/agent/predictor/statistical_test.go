@@ -277,10 +277,11 @@ func TestRateOfChangeSinglePoint(t *testing.T) {
 
 func TestRateOfChangePositiveSlope(t *testing.T) {
 	roc := &RateOfChange{}
+	base := time.Now()
 	pts := []MetricPoint{
-		{Value: 1, Timestamp: time.Now()},
-		{Value: 2, Timestamp: time.Now()},
-		{Value: 3, Timestamp: time.Now()},
+		{Value: 1, Timestamp: base},
+		{Value: 2, Timestamp: base.Add(1 * time.Second)},
+		{Value: 3, Timestamp: base.Add(2 * time.Second)},
 	}
 	v := roc.Velocity(pts)
 	if v.Slope <= 0 {
@@ -293,10 +294,11 @@ func TestRateOfChangePositiveSlope(t *testing.T) {
 
 func TestRateOfChangeNegativeSlope(t *testing.T) {
 	roc := &RateOfChange{}
+	base := time.Now()
 	pts := []MetricPoint{
-		{Value: 10, Timestamp: time.Now()},
-		{Value: 8, Timestamp: time.Now()},
-		{Value: 6, Timestamp: time.Now()},
+		{Value: 10, Timestamp: base},
+		{Value: 8, Timestamp: base.Add(1 * time.Second)},
+		{Value: 6, Timestamp: base.Add(2 * time.Second)},
 	}
 	v := roc.Velocity(pts)
 	if v.Slope >= 0 {
@@ -310,11 +312,12 @@ func TestRateOfChangeNegativeSlope(t *testing.T) {
 func TestRateOfChangeAcceleration(t *testing.T) {
 	roc := &RateOfChange{}
 	// Values that curve upward → positive acceleration
+	base := time.Now()
 	pts := []MetricPoint{
-		{Value: 1, Timestamp: time.Now()},
-		{Value: 2, Timestamp: time.Now()},
-		{Value: 5, Timestamp: time.Now()},
-		{Value: 10, Timestamp: time.Now()},
+		{Value: 1, Timestamp: base},
+		{Value: 2, Timestamp: base.Add(1 * time.Second)},
+		{Value: 5, Timestamp: base.Add(2 * time.Second)},
+		{Value: 10, Timestamp: base.Add(3 * time.Second)},
 	}
 	v := roc.Velocity(pts)
 	if v.Acceleration <= 0 {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
@@ -35,6 +36,7 @@ type LLMRouter struct {
 	client      *llm.Client
 	cfg         RouterConfig
 	costTracker *CostTracker
+	mu          sync.Mutex
 }
 
 // New creates an LLMRouter wrapping the provided client with the given config.
@@ -96,6 +98,8 @@ func (r *LLMRouter) Route(ctx context.Context, task TaskType, input LLMInput) (*
 
 // callModel sets the model on the client and invokes StructuredOutput.
 func (r *LLMRouter) callModel(ctx context.Context, model string, input LLMInput) (*LLMResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.client.SetModel(model)
 	var respData json.RawMessage
 	usage, err := r.client.StructuredOutputWithUsage(ctx, input.SystemPrompt, input.UserContent, input.ResponseSchema, &respData)

@@ -9,7 +9,7 @@ import (
 
 // validatePlan is a thin wrapper that delegates to validateRemediationPlan with the correlator's config.
 func (c *Correlator) validatePlan(plan models.RemediationPlan, anomalies []models.AnomalyRecord) error {
-	return validateRemediationPlan(c.cfg, plan, anomalies)
+	return validateRemediationPlan(c.snapshotConfig(), plan, anomalies)
 }
 
 func (c *Correlator) shouldRetryAfterValidation(err error) bool {

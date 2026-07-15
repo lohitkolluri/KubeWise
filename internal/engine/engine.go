@@ -63,7 +63,7 @@ func (re *RuleEngine) RuleCount() int {
 }
 
 func sortResults(results []RuleResult) {
-	sort.Slice(results, func(i, j int) bool {
+	sort.SliceStable(results, func(i, j int) bool {
 		return results[i].Confidence > results[j].Confidence
 	})
 }

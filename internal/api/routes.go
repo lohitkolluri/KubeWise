@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -217,18 +218,22 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	var records []models.AuditRecord
 	switch {
 	case status != "" && since != "":
-		// Prefer "since" semantics; filter status in-memory for now.
+		// Fetch more records than needed, then filter by status in-memory
+		// and cap at the requested limit.
 		ts, err := time.Parse(time.RFC3339, since)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid since: must be RFC3339")
 			return
 		}
-		all, err := s.store.ListAuditRecordsSince(ts, limit)
+		all, err := s.store.ListAuditRecordsSince(ts, limit*3)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list audit records: %v", err))
 			return
 		}
 		for _, rec := range all {
+			if len(records) >= limit {
+				break
+			}
 			if strings.EqualFold(string(rec.Status), status) {
 				records = append(records, rec)
 			}
@@ -325,9 +330,9 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func isLocalRequest(r *http.Request) bool {
-	host := r.RemoteAddr
-	if idx := strings.LastIndex(host, ":"); idx >= 0 {
-		host = host[:idx]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
 	}
 	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }

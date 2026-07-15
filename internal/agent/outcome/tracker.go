@@ -89,6 +89,31 @@ func predictionHit(tp models.TrackedPrediction, failing map[string]struct{}, res
 		return true
 	}
 
+	// Owner-aware matching: the predicted pod may have been restarted with a new name.
+	// Try inferring the owner (deployment/statefulset) from the entity.
+	_, podName := models.ParseEntity(entity)
+	owner := inferDeploymentFromPodName(podName)
+	if owner != "" {
+		for failingEntity := range failing {
+			fNs, fName := models.ParseEntity(failingEntity)
+			if fNs == tp.Namespace || (tp.Namespace == "" && fNs == "") {
+				if podBelongsToDeployment(fName, owner) {
+					return true
+				}
+			}
+		}
+		// Also check PodResources for matching owner
+		for _, p := range resources.PodResources {
+			e := models.FormatEntity(p.Namespace, p.Name)
+			if _, ok := failing[e]; !ok {
+				continue
+			}
+			if podBelongsToDeployment(p.Name, owner) {
+				return true
+			}
+		}
+	}
+
 	pattern := strings.ToLower(tp.Pattern)
 	switch {
 	case strings.Contains(pattern, "oom"), strings.Contains(pattern, "memory"):
@@ -97,7 +122,6 @@ func predictionHit(tp models.TrackedPrediction, failing map[string]struct{}, res
 			if e != entity {
 				continue
 			}
-			// Pod listed in failing pods or high memory pressure implied by pattern match elsewhere.
 			if _, ok := failing[e]; ok {
 				return true
 			}
@@ -108,6 +132,36 @@ func predictionHit(tp models.TrackedPrediction, failing map[string]struct{}, res
 		}
 	}
 
+	return false
+}
+
+// inferDeploymentFromPodName attempts to derive the owner name from a pod name.
+// Duplicated from remediator package since outcome can't import it.
+func inferDeploymentFromPodName(pod string) string {
+	if pod == "" {
+		return ""
+	}
+	parts := strings.Split(pod, "-")
+	if len(parts) < 2 {
+		return ""
+	}
+	if len(parts) >= 3 {
+		return strings.Join(parts[:len(parts)-2], "-")
+	}
+	return parts[0] // 2 segments: treat first segment as owner name (DaemonSet/StatefulSet)
+}
+
+// podBelongsToDeployment checks if a pod name belongs to a deployment/owner.
+func podBelongsToDeployment(podName, deployment string) bool {
+	if deployment == "" || podName == "" {
+		return false
+	}
+	parts := strings.Split(podName, "-")
+	for i := len(parts) - 1; i >= 1; i-- {
+		if strings.Join(parts[:i], "-") == deployment {
+			return true
+		}
+	}
 	return false
 }
 

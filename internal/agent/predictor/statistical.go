@@ -283,17 +283,19 @@ type VelocityResult struct {
 
 // Velocity computes the linear regression slope and acceleration from a
 // sequence of MetricPoints.  Requires at least 2 points for slope and 4+
-// for meaningful acceleration.
+// for meaningful acceleration. Uses actual timestamps (seconds since first
+// point) for the x-axis so the slope represents change per unit time.
 func (r *RateOfChange) Velocity(points []MetricPoint) VelocityResult {
 	if len(points) < 2 {
 		return VelocityResult{}
 	}
 
+	base := points[0].Timestamp
 	n := float64(len(points))
 	var sumX, sumY, sumXY, sumX2 float64
 
-	for i, p := range points {
-		x := float64(i)
+	for _, p := range points {
+		x := p.Timestamp.Sub(base).Seconds()
 		y := p.Value
 		sumX += x
 		sumY += y
@@ -326,10 +328,11 @@ func simpleSlope(points []MetricPoint) float64 {
 	if len(points) < 2 {
 		return 0
 	}
+	base := points[0].Timestamp
 	n := float64(len(points))
 	var sumX, sumY, sumXY, sumX2 float64
-	for i, p := range points {
-		x := float64(i)
+	for _, p := range points {
+		x := p.Timestamp.Sub(base).Seconds()
 		y := p.Value
 		sumX += x
 		sumY += y

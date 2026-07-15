@@ -38,6 +38,9 @@ func (s *Store) ListTrackedPredictions(outcome string, limit int) ([]models.Trac
 			return nil
 		}
 		return b.ForEach(func(_, v []byte) error {
+			if len(items) >= maxRecordsInMemory {
+				return fmt.Errorf("too many tracked predictions (>= %d); use filtering to narrow results", maxRecordsInMemory)
+			}
 			var tp models.TrackedPrediction
 			if err := json.Unmarshal(v, &tp); err != nil {
 				return nil

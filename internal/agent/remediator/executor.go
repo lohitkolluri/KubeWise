@@ -7,9 +7,11 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"sync/atomic"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -45,7 +47,7 @@ var toolActionRoutes = map[string]toolRoute{
 // through the tool plugin registry.
 type K8sExecutor struct {
 	clientset    kubernetes.Interface
-	dryRun       bool
+	dryRun       atomic.Bool
 	toolRegistry *tools.Registry
 }
 
@@ -72,14 +74,18 @@ func NewK8sExecutor(dryRun bool) (*K8sExecutor, error) {
 	_ = reg.Register(tools.NewArgoCDPlugin("", "", false))
 	_ = reg.Register(tools.NewTerraformPlugin(""))
 
-	return &K8sExecutor{clientset: clientset, dryRun: dryRun, toolRegistry: reg}, nil
+	exec := &K8sExecutor{clientset: clientset, toolRegistry: reg}
+	exec.dryRun.Store(dryRun)
+	return exec, nil
 }
 
 // NewK8sExecutorWithClient creates an executor with an existing clientset (for testing).
 // The tool registry is nil by default; call SetToolRegistry or RegisterToolPlugin when
 // tests need to exercise tool plugin dispatch.
 func NewK8sExecutorWithClient(clientset kubernetes.Interface, dryRun bool) *K8sExecutor {
-	return &K8sExecutor{clientset: clientset, dryRun: dryRun}
+	exec := &K8sExecutor{clientset: clientset}
+	exec.dryRun.Store(dryRun)
+	return exec
 }
 
 // SetToolRegistry sets the tool plugin registry. Used in tests and when wiring
@@ -100,7 +106,7 @@ func (e *K8sExecutor) RegisterToolPlugin(plugin tools.ToolPlugin) error {
 
 // SetDryRun updates the dry-run mode.
 func (e *K8sExecutor) SetDryRun(dryRun bool) {
-	e.dryRun = dryRun
+	e.dryRun.Store(dryRun)
 }
 
 // Clientset exposes the underlying Kubernetes client.
@@ -110,7 +116,7 @@ func (e *K8sExecutor) Clientset() kubernetes.Interface {
 
 // Execute runs the given plan (single action or multi-step runbook).
 func (e *K8sExecutor) Execute(ctx context.Context, plan models.RemediationPlan) (string, error) {
-	return e.ExecuteRunbook(ctx, plan, e.dryRun)
+	return e.ExecuteRunbook(ctx, plan, e.dryRun.Load())
 }
 
 // ExecuteForce runs the plan even when dry-run is enabled (operator-approved).
@@ -153,10 +159,34 @@ func (e *K8sExecutor) execute(ctx context.Context, plan models.RemediationPlan, 
 
 func (e *K8sExecutor) restartPod(ctx context.Context, namespace, name string) (string, error) {
 	err := e.clientset.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil {
+	if err == nil {
+		return fmt.Sprintf("deleted pod %s/%s (will be recreated by ReplicaSet)", namespace, name), nil
+	}
+	if !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("delete pod %s/%s: %w", namespace, name, err)
 	}
-	return fmt.Sprintf("deleted pod %s/%s (will be recreated by ReplicaSet)", namespace, name), nil
+
+	owner := inferDeploymentFromPodName(name)
+	if owner == "" {
+		return "", fmt.Errorf("pod %s/%s not found and could not infer owner", namespace, name)
+	}
+
+	labelKeys := []string{"app.kubernetes.io/name", "app"}
+	for _, k := range labelKeys {
+		sel := labels.SelectorFromSet(map[string]string{k: owner}).String()
+		pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil || len(pods.Items) == 0 {
+			continue
+		}
+		best := pickBestPodForLogs(pods.Items)
+		err = e.clientset.CoreV1().Pods(namespace).Delete(ctx, best.Name, metav1.DeleteOptions{})
+		if err != nil {
+			return "", fmt.Errorf("delete replacement pod %s/%s: %w", namespace, best.Name, err)
+		}
+		return fmt.Sprintf("deleted replacement pod %s/%s (original %s was already gone)", namespace, best.Name, name), nil
+	}
+
+	return "", fmt.Errorf("pod %s/%s not found and no replacement pod found for owner %s", namespace, name, owner)
 }
 
 func (e *K8sExecutor) deletePod(ctx context.Context, namespace, name string) (string, error) {
@@ -231,8 +261,22 @@ func (e *K8sExecutor) rollbackDeployment(ctx context.Context, namespace, name st
 
 	sort.Slice(revisions, func(i, j int) bool { return revisions[i].revision > revisions[j].revision })
 	previous := revisions[1].rs
-	deployment.Spec.Template = previous.Spec.Template
-	_, err = e.clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+
+	// Use strategic merge patch to replace only spec.template.spec, avoiding
+	// a TOCTOU race between the read and write of the full deployment object.
+	patch := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": previous.Spec.Template.Spec,
+			},
+		},
+	}
+	patchJSON, err := json.Marshal(patch)
+	if err != nil {
+		return "", fmt.Errorf("marshal rollback patch: %w", err)
+	}
+	_, err = e.clientset.AppsV1().Deployments(namespace).Patch(
+		ctx, name, types.StrategicMergePatchType, patchJSON, metav1.PatchOptions{})
 	if err != nil {
 		return "", fmt.Errorf("rollback deployment %s/%s to revision %d: %w", namespace, name, revisions[1].revision, err)
 	}

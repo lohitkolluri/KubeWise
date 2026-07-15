@@ -46,26 +46,32 @@ func anomalySignal(r *models.AnomalyRecord) string {
 
 // SaveAnomaly stores an anomaly record and maintains indexes.
 func (s *Store) SaveAnomaly(r *models.AnomalyRecord) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		_, err := s.saveAnomalyTx(tx, r)
+		return err
+	})
+}
+
+// saveAnomalyTx stores an anomaly record inside an existing transaction.
+func (s *Store) saveAnomalyTx(tx *bolt.Tx, r *models.AnomalyRecord) (bool, error) {
 	if r.ID == "" {
-		return fmt.Errorf("anomaly ID must not be empty")
+		return false, fmt.Errorf("anomaly ID must not be empty")
 	}
 	data, err := json.Marshal(r)
 	if err != nil {
-		return fmt.Errorf("marshal anomaly: %w", err)
+		return false, fmt.Errorf("marshal anomaly: %w", err)
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.Bucket(bucketAnomalies).Put([]byte(r.ID), data); err != nil {
-			return err
-		}
-		idx, err := tx.CreateBucketIfNotExists(bucketAnomalyIndex)
-		if err != nil {
-			return err
-		}
-		if err := idx.Put(anomalyTimeIndexKey(r.DetectedAt, r.ID), []byte(r.ID)); err != nil {
-			return err
-		}
-		return s.syncAnomalyOpenIndex(tx, r, nil)
-	})
+	if err := tx.Bucket(bucketAnomalies).Put([]byte(r.ID), data); err != nil {
+		return false, err
+	}
+	idx, err := tx.CreateBucketIfNotExists(bucketAnomalyIndex)
+	if err != nil {
+		return false, err
+	}
+	if err := idx.Put(anomalyTimeIndexKey(r.DetectedAt, r.ID), []byte(r.ID)); err != nil {
+		return false, err
+	}
+	return true, s.syncAnomalyOpenIndex(tx, r, nil)
 }
 
 // ListAnomalies returns the most recent anomaly records up to limit, ordered by DetectedAt descending.
@@ -126,6 +132,9 @@ func (s *Store) listAllAnomalies() ([]models.AnomalyRecord, error) {
 			return nil
 		}
 		return b.ForEach(func(_, v []byte) error {
+			if len(records) >= maxRecordsInMemory {
+				return fmt.Errorf("too many anomaly records (>= %d); use filtering to narrow results", maxRecordsInMemory)
+			}
 			var r models.AnomalyRecord
 			if err := json.Unmarshal(v, &r); err != nil {
 				return fmt.Errorf("unmarshal anomaly: %w", err)
@@ -173,33 +182,39 @@ func (s *Store) GetAnomaly(id string) (*models.AnomalyRecord, error) {
 
 // UpdateAnomaly updates an existing anomaly record and indexes.
 func (s *Store) UpdateAnomaly(r *models.AnomalyRecord) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		_, err := s.updateAnomalyTx(tx, r)
+		return err
+	})
+}
+
+// updateAnomalyTx updates an anomaly record inside an existing transaction.
+func (s *Store) updateAnomalyTx(tx *bolt.Tx, r *models.AnomalyRecord) (bool, error) {
 	if r.ID == "" {
-		return fmt.Errorf("anomaly ID must not be empty")
+		return false, fmt.Errorf("anomaly ID must not be empty")
 	}
 	data, err := json.Marshal(r)
 	if err != nil {
-		return fmt.Errorf("marshal anomaly: %w", err)
+		return false, fmt.Errorf("marshal anomaly: %w", err)
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
-		main := tx.Bucket(bucketAnomalies)
-		if main == nil || main.Get([]byte(r.ID)) == nil {
-			return fmt.Errorf("anomaly %s not found", r.ID)
-		}
-		var prev models.AnomalyRecord
-		_ = json.Unmarshal(main.Get([]byte(r.ID)), &prev)
+	main := tx.Bucket(bucketAnomalies)
+	if main == nil || main.Get([]byte(r.ID)) == nil {
+		return false, fmt.Errorf("anomaly %s not found", r.ID)
+	}
+	var prev models.AnomalyRecord
+	_ = json.Unmarshal(main.Get([]byte(r.ID)), &prev)
 
-		if err := main.Put([]byte(r.ID), data); err != nil {
-			return err
+	if err := main.Put([]byte(r.ID), data); err != nil {
+		return false, err
+	}
+	idx := tx.Bucket(bucketAnomalyIndex)
+	if idx != nil {
+		_ = idx.Delete(anomalyTimeIndexKey(prev.DetectedAt, r.ID))
+		if err := idx.Put(anomalyTimeIndexKey(r.DetectedAt, r.ID), []byte(r.ID)); err != nil {
+			return false, err
 		}
-		idx := tx.Bucket(bucketAnomalyIndex)
-		if idx != nil {
-			_ = idx.Delete(anomalyTimeIndexKey(prev.DetectedAt, r.ID))
-			if err := idx.Put(anomalyTimeIndexKey(r.DetectedAt, r.ID), []byte(r.ID)); err != nil {
-				return err
-			}
-		}
-		return s.syncAnomalyOpenIndex(tx, r, &prev)
-	})
+	}
+	return true, s.syncAnomalyOpenIndex(tx, r, &prev)
 }
 
 func (s *Store) syncAnomalyOpenIndex(tx *bolt.Tx, cur *models.AnomalyRecord, prev *models.AnomalyRecord) error {
@@ -269,13 +284,44 @@ func (s *Store) findOpenAnomalyLegacy(entity, signal string) (*models.AnomalyRec
 }
 
 // UpsertOpenAnomaly saves a new anomaly or updates score/timestamp on an existing open one.
+// This is atomic: find, compare, and save/update all happen in a single bbolt Update transaction.
 func (s *Store) UpsertOpenAnomaly(r *models.AnomalyRecord) (bool, error) {
 	signal := anomalySignal(r)
-	existing, err := s.FindOpenAnomaly(r.Entity, signal)
-	if err != nil {
-		return false, err
+	var created bool
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		c, err := s.upsertOpenAnomalyTx(tx, r, signal)
+		if err != nil {
+			return err
+		}
+		created = c
+		return nil
+	})
+	return created, err
+}
+
+// upsertOpenAnomalyTx performs the upsert inside an existing transaction.
+// It returns true if a new record was created, false if an existing one was updated.
+func (s *Store) upsertOpenAnomalyTx(tx *bolt.Tx, r *models.AnomalyRecord, signal string) (bool, error) {
+	// Look up the existing open anomaly within this same transaction.
+	var existing *models.AnomalyRecord
+	open := tx.Bucket(bucketAnomalyOpen)
+	if open != nil {
+		if data := open.Get(anomalyOpenKey(r.Entity, signal)); data != nil {
+			id := string(data)
+			main := tx.Bucket(bucketAnomalies)
+			if main != nil {
+				if raw := main.Get([]byte(id)); raw != nil {
+					var rec models.AnomalyRecord
+					if err := json.Unmarshal(raw, &rec); err == nil {
+						existing = &rec
+					}
+				}
+			}
+		}
 	}
+
 	if existing != nil {
+		scoreIncreased := r.Score > existing.Score
 		existing.Score = r.Score
 		existing.DetectedAt = r.DetectedAt
 		if r.MetricName != "" {
@@ -284,9 +330,82 @@ func (s *Store) UpsertOpenAnomaly(r *models.AnomalyRecord) (bool, error) {
 		if r.Pattern != "" {
 			existing.Pattern = r.Pattern
 		}
-		return false, s.UpdateAnomaly(existing)
+		if scoreIncreased {
+			existing.Status = models.AnomalyStatusDetected
+		}
+		_, err := s.updateAnomalyTx(tx, existing)
+		return false, err
 	}
-	return true, s.SaveAnomaly(r)
+	_, err := s.saveAnomalyTx(tx, r)
+	return true, err
+}
+
+// PruneAnomalies removes resolved/remediated anomalies older than 7 days.
+// Returns the count of removed records.
+func (s *Store) PruneAnomalies() (int, error) {
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	var toDelete []struct {
+		ID         string
+		DetectedAt *time.Time
+		Status     string
+	}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAnomalies)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			var r models.AnomalyRecord
+			if err := json.Unmarshal(v, &r); err != nil {
+				return nil // skip corrupt records
+			}
+			if r.Status != models.AnomalyStatusRemediated && r.Status != models.AnomalyStatusResolved {
+				return nil
+			}
+			ts := r.DetectedAt
+			if ts == nil || ts.IsZero() {
+				return nil
+			}
+			if ts.Before(cutoff) {
+				toDelete = append(toDelete, struct {
+					ID         string
+					DetectedAt *time.Time
+					Status     string
+				}{ID: r.ID, DetectedAt: r.DetectedAt, Status: r.Status})
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(toDelete) == 0 {
+		return 0, nil
+	}
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		main := tx.Bucket(bucketAnomalies)
+		idx := tx.Bucket(bucketAnomalyIndex)
+		open := tx.Bucket(bucketAnomalyOpen)
+		for _, d := range toDelete {
+			if err := main.Delete([]byte(d.ID)); err != nil {
+				return err
+			}
+			if idx != nil {
+				_ = idx.Delete(anomalyTimeIndexKey(d.DetectedAt, d.ID))
+			}
+			if open != nil && isOpenAnomalyStatus(d.Status) {
+				// We don't have entity/signal here; the open index cleanup
+				// is best-effort via the bulk rebuild approach. This is fine
+				// because stale open index entries are harmless and rebuilt on
+				// next Open/ensureAnomalyIndexes.
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(toDelete), nil
 }
 
 // RebuildAnomalyIndexes rebuilds indexes from the anomalies bucket (migration helper).

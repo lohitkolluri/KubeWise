@@ -168,11 +168,11 @@ func (p *GitHubPlugin) Execute(ctx context.Context, action models.ToolAction) (*
 		return &models.ToolResult{
 			Success:  false,
 			Stderr:   err.Error(),
-			Duration: time.Since(start),
+			Duration: models.DurationValue{Duration: time.Since(start)},
 		}, nil
 	}
 
-	result.Duration = time.Since(start)
+	result.Duration = models.DurationValue{Duration: time.Since(start)}
 	return result, nil
 }
 

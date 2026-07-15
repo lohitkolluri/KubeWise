@@ -170,6 +170,38 @@ func float64frombits(bits uint64) float64 {
 	return math.Float64frombits(bits)
 }
 
+// TrimMetricHistory removes entire metric series that haven't received a new sample
+// within the specified duration (e.g. 24h). This prevents unbounded growth from
+// short-lived pods and ephemeral entities.
+func (s *Store) TrimMetricHistory(d time.Duration) error {
+	cutoff := time.Now().Add(-d)
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketMetrics)
+		if b == nil {
+			return nil
+		}
+		var toDelete []string
+		b.ForEach(func(k, _ []byte) error {
+			mb := b.Bucket(k)
+			if mb == nil {
+				return nil
+			}
+			c := mb.Cursor()
+			k2, _ := c.Last()
+			if k2 == nil || time.Unix(0, btoi(k2)).Before(cutoff) {
+				toDelete = append(toDelete, string(k))
+			}
+			return nil
+		})
+		for _, key := range toDelete {
+			if err := b.DeleteBucket([]byte(key)); err != nil {
+				return fmt.Errorf("delete series %s: %w", key, err)
+			}
+		}
+		return nil
+	})
+}
+
 // ParseSeriesKey splits a stored series key into metric name and label components.
 func ParseSeriesKey(key string) (string, map[string]string, error) {
 	parts := strings.Split(key, "/")

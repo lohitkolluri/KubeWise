@@ -10,48 +10,31 @@ import (
 
 // buildMetricSummaries extracts metric summaries from anomalies for the rule engine.
 func (c *Correlator) buildMetricSummaries(anomalies []models.AnomalyRecord) []engine.MetricSummary {
-	seen := make(map[string]struct{})
-	var summaries []engine.MetricSummary
-	for _, a := range anomalies {
-		if a.MetricName == "" {
-			continue
-		}
-		key := a.Entity + "|" + a.MetricName
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		ns, name := models.ParseEntity(a.Entity)
-		if a.Namespace != "" && ns == "" {
-			ns = a.Namespace
-		}
-		labels := map[string]string{"namespace": ns, "pod": name}
-		pts, err := c.store.GetMetricSeries(a.MetricName, labels, 15)
-		if err != nil || len(pts) == 0 {
+	data := c.extractMetricSeries(anomalies)
+	summaries := make([]engine.MetricSummary, 0, len(data))
+	for _, d := range data {
+		if len(d.Pts) == 0 {
 			summaries = append(summaries, engine.MetricSummary{
-				Name:    a.MetricName + "@" + a.Entity,
-				Current: a.Score,
-				Trend:   "unknown",
+				Name: d.Name, Current: 0, Trend: "unknown",
 			})
 			continue
 		}
-		last := pts[len(pts)-1]
+		last := d.Pts[len(d.Pts)-1]
 		var total float64
-		maxVal := pts[0].Value
-		for _, p := range pts {
+		maxVal := d.Pts[0].Value
+		for _, p := range d.Pts {
 			total += p.Value
 			if p.Value > maxVal {
 				maxVal = p.Value
 			}
 		}
-		trend := metricTrendDirection(pts)
 		summaries = append(summaries, engine.MetricSummary{
-			Name:        a.MetricName + "@" + a.Entity,
+			Name:        d.Name,
 			Current:     last.Value,
-			Average:     total / float64(len(pts)),
+			Average:     total / float64(len(d.Pts)),
 			Max:         maxVal,
-			SampleCount: len(pts),
-			Trend:       trend,
+			SampleCount: len(d.Pts),
+			Trend:       metricTrendDirection(d.Pts),
 		})
 	}
 	return summaries
@@ -109,7 +92,7 @@ func (c *Correlator) processRuleResult(ctx context.Context, cfg RemediationConfi
 		return false
 	}
 
-	if tier == models.RiskTier3 {
+	if tier == models.RiskTier3 || tier == models.RiskTier4 {
 		c.markAnomalyStatus(matched, models.AnomalyStatusCorrelated, nil)
 		if cfg.DryRun {
 			slog.Info("remediator: dry-run rule T3 needs approval when live", "rule", rr.RuleName, "action", plan.Action.Type, "namespace", plan.Action.Namespace, "target", plan.Action.Target)

@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+// formatDetectedAt formats an anomaly's detection timestamp for evidence strings.
+// Returns "<unknown>" when the pointer is nil (instead of formatting as "<nil>").
+func formatDetectedAt(t *time.Time) string {
+	if t == nil {
+		return "<unknown>"
+	}
+	return t.Format(time.RFC3339)
+}
+
 // --- OOMRule ---
 
 // OOMRule matches when a pod was OOMKilled.
@@ -18,9 +27,10 @@ func (r *OOMRule) Name() string { return "oom_killed" }
 
 // Evaluate checks for OOMKilled patterns in the anomaly input.
 func (r *OOMRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "OOMKilling" || a.Pattern == "OOMKilled" {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "restart_pod",
 				Target:     a.Entity,
@@ -28,11 +38,11 @@ func (r *OOMRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error)
 				Severity:   SeverityCritical,
 				Confidence: 0.98,
 				NeedsLLM:   false,
-				Evidence:   []string{fmt.Sprintf("Pod %s/%s OOMKilled at %s", a.Namespace, a.Entity, a.DetectedAt)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("Pod %s/%s OOMKilled at %s", a.Namespace, a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- CrashLoopRule ---
@@ -48,9 +58,10 @@ func (r *CrashLoopRule) Name() string { return "crash_loop" }
 
 // Evaluate checks for CrashLoopBackOff or high restart-rate anomalies.
 func (r *CrashLoopRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "CrashLoopBackOff" || (a.MetricName == "restart_rate" && a.Score >= 0.8) {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "restart_pod",
 				Target:     a.Entity,
@@ -59,10 +70,10 @@ func (r *CrashLoopRule) Evaluate(_ context.Context, input Input) ([]RuleResult, 
 				Confidence: 0.95,
 				NeedsLLM:   false,
 				Evidence:   []string{fmt.Sprintf("CrashLoopBackOff entity=%s score=%.2f", a.Entity, a.Score)},
-			}}, nil
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- ImagePullBackOffRule ---
@@ -77,9 +88,10 @@ func (r *ImagePullBackOffRule) Name() string { return "image_pull_backoff" }
 
 // Evaluate checks for image pull failure anomalies.
 func (r *ImagePullBackOffRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "ImagePullBackOff" || a.Pattern == "ErrImagePull" || a.Pattern == "ImagePull" {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "escalate",
 				Target:     a.Entity,
@@ -87,11 +99,11 @@ func (r *ImagePullBackOffRule) Evaluate(_ context.Context, input Input) ([]RuleR
 				Severity:   SeverityHigh,
 				Confidence: 0.97,
 				NeedsLLM:   false,
-				Evidence:   []string{fmt.Sprintf("Image pull failure for %s/%s", a.Namespace, a.Entity)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("Image pull failure for %s/%s at %s", a.Namespace, a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- NodeNotReadyRule ---
@@ -106,9 +118,10 @@ func (r *NodeNotReadyRule) Name() string { return "node_not_ready" }
 
 // Evaluate checks for NodeNotReady conditions in the anomaly input.
 func (r *NodeNotReadyRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "NodeNotReady" {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "escalate",
 				Target:     a.Entity,
@@ -116,11 +129,11 @@ func (r *NodeNotReadyRule) Evaluate(_ context.Context, input Input) ([]RuleResul
 				Severity:   SeverityCritical,
 				Confidence: 0.90,
 				NeedsLLM:   false,
-				Evidence:   []string{fmt.Sprintf("Node %s not ready", a.Entity)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("Node %s not ready at %s", a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- PendingRule ---
@@ -139,10 +152,15 @@ type PendingRule struct{}
 func (r *PendingRule) Name() string { return "pod_pending" }
 
 // Evaluate checks for Unschedulable or long-pending pod anomalies.
+// Skips anomalies that haven't been pending long enough (PendingRuleMinDuration).
 func (r *PendingRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "Unschedulable" || (a.Pattern == "Pending" && a.Score >= 0.7) {
-			return []RuleResult{{
+			if a.DetectedAt != nil && time.Since(*a.DetectedAt) < PendingRuleMinDuration {
+				continue
+			}
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "escalate",
 				Target:     a.Entity,
@@ -150,11 +168,11 @@ func (r *PendingRule) Evaluate(_ context.Context, input Input) ([]RuleResult, er
 				Severity:   SeverityMedium,
 				Confidence: 0.85,
 				NeedsLLM:   false,
-				Evidence:   []string{fmt.Sprintf("Pod %s/%s pending (unschedulable)", a.Namespace, a.Entity)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("Pod %s/%s pending (unschedulable) since %s", a.Namespace, a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- ReadyRatioRule ---
@@ -170,9 +188,10 @@ func (r *ReadyRatioRule) Name() string { return "ready_ratio_low" }
 
 // Evaluate checks for low ready-replica ratio anomalies.
 func (r *ReadyRatioRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "LowReadyRatio" {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "scale_replicas",
 				Target:     a.Entity,
@@ -180,11 +199,11 @@ func (r *ReadyRatioRule) Evaluate(_ context.Context, input Input) ([]RuleResult,
 				Severity:   SeverityHigh,
 				Confidence: 0.80,
 				NeedsLLM:   false,
-				Evidence:   []string{fmt.Sprintf("Low ready-replica ratio for %s/%s", a.Namespace, a.Entity)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("Low ready-replica ratio for %s/%s at %s", a.Namespace, a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- CPUThrottleRule ---
@@ -200,9 +219,10 @@ func (r *CPUThrottleRule) Name() string { return "cpu_throttle_high" }
 
 // Evaluate checks for high CPU throttling anomalies.
 func (r *CPUThrottleRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.MetricName == "cpu_throttle" && a.Score >= 0.5 {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "patch_resources",
 				Target:     a.Entity,
@@ -210,11 +230,11 @@ func (r *CPUThrottleRule) Evaluate(_ context.Context, input Input) ([]RuleResult
 				Severity:   SeverityMedium,
 				Confidence: 0.75,
 				NeedsLLM:   true,
-				Evidence:   []string{fmt.Sprintf("CPU throttling at %.0f%% for %s/%s", a.Score*100, a.Namespace, a.Entity)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("CPU throttling at %.0f%% for %s/%s at %s", a.Score*100, a.Namespace, a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 // --- MemoryPressureRule ---
@@ -230,9 +250,10 @@ func (r *MemoryPressureRule) Name() string { return "memory_pressure" }
 
 // Evaluate checks for memory pressure conditions in the cluster.
 func (r *MemoryPressureRule) Evaluate(_ context.Context, input Input) ([]RuleResult, error) {
+	var results []RuleResult
 	for _, a := range input.Anomalies {
 		if a.Pattern == "MemoryPressure" || a.MetricName == "node_memory_pressure" {
-			return []RuleResult{{
+			results = append(results, RuleResult{
 				RuleName:   r.Name(),
 				Action:     "escalate",
 				Target:     a.Entity,
@@ -240,9 +261,9 @@ func (r *MemoryPressureRule) Evaluate(_ context.Context, input Input) ([]RuleRes
 				Severity:   SeverityHigh,
 				Confidence: 0.85,
 				NeedsLLM:   false,
-				Evidence:   []string{fmt.Sprintf("Memory pressure on %s/%s", a.Namespace, a.Entity)},
-			}}, nil
+				Evidence:   []string{fmt.Sprintf("Memory pressure on %s/%s at %s", a.Namespace, a.Entity, formatDetectedAt(a.DetectedAt))},
+			})
 		}
 	}
-	return nil, nil
+	return results, nil
 }

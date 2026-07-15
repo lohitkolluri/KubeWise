@@ -43,7 +43,7 @@ func RunCommand(ctx context.Context, command string, args []string, timeout time
 	result := &models.ToolResult{
 		Stdout:   Truncate(stdout.String(), OutputMaxBytes),
 		Stderr:   Truncate(stderr.String(), OutputMaxBytes),
-		Duration: duration,
+		Duration: models.DurationValue{Duration: duration},
 		Success:  err == nil,
 	}
 	if cmd.ProcessState != nil {

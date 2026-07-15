@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	openrouter "github.com/OpenRouterTeam/go-sdk"
@@ -18,6 +20,10 @@ import (
 
 // OpenRouterProvider sends structured requests via the OpenRouter API.
 type OpenRouterProvider struct {
+	mu                         sync.RWMutex
+	sessionMu                  sync.Mutex
+	consecutiveRetryableErrors atomic.Int64
+
 	sdk            *openrouter.OpenRouter
 	apiKey         string
 	model          string
@@ -83,6 +89,8 @@ func (t *sessionIDTransport) RoundTrip(req *http.Request) (*http.Response, error
 // SetSessionID configures sticky routing for prompt caching.
 // Call this with an incident ID before making requests for that incident.
 func (p *OpenRouterProvider) SetSessionID(sessionID string) {
+	p.sessionMu.Lock()
+	defer p.sessionMu.Unlock()
 	p.sessionID = sessionID
 	if p.sdk == nil || sessionID == "" {
 		return
@@ -104,7 +112,11 @@ func (p *OpenRouterProvider) SetSessionID(sessionID string) {
 }
 
 // SetModel changes the model used for subsequent requests.
-func (p *OpenRouterProvider) SetModel(model string) { p.model = model }
+func (p *OpenRouterProvider) SetModel(model string) {
+	p.mu.Lock()
+	p.model = model
+	p.mu.Unlock()
+}
 
 // Name returns "openrouter" as the provider identifier.
 func (p *OpenRouterProvider) Name() string { return "openrouter" }
@@ -137,9 +149,12 @@ func (p *OpenRouterProvider) StructuredOutput(ctx context.Context, systemPrompt,
 
 // StructuredOutputWithUsage sends a prompt and returns a typed response with token usage.
 func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
+	p.sessionMu.Lock()
 	if p.sdk == nil {
+		p.sessionMu.Unlock()
 		return Usage{}, fmt.Errorf("openrouter client not configured")
 	}
+	p.sessionMu.Unlock()
 
 	if !p.circuitBreaker.Allow() {
 		return Usage{}, fmt.Errorf("openrouter circuit breaker open")
@@ -151,7 +166,9 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 	}
 
 	var lastErr error
+	p.mu.RLock()
 	chain := modelChain(p.model)
+	p.mu.RUnlock()
 	for i, model := range chain {
 		strict := !IsFreeModel(model)
 		responseFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
@@ -165,6 +182,7 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 		usage, err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
 		if err == nil {
 			p.circuitBreaker.Success()
+			p.consecutiveRetryableErrors.Store(0)
 			if i > 0 {
 				slog.Info("llm: openrouter fallback model succeeded", "model", model)
 			}
@@ -173,7 +191,11 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 		lastErr = err
 		if !isRetryableOpenRouterError(err) {
 			p.circuitBreaker.Failure()
+			p.consecutiveRetryableErrors.Store(0)
 			return Usage{}, err
+		}
+		if p.consecutiveRetryableErrors.Add(1) >= 5 {
+			p.circuitBreaker.Failure()
 		}
 		if i < len(chain)-1 {
 			slog.Warn("llm: openrouter model failed, trying fallback", "model", model, "error", err)
@@ -190,6 +212,8 @@ func (p *OpenRouterProvider) structuredOutputWithModel(
 	responseFormat components.ResponseFormat,
 	respPtr interface{},
 ) (Usage, error) {
+	p.sessionMu.Lock()
+	defer p.sessionMu.Unlock()
 	maxTok := maxTokensForModel(model)
 	res, err := p.sdk.Chat.Send(ctx, components.ChatRequest{
 		Model:          openrouter.Pointer(model),

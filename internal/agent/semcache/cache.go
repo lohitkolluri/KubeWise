@@ -77,15 +77,31 @@ func New(cfg Config) *Cache {
 	return c
 }
 
+// scoreBucket returns a severity label for a 0-1 score value.
+// Used in the fingerprint so different severity levels produce distinct cache keys,
+// while minor score fluctuations within the same bucket still hit the cache.
+func scoreBucket(score float64) string {
+	switch {
+	case score >= 0.75:
+		return "critical"
+	case score >= 0.5:
+		return "high"
+	case score >= 0.25:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
 // Fingerprint computes a content hash of an anomaly's distinguishing fields:
-// entity, namespace, metric name, and pattern. Score is intentionally excluded
-// so semantically identical incidents hit the cache across scrapes.
-func Fingerprint(entity, namespace, metricName, pattern string, _ float64) string {
+// entity, namespace, metric name, pattern, and score bucket.
+// The score bucket (low/medium/high/critical) is included so different severity
+// levels produce different cache keys, while minor score fluctuations within the
+// same bucket still hit the cache.
+// Zero-byte separators between fields prevent collisions (e.g. "ab"+"cd" vs "a"+"bcd").
+func Fingerprint(entity, namespace, metricName, pattern string, score float64) string {
 	h := sha256.New()
-	h.Write([]byte(entity))
-	h.Write([]byte(namespace))
-	h.Write([]byte(metricName))
-	h.Write([]byte(pattern))
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s", entity, namespace, metricName, pattern, scoreBucket(score))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -116,17 +132,19 @@ func (c *Cache) Set(fp, planJSON string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Evict oldest if at capacity.
+	// Evict oldest if at capacity and the key doesn't already exist.
 	if len(c.store) >= c.cfg.MaxEntries {
-		var oldestKey string
-		var oldestTime time.Time
-		for k, v := range c.store {
-			if oldestKey == "" || v.CreatedAt.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = v.CreatedAt
+		if _, exists := c.store[fp]; !exists {
+			var oldestKey string
+			var oldestTime time.Time
+			for k, v := range c.store {
+				if oldestKey == "" || v.CreatedAt.Before(oldestTime) {
+					oldestKey = k
+					oldestTime = v.CreatedAt
+				}
 			}
+			delete(c.store, oldestKey)
 		}
-		delete(c.store, oldestKey)
 	}
 
 	now := time.Now()

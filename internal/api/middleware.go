@@ -19,6 +19,8 @@ const defaultCORSOrigin = ""
 // Rate limiting defaults.
 const rateLimitPerMinute = 60
 const rateLimitBurst = 10
+const publicRateLimitPerMinute = 5
+const publicRateLimitBurst = 5
 
 var securityHeaders = map[string]string{
 	"X-Content-Type-Options": "nosniff",
@@ -28,10 +30,11 @@ var securityHeaders = map[string]string{
 }
 
 type middlewareConfig struct {
-	apiToken     string
-	corsOrigin   string
-	requireToken bool
-	rateLimiter  *rateLimiter
+	apiToken          string
+	corsOrigin        string
+	requireToken      bool
+	rateLimiter       *rateLimiter
+	publicRateLimiter *rateLimiter
 }
 
 func (c middlewareConfig) rateLimitOrDefault() *rateLimiter {
@@ -39,6 +42,13 @@ func (c middlewareConfig) rateLimitOrDefault() *rateLimiter {
 		return c.rateLimiter
 	}
 	return newRateLimiter(rateLimitPerMinute, rateLimitBurst)
+}
+
+func (c middlewareConfig) publicRateLimitOrDefault() *rateLimiter {
+	if c.publicRateLimiter != nil {
+		return c.publicRateLimiter
+	}
+	return newRateLimiter(publicRateLimitPerMinute, publicRateLimitBurst)
 }
 
 const rateLimiterMaxEntries = 10_000
@@ -70,22 +80,12 @@ func newRateLimiter(rate, burst int) *rateLimiter {
 
 func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	// GC stale entries every 5 minutes.
-	if time.Since(rl.lastGC) > 5*time.Minute {
-		for k, b := range rl.buckets {
-			if time.Since(b.lastFill) > 10*time.Minute {
-				delete(rl.buckets, k)
-			}
-		}
-		rl.lastGC = time.Now()
-	}
 
 	now := time.Now()
 	b, ok := rl.buckets[ip]
 	if !ok {
 		if len(rl.buckets) >= rl.maxEntries {
+			rl.mu.Unlock()
 			return false
 		}
 		b = &bucket{tokens: float64(rl.burst), lastFill: now}
@@ -100,9 +100,40 @@ func (rl *rateLimiter) allow(ip string) bool {
 	b.lastFill = now
 
 	if b.tokens < 1 {
+		rl.mu.Unlock()
 		return false
 	}
 	b.tokens--
+	rl.mu.Unlock()
+
+	// GC stale entries every 5 minutes using a snapshot pattern:
+	// snapshot the map under lock, then iterate outside the lock to
+	// avoid blocking concurrent requests during full-map traversal.
+	if time.Since(rl.lastGC) > 5*time.Minute {
+		rl.mu.Lock()
+		snapshot := make(map[string]*bucket, len(rl.buckets))
+		for k, v := range rl.buckets {
+			snapshot[k] = v
+		}
+		rl.lastGC = time.Now()
+		rl.mu.Unlock()
+
+		cutoff := now.Add(-10 * time.Minute)
+		var stale []string
+		for k, b := range snapshot {
+			if b.lastFill.Before(cutoff) {
+				stale = append(stale, k)
+			}
+		}
+		if len(stale) > 0 {
+			rl.mu.Lock()
+			for _, k := range stale {
+				delete(rl.buckets, k)
+			}
+			rl.mu.Unlock()
+		}
+	}
+
 	return true
 }
 
@@ -136,8 +167,14 @@ func withMiddleware(next http.Handler, cfg middlewareConfig) http.Handler {
 			return
 		}
 
-		// Rate limit by IP (skip for health/readiness probes).
-		if !publicPath(r.URL.Path) {
+		// Rate limit by IP — public paths (auth, health) get a stricter limiter.
+		if publicPath(r.URL.Path) {
+			if !cfg.publicRateLimitOrDefault().allow(clientIP(r)) {
+				w.Header().Set("Retry-After", "1")
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
+		} else {
 			if !cfg.rateLimitOrDefault().allow(clientIP(r)) {
 				w.Header().Set("Retry-After", "1")
 				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")

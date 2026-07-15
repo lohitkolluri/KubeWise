@@ -176,6 +176,7 @@ func (rc *ResourcesCollector) Snapshot() (failing []PodState, unhealthy []string
 			continue
 		}
 		if p.Phase == string(corev1.PodSucceeded) {
+			pods = append(pods, p)
 			continue
 		}
 		if p.Phase != string(corev1.PodRunning) || !p.Ready {

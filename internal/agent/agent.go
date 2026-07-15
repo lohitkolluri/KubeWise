@@ -59,11 +59,14 @@ type Agent struct {
 	healthMu           sync.Mutex
 	anomalySeq         uint64
 	eventSeq           atomic.Uint64
-	stopOnce           sync.Once
-	stopCh             chan struct{}
-	runCtx             context.Context
-	runCancel          context.CancelFunc
-	k8sCancel          context.CancelFunc
+	forecastOffset   map[string]int
+	forecastOffsetMu sync.Mutex
+	runMu            sync.Mutex
+		stopOnce           sync.Once
+		stopCh             chan struct{}
+		runCtx             context.Context
+		runCancel          context.CancelFunc
+		k8sCancel          context.CancelFunc
 }
 
 // NewAgent creates and wires the complete agent pipeline.
@@ -173,6 +176,7 @@ func NewAgent(s *store.Store, cfg *models.AgentConfig, interval time.Duration, l
 		interval:         interval,
 		apiAddr:          apiAddr,
 		minScore:         predCfg.MinScore,
+		forecastOffset:   make(map[string]int),
 	}
 	a.runCtx, a.runCancel = context.WithCancel(context.Background())
 
@@ -385,6 +389,9 @@ func (a *Agent) persistPrediction(p models.PredictionResult, prefix string, now 
 }
 
 func (a *Agent) runOnce() {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+
 	select {
 	case <-a.runCtx.Done():
 		return
@@ -430,12 +437,24 @@ func (a *Agent) runOnce() {
 	var allPredictions []models.PredictionResult
 	allPredictions = append(allPredictions, predictions...)
 
+	resources := a.buildResourceSnapshot()
 	events, err := a.store.ListAnomalies(20)
 	if err != nil {
 		slog.Error("agent: list anomalies error, skipping pattern pass", "scrape_num", scrapeNum, "error", err)
 	} else {
+		// Filter to only include anomalies from previous scrape cycles.
+		// This prevents pattern matchers from seeing anomalies that were
+		// just persisted during the current scrape's statistical pass.
+		cutoff := now.Add(-a.interval)
+		filtered := events[:0]
+		for _, e := range events {
+			if e.DetectedAt != nil && e.DetectedAt.Before(cutoff) {
+				filtered = append(filtered, e)
+			}
+		}
+		events = filtered
+
 		enrichedMetrics := a.predictor.PreparePatternMetrics(predMetrics)
-		resources := a.buildResourceSnapshot()
 		patternResults := a.predictor.RunPatterns(enrichedMetrics, events, resources)
 		patternCount = len(patternResults)
 		allPredictions = append(allPredictions, patternResults...)
@@ -472,7 +491,7 @@ func (a *Agent) runOnce() {
 	slog.Info("agent: scrape stats", "scrape_num", scrapeNum, "predictions", len(predictions), "patterns", patternCount, "gate_passed", gateStats.Passed, "gate_dropped", gateStats.Dropped)
 
 	if a.outcomeTracker != nil {
-		a.outcomeTracker.VerifyPending(a.buildResourceSnapshot(), now)
+		a.outcomeTracker.VerifyPending(resources, now)
 	}
 
 	if a.forecaster != nil {
@@ -526,48 +545,52 @@ func (a *Agent) runForecast(ctx context.Context, scrapeNum int64) {
 			break
 		}
 		keys, err := a.store.ListMetricSeries(name)
+		if err != nil || len(keys) == 0 {
+			continue
+		}
+
+		// Round-robin through series per metric name across scrapes.
+		a.forecastOffsetMu.Lock()
+		offset := a.forecastOffset[name]
+		next := (offset + 1) % len(keys)
+		a.forecastOffset[name] = next
+		a.forecastOffsetMu.Unlock()
+
+		seriesKey := keys[next]
+		metricName, labels, err := store.ParseSeriesKey(seriesKey)
 		if err != nil {
 			continue
 		}
-		for _, key := range keys {
-			if forecasted >= maxForecastSeriesPerScrape {
-				break
+		pts, err := a.store.GetMetricSeries(metricName, labels, 20)
+		if err != nil || len(pts) < 10 {
+			continue
+		}
+		values := make([]float64, len(pts))
+		timestamps := make([]float64, len(pts))
+		for i, p := range pts {
+			values[i] = p.Value
+			timestamps[i] = float64(p.TS.Unix())
+		}
+		resp, err := a.forecaster.Forecast(ctx, &forecaster.ForecastRequest{
+			MetricName:      metricName,
+			Values:          values,
+			Timestamps:      timestamps,
+			Labels:          labels,
+			Horizon:         12,
+			IntervalSeconds: a.interval.Seconds(),
+		})
+		if err != nil {
+			if !benignForecastError(err.Error()) {
+				slog.Error("agent: forecast error", "scrape_num", scrapeNum, "metric", metricName, "error", err)
 			}
-			metricName, labels, err := store.ParseSeriesKey(key)
-			if err != nil {
-				continue
-			}
-			pts, err := a.store.GetMetricSeries(metricName, labels, 20)
-			if err != nil || len(pts) < 10 {
-				continue
-			}
-			values := make([]float64, len(pts))
-			timestamps := make([]float64, len(pts))
-			for i, p := range pts {
-				values[i] = p.Value
-				timestamps[i] = float64(p.TS.Unix())
-			}
-			resp, err := a.forecaster.Forecast(ctx, &forecaster.ForecastRequest{
-				MetricName:      metricName,
-				Values:          values,
-				Timestamps:      timestamps,
-				Labels:          labels,
-				Horizon:         12,
-				IntervalSeconds: a.interval.Seconds(),
-			})
-			if err != nil {
-				if !benignForecastError(err.Error()) {
-					slog.Error("agent: forecast error", "scrape_num", scrapeNum, "metric", metricName, "error", err)
-				}
-				continue
-			}
-			if resp.Status == "ok" && len(resp.Points) > 0 {
-				forecasted++
-				last := resp.Points[len(resp.Points)-1]
-				slog.Info("agent: forecast result", "scrape_num", scrapeNum, "metric", metricName, "points", len(resp.Points), "last_value", last.Value, "last_lower", last.LowerBound, "last_upper", last.UpperBound)
-			} else if resp.Status != "ok" && !benignForecastError(resp.ErrorMessage) {
-				slog.Error("agent: forecast error", "scrape_num", scrapeNum, "metric", metricName, "error_msg", resp.ErrorMessage)
-			}
+			continue
+		}
+		if resp.Status == "ok" && len(resp.Points) > 0 {
+			forecasted++
+			last := resp.Points[len(resp.Points)-1]
+			slog.Info("agent: forecast result", "scrape_num", scrapeNum, "metric", metricName, "points", len(resp.Points), "last_value", last.Value, "last_lower", last.LowerBound, "last_upper", last.UpperBound)
+		} else if resp.Status != "ok" && !benignForecastError(resp.ErrorMessage) {
+			slog.Error("agent: forecast error", "scrape_num", scrapeNum, "metric", metricName, "error_msg", resp.ErrorMessage)
 		}
 	}
 }
@@ -596,5 +619,7 @@ func benignForecastError(msg string) bool {
 	msg = strings.ToLower(msg)
 	return strings.Contains(msg, "seasonal") ||
 		strings.Contains(msg, "need >=") ||
-		strings.Contains(msg, "two full seasonal")
+		strings.Contains(msg, "two full seasonal") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "context canceled")
 }

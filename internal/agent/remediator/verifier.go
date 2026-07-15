@@ -7,7 +7,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -30,7 +32,7 @@ func (v *Verifier) Verify(ctx context.Context, plan models.RemediationPlan) erro
 	}
 	checks := plan.Verification.Checks
 	if len(checks) == 0 {
-		checks = defaultVerificationChecks(plan)
+		checks = defaultVerificationChecks(plan, v.clientset)
 	}
 	if len(checks) == 0 {
 		return nil
@@ -70,7 +72,7 @@ func defaultVerifyWait(checks []models.VerificationCheck) time.Duration {
 	return 20 * time.Second
 }
 
-func defaultVerificationChecks(plan models.RemediationPlan) []models.VerificationCheck {
+func defaultVerificationChecks(plan models.RemediationPlan, clientset ...kubernetes.Interface) []models.VerificationCheck {
 	steps := plan.EffectiveSteps()
 	if len(steps) == 0 {
 		return nil
@@ -85,6 +87,14 @@ func defaultVerificationChecks(plan models.RemediationPlan) []models.Verificatio
 			return []models.VerificationCheck{{
 				Type: "deployment_ready", Namespace: ns, Target: dep,
 			}}
+		}
+		// If name-based inference fails, try the Kubernetes API (DaemonSet, StatefulSet).
+		if len(clientset) > 0 && clientset[0] != nil {
+			if owner := inferOwnerFromPod(clientset[0], ns, target); owner != "" {
+				return []models.VerificationCheck{{
+					Type: "deployment_ready", Namespace: ns, Target: owner,
+				}}
+			}
 		}
 		// If we can't infer the owner, skip strict verification rather than failing noisily.
 		return nil
@@ -108,18 +118,103 @@ func defaultVerificationChecks(plan models.RemediationPlan) []models.Verificatio
 	}
 }
 
-// inferDeploymentFromPodName attempts to derive the deployment name from a pod name.
-// Typical pod name shape: <deployment>-<replicasetHash>-<suffix>.
+// inferDeploymentFromPodName attempts to derive the deployment/owner name from a pod name.
+// Typical pod name shapes:
+//   - Deployment:  <name>-<replicasetHash>-<podHash>      (2 trailing segments)
+//   - DaemonSet:   <name>-<hash>                           (1 trailing hash segment)
+//   - StatefulSet: <name>-<ordinal>                        (1 trailing numeric segment)
+// Returns "" when the name is ambiguous (< 3 segments and not clearly DaemonSet/StatefulSet).
 func inferDeploymentFromPodName(pod string) string {
 	parts := strings.Split(pod, "-")
-	if len(parts) < 3 {
+	if len(parts) < 2 {
 		return ""
 	}
-	// Drop last two segments (hash + suffix).
-	return strings.Join(parts[:len(parts)-2], "-")
+	if len(parts) >= 3 {
+		// Deployment-style: drop last two segments (hash + suffix).
+		return strings.Join(parts[:len(parts)-2], "-")
+	}
+	// Exactly 2 segments: check if the last segment is numeric (StatefulSet ordinal)
+	// or alphanumeric (DaemonSet hash). Strip only 1 segment.
+	last := parts[len(parts)-1]
+	if isAllDigits(last) {
+		return parts[0] // StatefulSet: <name>-<ordinal>
+	}
+	if len(last) >= 4 && len(last) <= 10 {
+		return parts[0] // DaemonSet: <name>-<hash>
+	}
+	return ""
+}
+
+// isAllDigits reports whether s consists entirely of decimal digits.
+func isAllDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+// inferOwnerFromPod queries the Kubernetes API for a pod and reads its OwnerReferences
+// to determine the owning workload name. Returns the owner name, or "" on failure.
+// This handles DaemonSet, StatefulSet, and other controllers where the pod name
+// alone does not follow the <deployment>-<hash>-<suffix> pattern.
+func inferOwnerFromPod(clientset kubernetes.Interface, namespace, podName string) string {
+	if clientset == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	for _, ref := range pod.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller {
+			return ref.Name
+		}
+	}
+	if len(pod.OwnerReferences) > 0 {
+		return pod.OwnerReferences[0].Name
+	}
+	return ""
+}
+
+// resolvePodName handles the case where a pod was restarted and has a new name.
+// If the exact pod name doesn't exist, tries to find a replacement via owner labels.
+func (v *Verifier) resolvePodName(ctx context.Context, namespace, name string) (string, error) {
+	_, err := v.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return name, nil // pod exists
+	}
+	if !apierrors.IsNotFound(err) {
+		return "", err
+	}
+	// Pod doesn't exist — try owner inference
+	owner := inferDeploymentFromPodName(name)
+	if owner == "" {
+		return "", fmt.Errorf("pod %s/%s not found and cannot infer owner", namespace, name)
+	}
+	labelKeys := []string{"app.kubernetes.io/name", "app"}
+	for _, k := range labelKeys {
+		sel := labels.SelectorFromSet(map[string]string{k: owner}).String()
+		pods, err := v.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil || len(pods.Items) == 0 {
+			continue
+		}
+		return pickBestPodForLogs(pods.Items).Name, nil
+	}
+	return "", fmt.Errorf("pod %s/%s not found and no replacement for owner %s", namespace, name, owner)
 }
 
 func (v *Verifier) runCheck(ctx context.Context, check models.VerificationCheck) error {
+	// Resolve the target name: if the pod was restarted, find its replacement.
+	resolved, err := v.resolvePodName(ctx, check.Namespace, check.Target)
+	if err != nil {
+		return err
+	}
+	check.Target = resolved
+
 	switch check.Type {
 	case "pod_ready":
 		return v.checkPodReady(ctx, check.Namespace, check.Target)

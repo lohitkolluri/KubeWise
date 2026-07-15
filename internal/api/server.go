@@ -76,14 +76,15 @@ func NewServer(store Store, addr string) (*Server, error) {
 	}
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)
-	s.server = &http.Server{
-		Addr: addr,
-		Handler: withMiddleware(mux, middlewareConfig{
-			apiToken:     apiToken,
-			corsOrigin:   corsOrigin,
-			requireToken: requireToken,
-			rateLimiter:  newRateLimiter(rateLimitPerMinute, rateLimitBurst),
-		}),
+		s.server = &http.Server{
+			Addr: addr,
+			Handler: withMiddleware(mux, middlewareConfig{
+				apiToken:          apiToken,
+				corsOrigin:        corsOrigin,
+				requireToken:      requireToken,
+				rateLimiter:       newRateLimiter(rateLimitPerMinute, rateLimitBurst),
+				publicRateLimiter: newRateLimiter(publicRateLimitPerMinute, publicRateLimitBurst),
+			}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

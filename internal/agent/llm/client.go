@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 const (
@@ -14,6 +15,7 @@ const (
 // Client is the LLM facade used by the remediation correlator.
 type Client struct {
 	provider Provider
+	mu       sync.Mutex
 }
 
 // NewClient creates an LLM client from provider configuration.
@@ -34,7 +36,9 @@ func NewOpenRouterClient(apiKey, model string) (*Client, error) {
 // This enables the LLM router to switch models without recreating the client.
 func (c *Client) SetModel(model string) {
 	if c != nil && c.provider != nil {
+		c.mu.Lock()
 		c.provider.SetModel(model)
+		c.mu.Unlock()
 	}
 }
 

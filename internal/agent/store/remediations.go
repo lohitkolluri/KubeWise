@@ -54,6 +54,9 @@ func (s *Store) listAllAuditRecords() ([]models.AuditRecord, error) {
 			return nil
 		}
 		return b.ForEach(func(_, v []byte) error {
+			if len(records) >= maxRecordsInMemory {
+				return fmt.Errorf("too many audit records (>= %d); use filtering to narrow results", maxRecordsInMemory)
+			}
 			var r models.AuditRecord
 			if err := json.Unmarshal(v, &r); err != nil {
 				return fmt.Errorf("unmarshal audit record: %w", err)

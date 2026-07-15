@@ -171,6 +171,9 @@ func (ec *EventsCollector) ListRecentEvents(ctx context.Context, since time.Dura
 		if !failureReasons[e.Reason] {
 			continue
 		}
+		if !nsutil.InScope(e.Namespace, ec.watchNamespaces) {
+			continue
+		}
 		involved := e.InvolvedObject.Name
 		if e.InvolvedObject.Kind != "" {
 			involved = e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name

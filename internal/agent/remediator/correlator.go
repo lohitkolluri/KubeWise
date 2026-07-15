@@ -433,30 +433,18 @@ func (c *Correlator) markAnomalyStatus(records []models.AnomalyRecord, status st
 }
 
 func (c *Correlator) buildMetricsSummary(anomalies []models.AnomalyRecord) string {
-	var summaries []llm.MetricSummary
-	seen := make(map[string]struct{})
-	for _, a := range anomalies {
-		key := a.Entity + "|" + a.MetricName
-		if _, ok := seen[key]; ok {
+	data := c.extractMetricSeries(anomalies)
+	summaries := make([]llm.MetricSummary, 0, len(data))
+	for _, d := range data {
+		if len(d.Pts) == 0 {
 			continue
 		}
-		seen[key] = struct{}{}
-		ns, name := models.ParseEntity(a.Entity)
-		if a.Namespace != "" && ns == "" {
-			ns = a.Namespace
-		}
-		labels := map[string]string{"namespace": ns, "pod": name}
-		pts, err := c.store.GetMetricSeries(a.MetricName, labels, 15)
-		if err != nil || len(pts) == 0 {
-			continue
-		}
-		last := pts[len(pts)-1]
-		trend := metricTrendDirection(pts)
+		last := d.Pts[len(d.Pts)-1]
 		summaries = append(summaries, llm.MetricSummary{
-			Name:        a.MetricName + "@" + a.Entity,
-			SampleCount: len(pts),
+			Name:        d.Name,
+			SampleCount: len(d.Pts),
 			LastValue:   last.Value,
-			Trend:       trend,
+			Trend:       metricTrendDirection(d.Pts),
 		})
 	}
 	return llm.FormatMetricContext(summaries)

@@ -63,6 +63,10 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 	plan := record.Plan
 	cfg := c.snapshotConfig()
 
+	if cfg.Mode == "off" {
+		return fmt.Errorf("remediation is disabled (mode=off), cannot approve")
+	}
+
 	anomalies, err := c.store.ListAnomalies(100)
 	if err != nil {
 		return fmt.Errorf("list anomalies for approval: %w", err)

@@ -2,7 +2,10 @@
 // Every flag defaults to false — all v2 features are opt-in.
 package featureflags
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 // Flags holds all feature gate booleans for the agent.
 // Each field corresponds to a KUBEWISE_FEATURE_<NAME> env var.
@@ -71,7 +74,7 @@ func envBool(key string) bool {
 	if !ok {
 		return false
 	}
-	switch v {
+	switch strings.ToLower(v) {
 	case "", "0", "false", "off", "no":
 		return false
 	default:

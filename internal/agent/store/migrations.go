@@ -4,6 +4,10 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// maxRecordsInMemory is the safety limit for loading records into memory.
+// Lists beyond this require filtering to prevent OOM.
+const maxRecordsInMemory = 10000
+
 // Bucket names used by the store.
 var (
 	bucketMetrics       = []byte("metrics")

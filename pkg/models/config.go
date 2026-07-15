@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -70,6 +71,16 @@ func (d *DurationValue) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		return err
 	}
 	d.Duration = v
+	return nil
+}
+
+// Validate checks that AgentConfig has valid values.
+func (c *AgentConfig) Validate() error {
+	if c.ScrapeInterval != "" {
+		if _, err := time.ParseDuration(c.ScrapeInterval); err != nil {
+			return fmt.Errorf("invalid scrape_interval %q: %w", c.ScrapeInterval, err)
+		}
+	}
 	return nil
 }
 

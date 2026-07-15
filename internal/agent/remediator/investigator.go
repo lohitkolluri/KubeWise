@@ -265,14 +265,10 @@ func (inv *Investigator) writeWorkloadSuccessor(ctx context.Context, b *strings.
 	}
 }
 
-// inferDeploymentFromPod extracts a Deployment name from a standard pod name
-// pattern: {deployment}-{replicaset-hash}-{pod-id}.
+// inferDeploymentFromPod extracts a Deployment name from a standard pod name.
+// Delegates to inferDeploymentFromPodName for consistent handling across the codebase.
 func inferDeploymentFromPod(podName string) string {
-	parts := strings.Split(podName, "-")
-	if len(parts) < 3 {
-		return ""
-	}
-	return strings.Join(parts[:len(parts)-2], "-")
+	return inferDeploymentFromPodName(podName)
 }
 
 func podReadyCount(pod *corev1.Pod) int {

@@ -171,6 +171,9 @@ func (c *PrometheusCollector) execQuery(ctx context.Context, name, query string)
 	if err != nil {
 		return MetricResult{}, fmt.Errorf("promql query %q: %w", name, err)
 	}
+	if result == nil {
+		return MetricResult{}, fmt.Errorf("promql query %q: nil result (possible error response with 200 status)", name)
+	}
 	if len(warnings) > 0 {
 		slog.Warn("prometheus: query warning", "query", name, "warnings", warnings)
 	}

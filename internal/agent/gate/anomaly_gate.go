@@ -11,6 +11,7 @@ import (
 func DefaultConfig() Config {
 	return Config{
 		Threshold:         0.3,
+		PersistThreshold:  0.65,
 		SustainCount:      3,
 		CooldownDuration:  5 * time.Minute,
 		ScrapeInterval:    30 * time.Second,
@@ -24,7 +25,11 @@ func DefaultConfig() Config {
 type Config struct {
 	// Threshold is the minimum score to consider for sustainment (default: 0.3)
 	Threshold float64
-	// SustainCount is the number of consecutive scores >= Threshold required to pass (default: 3)
+	// PersistThreshold is the minimum score to accumulate sustainment credit (default: 0.65).
+	// Scores below PersistThreshold but above Threshold reset the sustainment history so
+	// sub-persistence scores never accumulate credit toward passing the gate.
+	PersistThreshold float64
+	// SustainCount is the number of consecutive scores >= PersistThreshold required to pass (default: 3)
 	SustainCount int
 	// CooldownDuration is how long to suppress after a pass (default: 5 minutes)
 	CooldownDuration time.Duration
@@ -143,7 +148,6 @@ func (g *AnomalyGate) ObserveScore(entity string, metricName string, score float
 		}
 	}
 	g.recordSustainmentScore(hKey, score, now)
-	atomic.AddUint64(&g.stats.Observed, 1)
 	g.pruneStaleLocked(now, now.Add(-24*time.Hour))
 }
 
@@ -179,7 +183,7 @@ func (g *AnomalyGate) pruneStaleLocked(now, cutoff time.Time) {
 
 func (g *AnomalyGate) recordSustainmentScore(hKey string, score float64, now time.Time) {
 	history := g.history[hKey]
-	if score < g.config.Threshold {
+	if score < g.config.PersistThreshold {
 		history.scores = make([]float64, 0)
 		history.lastSeen = now
 		return
@@ -323,7 +327,7 @@ func (g *AnomalyGate) isSustainedFromHistory(hKey string) bool {
 		return false
 	}
 	for _, s := range history.scores {
-		if s < g.config.Threshold {
+		if s < g.config.PersistThreshold {
 			return false
 		}
 	}

@@ -103,7 +103,7 @@ func ValidateResult(r RuleResult) []error {
 	if r.Confidence < 0 || r.Confidence > 1 {
 		errs = append(errs, fmt.Errorf("confidence %.2f out of range [0,1]", r.Confidence))
 	}
-	if r.Target == "" && r.Action != "noop" && r.Action != "escalate" {
+	if r.Target == "" && r.Action != "noop" {
 		errs = append(errs, fmt.Errorf("target is empty for action %q", r.Action))
 	}
 	if len(r.Evidence) == 0 {

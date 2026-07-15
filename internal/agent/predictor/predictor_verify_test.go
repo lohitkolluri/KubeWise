@@ -706,18 +706,25 @@ func TestVerifyPerformance(t *testing.T) {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
+// testTimeOffset is incremented on each singlePoint call so that timestamps
+// are unique across the test, enabling timestamp-based velocity computation.
+var testTimeOffset int64
+
 // fixedTime returns a deterministic timestamp for test reproducibility.
 func fixedTime() time.Time {
 	return time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // singlePoint builds a MetricResult with a single value at the given time.
+// Each call uses an incrementing timestamp offset so that velocity computation
+// (which uses actual timestamps) produces meaningful results.
 func singlePoint(name string, val float64, labels map[string]string) []MetricResult {
+	testTimeOffset++
 	return []MetricResult{{
 		Name: name,
 		Values: []MetricPoint{{
 			Value:     val,
-			Timestamp: fixedTime(),
+			Timestamp: fixedTime().Add(time.Duration(testTimeOffset) * time.Second),
 			Labels:    labels,
 		}},
 	}}

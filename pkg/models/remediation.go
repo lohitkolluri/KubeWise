@@ -31,7 +31,7 @@ type ToolResult struct {
 	Stdout   string            `json:"stdout"`
 	Stderr   string            `json:"stderr"`
 	ExitCode int               `json:"exit_code,omitempty"`
-	Duration time.Duration     `json:"duration"`
+	Duration DurationValue     `json:"duration"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
@@ -148,7 +148,7 @@ type RemediationAction struct {
 	Type       string            `json:"type"`
 	Target     string            `json:"target"`
 	Status     string            `json:"status"`
-	Params     map[string]string `json:"params,omitempty"`
+	Params     map[string]string `json:"parameters,omitempty"`
 	ExecutedAt *time.Time        `json:"executed_at,omitempty"`
 	VerifiedAt *time.Time        `json:"verified_at,omitempty"`
 	Error      string            `json:"error,omitempty"`

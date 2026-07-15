@@ -32,6 +32,11 @@ type Predictor struct {
 	patternLastSeen map[string]int
 	patternLastEmit map[string]int
 	patterns        []PatternMatcher
+
+	// lastSeen tracks the last access time for each metric key, used by the
+	// cleanup goroutine to prune stale state from in-memory maps.
+	lastSeen      map[string]time.Time
+	cleanupStopCh chan struct{}
 }
 
 // NewPredictor creates a Predictor wired with the given scorer configuration.
@@ -49,6 +54,57 @@ func NewPredictor(config ScorerConfig) *Predictor {
 		patternStreak:   make(map[string]int),
 		patternLastSeen: make(map[string]int),
 		patternLastEmit: make(map[string]int),
+		lastSeen:        make(map[string]time.Time),
+		cleanupStopCh:   make(chan struct{}),
+	}
+}
+
+// StartCleanup launches a background goroutine that periodically prunes stale keys
+// from in-memory maps (estimators, changepoints, history, streak, datapoints).
+// Keys not seen within the last hour are removed.
+func (p *Predictor) StartCleanup() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				p.pruneStaleKeys()
+			case <-p.cleanupStopCh:
+				return
+			}
+		}
+	}()
+}
+
+// StopCleanup signals the cleanup goroutine to stop.
+func (p *Predictor) StopCleanup() {
+	select {
+	case <-p.cleanupStopCh:
+	default:
+		close(p.cleanupStopCh)
+	}
+}
+
+// pruneStaleKeys removes entries from in-memory maps that have not been seen
+// within the last hour.
+func (p *Predictor) pruneStaleKeys() {
+	const staleThreshold = 1 * time.Hour
+	cutoff := time.Now().Add(-staleThreshold)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for key, last := range p.lastSeen {
+		if last.Before(cutoff) {
+			delete(p.estimators, key)
+			delete(p.changepoints, key)
+			delete(p.history, key)
+			delete(p.datapoints, key)
+			delete(p.streak, key)
+			delete(p.lastSeen, key)
+			slog.Debug("predictor: pruned stale key", "key", key)
+		}
 	}
 }
 
@@ -212,6 +268,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// --- state access -------------------------------------------------------
 			p.mu.Lock()
 
+			p.lastSeen[key] = time.Now()
 			p.datapoints[key]++
 			dp := p.datapoints[key]
 
@@ -386,7 +443,7 @@ func metricKey(name string, labels map[string]string) string {
 // name when none of the standard label keys are present.
 func entityName(metricName string, labels map[string]string) string {
 	for _, k := range []string{"pod", "node", "container", "instance"} {
-		if v, ok := labels[k]; ok {
+		if v, ok := labels[k]; ok && v != "" {
 			return v
 		}
 	}
