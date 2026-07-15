@@ -44,7 +44,7 @@ var metricProfiles = []struct {
 	Profile MetricProfile
 }{
 	{Prefix: "pod_cpu_", Profile: MetricProfile{Strategy: StrategyRobustZScore, MinScore: 0.65, Persistence: 2}},
-	{Prefix: "pod_memory_", Profile: MetricProfile{Strategy: StrategyRobustZScore, MinScore: 0.65, Persistence: 2}},
+	{Prefix: "pod_memory_", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 2}},
 	{Prefix: "restart_", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.40, Persistence: 1}},
 	{Prefix: "crash", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.30, Persistence: 1}},
 	{Prefix: "oom", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.30, Persistence: 1}},
