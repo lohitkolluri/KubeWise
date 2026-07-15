@@ -3,9 +3,13 @@ package remediator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/api"
+	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,11 +23,32 @@ import (
 // Verifier confirms remediation outcomes against the cluster.
 type Verifier struct {
 	clientset kubernetes.Interface
+	promAPI   v1.API // Prometheus API for PromQL verification checks
 }
 
 // NewVerifier creates a verifier with the given clientset.
-func NewVerifier(clientset kubernetes.Interface) *Verifier {
-	return &Verifier{clientset: clientset}
+// Optionally accepts a Prometheus API instance for PromQL-based verification
+// checks. When promAPI is nil, "promql" check types are skipped.
+func NewVerifier(clientset kubernetes.Interface, promAPI ...v1.API) *Verifier {
+	v := &Verifier{clientset: clientset}
+	if len(promAPI) > 0 {
+		v.promAPI = promAPI[0]
+	}
+	return v
+}
+
+// NewVerifierWithPrometheus creates a verifier from a Prometheus address string.
+// This is a convenience constructor that creates the Prometheus API client
+// internally.
+func NewVerifierWithPrometheus(clientset kubernetes.Interface, promAddr string) *Verifier {
+	v := &Verifier{clientset: clientset}
+	if promAddr != "" {
+		client, err := api.NewClient(api.Config{Address: promAddr})
+		if err == nil {
+			v.promAPI = v1.NewAPI(client)
+		}
+	}
+	return v
 }
 
 // Verify runs all checks in the plan. Returns nil when every check passes.
@@ -202,6 +227,8 @@ func (v *Verifier) runCheck(ctx context.Context, check models.VerificationCheck)
 		return v.checkNoCrashLoop(ctx, check.Namespace, check.Target)
 	case "deployment_ready":
 		return v.checkDeploymentReady(ctx, check.Namespace, check.Target)
+	case "promql":
+		return v.checkPromQL(ctx, check)
 	default:
 		return fmt.Errorf("unknown verification check %q", check.Type)
 	}
@@ -262,4 +289,48 @@ func (v *Verifier) checkDeploymentReady(ctx context.Context, namespace, name str
 		return fmt.Errorf("deployment_ready %s/%s: ready=%d want=%d", namespace, name, dep.Status.ReadyReplicas, *dep.Spec.Replicas)
 	}
 	return nil
+}
+
+// checkPromQL executes a PromQL query and compares the result against a
+// threshold. The check.Parameters must contain "query" (the PromQL expression).
+// An optional "threshold" parameter (default: "0.5") sets the maximum allowed
+// value. Returns an error if any result series exceeds the threshold.
+func (v *Verifier) checkPromQL(ctx context.Context, check models.VerificationCheck) error {
+	if v.promAPI == nil {
+		return fmt.Errorf("promql check skipped: no Prometheus API configured")
+	}
+	query, ok := check.Parameters["query"]
+	if !ok || query == "" {
+		return fmt.Errorf("promql check requires 'query' parameter")
+	}
+	thresholdStr, ok := check.Parameters["threshold"]
+	if !ok {
+		thresholdStr = "0.5"
+	}
+	threshold, err := strconv.ParseFloat(thresholdStr, 64)
+	if err != nil {
+		return fmt.Errorf("invalid threshold %q: %w", thresholdStr, err)
+	}
+
+	// Execute the PromQL query.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	result, _, err := v.promAPI.Query(ctx, query, time.Now())
+	if err != nil {
+		return fmt.Errorf("promql query failed: %w", err)
+	}
+
+	// Check the result against the threshold.
+	switch vec := result.(type) {
+	case model.Vector:
+		for _, s := range vec {
+			if float64(s.Value) > threshold {
+				return fmt.Errorf("promql check failed: %s = %v > threshold %f", query, s.Value, threshold)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected promql result type %T", result)
+	}
 }

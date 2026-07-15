@@ -264,6 +264,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 		for _, pt := range mr.Values {
 			key := metricKey(mr.Name, pt.Labels)
+			profile := ProfileForMetric(mr.Name)
 
 			// --- state access -------------------------------------------------------
 			p.mu.Lock()
@@ -315,15 +316,31 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				continue
 			}
 
-			// --- adaptive-median + robust Z-score scoring ----------------------------
+			// --- adaptive-median + strategy-specific scoring ------------------------
 			median, mad, _, n, ok := est.Stats()
 			if !ok || n < p.config.MinWarmup {
 				continue
 			}
 
-			primaryScore := RobustAnomalyScore(
-				pt.Value, median, mad,
-			)
+			rzScore := RobustAnomalyScore(pt.Value, median, mad)
+
+			var primaryScore float64
+			switch profile.Strategy {
+			case StrategyChangepoint:
+				// Changepoint-detected anomalies get a baseline score;
+				// the burst of recent changepoints IS the anomaly signal.
+				primaryScore = rzScore
+				if rzScore < 0.3 {
+					primaryScore = 0.3
+				}
+			case StrategyCombinedOR:
+				primaryScore = rzScore
+				if rzScore < 0.3 {
+					primaryScore = 0.3
+				}
+			default:
+				primaryScore = rzScore
+			}
 
 			// --- rate-of-change boost -----------------------------------------------
 			rocBoost := 0.0
@@ -331,7 +348,6 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			if len(history) >= 4 {
 				vel := p.roc.Velocity(history)
 				if math.Abs(vel.Slope) > 0 {
-					// Scale-invariant relative slope.
 					relSlope := math.Abs(vel.Slope) / math.Max(math.Abs(median), 1.0)
 					rocBoost = math.Min(relSlope*5.0, p.config.ROCBoostWeight)
 				}
@@ -347,13 +363,21 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			// Persistence: require >=N consecutive scrapes above threshold before emitting.
 			// This cuts false positives from single-sample spikes.
+			// Profile values override config when non-zero (benchmark-tuned per metric family).
 			emit := false
-			required := p.config.Persistence
+			required := profile.Persistence
 			if required <= 0 {
-				required = 1
+				required = p.config.Persistence
+				if required <= 0 {
+					required = 1
+				}
+			}
+			minScore := profile.MinScore
+			if minScore <= 0 {
+				minScore = p.config.MinScore
 			}
 			p.mu.Lock()
-			if score >= p.config.MinScore {
+			if score >= minScore {
 				p.streak[key]++
 				if p.streak[key] >= required {
 					emit = true
@@ -409,7 +433,8 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			"above_min", aboveThreshold,
 			"below_min", belowThreshold,
 			"max_score", maxScore,
-			"max_key", maxKey)
+			"max_key", maxKey,
+		)
 	}
 
 	return results, nil

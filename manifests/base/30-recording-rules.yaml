@@ -1,0 +1,26 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kubewise-recording-rules
+  labels:
+    app.kubernetes.io/name: kubewise
+    app.kubernetes.io/component: agent
+spec:
+  groups:
+  - name: kubewise-ingestion
+    interval: 30s
+    rules:
+    - record: kw:cpu_usage:rate5m
+      expr: rate(container_cpu_usage_seconds_total{container!=""}[5m])
+    - record: kw:memory_usage:working_set
+      expr: container_memory_working_set_bytes{container!=""}
+    - record: kw:restarts:rate5m
+      expr: rate(kube_pod_container_status_restarts_total[5m])
+    - record: kw:pod_phase:failed
+      expr: kube_pod_status_phase{phase=~"Pending|Failed|Unknown"}
+    - record: kw:node:memory_pressure
+      expr: kube_node_status_condition{condition="MemoryPressure",status="true"}
+    - record: kw:node:disk_pressure
+      expr: kube_node_status_condition{condition="DiskPressure",status="true"}
+    - record: kw:deployment:replicas_unavailable
+      expr: kube_deployment_status_replicas_unavailable

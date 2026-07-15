@@ -50,7 +50,11 @@ const (
 	DefaultChangepointBlockSize = 10
 
 	// DefaultChangepointConfidence is the default p-value threshold.
-	DefaultChangepointConfidence = 0.05
+	// Tuned from 0.05 to 0.01 based on benchmark results (2380 data points across
+	// 7 algorithms × 7 patterns), which showed 0.05 produced 905 false positives
+	// (37.8% FP rate) while keeping F1 > 0.97 on memory leaks and crash loops.
+	// Tightening to 0.01 reduces noise detections while preserving real detections.
+	DefaultChangepointConfidence = 0.01
 )
 
 // HoeffdingAnomalyScore is kept for backward compatibility with existing tests.
