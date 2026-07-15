@@ -49,11 +49,14 @@ var metricProfiles = []struct {
 	{Prefix: "crash", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.30, Persistence: 1}},
 	{Prefix: "oom", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.30, Persistence: 1}},
 	{Prefix: "node_", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 2}},
-	{Prefix: "tcp_", Profile: MetricProfile{Strategy: StrategyCombinedOR, MinScore: 0.65, Persistence: 3}},
-	{Prefix: "dns_", Profile: MetricProfile{Strategy: StrategyCombinedOR, MinScore: 0.65, Persistence: 3}},
-	{Prefix: "network_", Profile: MetricProfile{Strategy: StrategyCombinedOR, MinScore: 0.65, Persistence: 3}},
+	{Prefix: "tcp_", Profile: MetricProfile{Strategy: StrategyCombinedOR, MinScore: 0.60, Persistence: 2}},
+	{Prefix: "dns_", Profile: MetricProfile{Strategy: StrategyCombinedOR, MinScore: 0.60, Persistence: 2}},
+	{Prefix: "network_", Profile: MetricProfile{Strategy: StrategyCombinedOR, MinScore: 0.60, Persistence: 2}},
 	{Prefix: "cpu_throttle", Profile: MetricProfile{Strategy: StrategyRobustZScore, MinScore: 0.50, Persistence: 2}},
-	{Prefix: "ready_ratio", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 2}},
+	{Prefix: "pod_ready_", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 2}},
+	{Prefix: "pod_not_ready", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 2}},
+	{Prefix: "imagepull", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 1}},
+	{Prefix: "deployment_", Profile: MetricProfile{Strategy: StrategyChangepoint, MinScore: 0.50, Persistence: 2}},
 	{Prefix: "", Profile: MetricProfile{Strategy: StrategyRobustZScore, MinScore: 0, Persistence: 0}}, // default
 }
 

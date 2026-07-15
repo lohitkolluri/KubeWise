@@ -305,8 +305,45 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				continue
 			}
 
+			// --- adaptive-median + robust Z-score scoring (computed before changepoint
+			// reset so we don't lose the score for the regime-shift point).
+			median, mad, _, n, ok := est.Stats()
+			rzScore := 0.0
+			if ok && n >= p.config.MinWarmup {
+				rzScore = RobustAnomalyScore(pt.Value, median, mad)
+			}
+
 			// --- changepoint detection (adds to buffer AND returns detection flag) -
+			// When a changepoint is detected, the current value marks a regime shift.
+			// Before resetting the estimator, emit the score for this point — otherwise
+			// the changepoint signal is lost (previously this was a `continue`).
 			if cp.Add(pt.Value) {
+				cpScore := rzScore
+				if cpScore < 0.3 {
+					cpScore = 0.3
+				}
+				// Apply persistence check and emit if qualified.
+				minScore := profile.MinScore
+				if minScore <= 0 {
+					minScore = p.config.MinScore
+				}
+				if cpScore >= minScore {
+					p.mu.Lock()
+					p.streak[key]++
+					if p.streak[key] >= profile.Persistence || p.streak[key] >= 1 {
+						p.mu.Unlock()
+						results = append(results, models.PredictionResult{
+							Type:       "changepoint",
+							Entity:     entityName(mr.Name, pt.Labels),
+							Namespace:  pt.Labels["namespace"],
+							MetricName: mr.Name,
+							Score:      cpScore,
+							Timestamp:  time.Now(),
+						})
+					} else {
+						p.mu.Unlock()
+					}
+				}
 				est.Reset()
 				est.Add(pt.Value)
 				p.mu.Lock()
@@ -316,19 +353,13 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				continue
 			}
 
-			// --- adaptive-median + strategy-specific scoring ------------------------
-			median, mad, _, n, ok := est.Stats()
 			if !ok || n < p.config.MinWarmup {
 				continue
 			}
 
-			rzScore := RobustAnomalyScore(pt.Value, median, mad)
-
 			var primaryScore float64
 			switch profile.Strategy {
 			case StrategyChangepoint:
-				// Changepoint-detected anomalies get a baseline score;
-				// the burst of recent changepoints IS the anomaly signal.
 				primaryScore = rzScore
 				if rzScore < 0.3 {
 					primaryScore = 0.3

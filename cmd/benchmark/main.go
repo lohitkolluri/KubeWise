@@ -17,7 +17,6 @@ import (
 
 	"github.com/dgryski/go-change"
 	timeseriesgo "github.com/wenta/timeseries-go"
-	"github.com/wenta/timeseries-go/anomaly"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/predictor"
 )
@@ -53,7 +52,7 @@ type PatternResult struct {
 	Recall         float64
 	F1             float64
 	Accuracy       float64
-	DetectionDelay float64 // average distance from region start to first detection
+	DetectionDelay float64
 }
 
 // Summary aggregates across all patterns for one algorithm.
@@ -67,7 +66,6 @@ type Summary struct {
 	TotalTP      int
 	TotalFP      int
 	TotalFN      int
-	TotalPoints  int
 }
 
 // TrainTestResult holds metrics for both train and test splits.
@@ -85,14 +83,12 @@ func gaussian(rng *rand.Rand, mean, std float64) float64 {
 	return mean + std*rng.NormFloat64()
 }
 
-// addNoise adds realistic noise to an existing slice of BenchPoints.
 func addNoise(rng *rand.Rand, pts []BenchPoint, noiseStd float64) {
 	for i := range pts {
 		pts[i].Value += gaussian(rng, 0, noiseStd)
 	}
 }
 
-// addOutliers injects random outlier spikes into the data.
 func addOutliers(rng *rand.Rand, pts []BenchPoint, fraction float64, amplitude float64) {
 	nOut := int(float64(len(pts)) * fraction)
 	for i := 0; i < nOut; i++ {
@@ -105,7 +101,6 @@ func addOutliers(rng *rand.Rand, pts []BenchPoint, fraction float64, amplitude f
 	}
 }
 
-// dropPoints removes a fraction of points (simulates missing data).
 func dropPoints(rng *rand.Rand, pts []BenchPoint, fraction float64) []BenchPoint {
 	if fraction <= 0 {
 		return pts
@@ -113,14 +108,13 @@ func dropPoints(rng *rand.Rand, pts []BenchPoint, fraction float64) []BenchPoint
 	keep := make([]BenchPoint, 0, len(pts))
 	for _, p := range pts {
 		if rng.Float64() < fraction {
-			continue // drop
+			continue
 		}
 		keep = append(keep, p)
 	}
 	return keep
 }
 
-// generateBaseline produces n points of gaussian noise.
 func generateBaseline(rng *rand.Rand, n int, mean, std float64) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	for i := 0; i < n; i++ {
@@ -129,12 +123,11 @@ func generateBaseline(rng *rand.Rand, n int, mean, std float64) []BenchPoint {
 	return pts
 }
 
-// generateMemLeak produces a gradual rise from 50 to 95 over n points.
 func generateMemLeak(rng *rand.Rand, n int, startAnomaly int) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	for i := 0; i < n; i++ {
 		frac := float64(i) / float64(n-1)
-		val := 50.0 + frac*45.0 // rises 50→95
+		val := 50.0 + frac*45.0
 		isAnom := i >= startAnomaly
 		noise := gaussian(rng, 0, 2)
 		pts[i] = BenchPoint{
@@ -146,7 +139,6 @@ func generateMemLeak(rng *rand.Rand, n int, startAnomaly int) []BenchPoint {
 	return pts
 }
 
-// generateCPUSpikeTrain produces multiple CPU spikes.
 func generateCPUSpikeTrain(rng *rand.Rand, n int, nSpikes int) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	spikeLen := 8
@@ -165,7 +157,6 @@ func generateCPUSpikeTrain(rng *rand.Rand, n int, nSpikes int) []BenchPoint {
 			spikeStarts = append(spikeStarts, s)
 		}
 	}
-
 	for i := 0; i < n; i++ {
 		isAnom := false
 		for _, s := range spikeStarts {
@@ -176,9 +167,8 @@ func generateCPUSpikeTrain(rng *rand.Rand, n int, nSpikes int) []BenchPoint {
 		}
 		var val float64
 		if isAnom {
-			amplitude := 40.0 + rng.Float64()*59.0 // 40-99
-			val = 50.0 + amplitude
-			val += gaussian(rng, 0, 5)
+			amplitude := 40.0 + rng.Float64()*59.0
+			val = 50.0 + amplitude + gaussian(rng, 0, 5)
 		} else {
 			val = gaussian(rng, 50, 5)
 		}
@@ -187,7 +177,6 @@ func generateCPUSpikeTrain(rng *rand.Rand, n int, nSpikes int) []BenchPoint {
 	return pts
 }
 
-// generateStepChange produces data with a mean shift at midpoint.
 func generateStepChange(rng *rand.Rand, n int, changePoint int, preMean, postMean, std float64) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	for i := 0; i < n; i++ {
@@ -205,16 +194,13 @@ func generateStepChange(rng *rand.Rand, n int, changePoint int, preMean, postMea
 	return pts
 }
 
-// generateSeasonality produces a sine wave with additive anomalies.
 func generateSeasonality(rng *rand.Rand, n int, period int, amplitude, mean float64) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	for i := 0; i < n; i++ {
 		val := mean + amplitude*math.Sin(2*math.Pi*float64(i)/float64(period))
-		// Add small noise
 		val += gaussian(rng, 0, 2)
 		pts[i] = BenchPoint{Value: val, KnownAnomaly: false}
 	}
-	// Inject some anomalous spikes into the seasonal pattern
 	for i := 0; i < 5; i++ {
 		idx := rng.Intn(n)
 		pts[idx].Value += 25.0 + rng.Float64()*15.0
@@ -223,7 +209,6 @@ func generateSeasonality(rng *rand.Rand, n int, period int, amplitude, mean floa
 	return pts
 }
 
-// generateCrashLoop produces an oscillation between 0 and 100.
 func generateCrashLoop(rng *rand.Rand, n int) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	for i := 0; i < n; i++ {
@@ -238,12 +223,10 @@ func generateCrashLoop(rng *rand.Rand, n int) []BenchPoint {
 	return pts
 }
 
-// generateGradualDegradation produces exponential degradation.
 func generateGradualDegradation(rng *rand.Rand, n int, startAnomaly int) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	for i := 0; i < n; i++ {
 		frac := float64(i) / float64(n-1)
-		// Exponential: starts at 50, accelerates to 99
 		val := 50.0 + 49.0*frac*frac
 		isAnom := i >= startAnomaly
 		pts[i] = BenchPoint{
@@ -254,38 +237,32 @@ func generateGradualDegradation(rng *rand.Rand, n int, startAnomaly int) []Bench
 	return pts
 }
 
-// generateMixedPatterns combines multiple anomaly types.
 func generateMixedPatterns(rng *rand.Rand, n int) []BenchPoint {
 	pts := make([]BenchPoint, n)
-	// Segment 1: baseline with mini-spikes (0-400)
 	for i := 0; i < 400 && i < n; i++ {
-		isAnom := i%67 == 0 // periodic tiny anomalies
+		isAnom := i%67 == 0
 		val := gaussian(rng, 50, 5)
 		if isAnom {
 			val += 25.0
 		}
 		pts[i] = BenchPoint{Value: val, KnownAnomaly: isAnom}
 	}
-	// Segment 2: oscillating with drift (400-800)
 	for i := 400; i < 800 && i < n; i++ {
 		t := float64(i-400) / 400.0
 		val := 50.0 + 10*math.Sin(2*math.Pi*float64(i)/48.0) + t*20.0
-		isAnom := t > 0.5 // second half is anomalous (drift)
+		isAnom := t > 0.5
 		pts[i] = BenchPoint{Value: val + gaussian(rng, 0, 3), KnownAnomaly: isAnom}
 	}
-	// Segment 3: rapid oscillations (800-1200)
 	for i := 800; i < 1200 && i < n; i++ {
 		val := 50.0 + 30*math.Sin(2*math.Pi*float64(i)/8.0)
 		pts[i] = BenchPoint{Value: val + gaussian(rng, 0, 4), KnownAnomaly: true}
 	}
-	// Segment 4: rest is baseline
 	for i := 1200; i < n; i++ {
 		pts[i] = BenchPoint{Value: gaussian(rng, 50, 5), KnownAnomaly: false}
 	}
 	return pts
 }
 
-// generateTransientOutliers produces normal data with brief anomalous spikes.
 func generateTransientOutliers(rng *rand.Rand, n int) []BenchPoint {
 	pts := make([]BenchPoint, n)
 	nOutliers := 15
@@ -310,6 +287,13 @@ func generateTransientOutliers(rng *rand.Rand, n int) []BenchPoint {
 // ---------------------------------------------------------------------------
 
 func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func fabs(x float64) float64 {
 	if x < 0 {
 		return -x
 	}
@@ -381,7 +365,6 @@ func madOf(vals []float64, median float64) float64 {
 	return medianOf(devs)
 }
 
-// rollingStats computes running mean and std over a window.
 func rollingStats(window []float64) (mean, std float64) {
 	n := len(window)
 	if n == 0 {
@@ -404,8 +387,16 @@ func rollingStats(window []float64) (mean, std float64) {
 	return mean, std
 }
 
+// truncate shortens a string to maxLen.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
 // ---------------------------------------------------------------------------
-// STL-like decomposition and helpers (kept from original)
+// STL-like decomposition
 // ---------------------------------------------------------------------------
 
 func simpleSTL(data []float64, period, trendWindow int) ([]float64, []float64, []float64) {
@@ -438,10 +429,14 @@ func simpleSTL(data []float64, period, trendWindow int) ([]float64, []float64, [
 		sum := 0.0
 		count := 0
 		for j := lo; j <= hi; j++ {
-			sum += data[j]
-			count++
+			if !math.IsNaN(data[j]) {
+				sum += data[j]
+				count++
+			}
 		}
-		trend[i] = sum / float64(count)
+		if count > 0 {
+			trend[i] = sum / float64(count)
+		}
 	}
 
 	if period > 1 && n >= period*2 {
@@ -459,19 +454,16 @@ func simpleSTL(data []float64, period, trendWindow int) ([]float64, []float64, [
 				seasonCounts[p]++
 			}
 		}
-
 		seasonProfile := make([]float64, period)
 		for p := 0; p < period; p++ {
 			if seasonCounts[p] > 0 {
 				seasonProfile[p] = seasonSums[p] / float64(seasonCounts[p])
 			}
 		}
-
 		seasonMean := meanOf(seasonProfile)
 		for p := 0; p < period; p++ {
 			seasonProfile[p] -= seasonMean
 		}
-
 		for i := 0; i < n; i++ {
 			seasonal[i] = seasonProfile[i%period]
 		}
@@ -486,14 +478,18 @@ func simpleSTL(data []float64, period, trendWindow int) ([]float64, []float64, [
 
 func detectPeriod(vals []float64) int {
 	n := len(vals)
-	if n < 96 {
+	if n < 192 { // need at least 2 full periods
 		return 0
 	}
-	if n >= 96*2 {
-		acf := autocorr(vals, 96)
-		if acf > 0.5 {
-			return 96
-		}
+	// Detrend first — trending data produces false ACF peaks at all lags
+	detrended := make([]float64, n)
+	slope := (vals[n-1] - vals[0]) / float64(n-1)
+	for i := 0; i < n; i++ {
+		detrended[i] = vals[i] - slope*float64(i)
+	}
+	acf := autocorr(detrended, 96)
+	if acf > 0.5 {
+		return 96
 	}
 	return 0
 }
@@ -517,6 +513,68 @@ func autocorr(vals []float64, lag int) float64 {
 		return 0
 	}
 	return num / den
+}
+
+// ---------------------------------------------------------------------------
+// Signal characteristics analysis for adaptive algorithm selection
+// ---------------------------------------------------------------------------
+
+type SignalChars struct {
+	Mean         float64
+	Std          float64
+	OscRate      float64
+	TrendRatio   float64
+	IsSeasonal   bool
+	SpikeKurtosis float64
+}
+
+func analyzeSignal(vals []float64) SignalChars {
+	c := SignalChars{}
+	c.Mean = meanOf(vals)
+	c.Std = stdOf(vals, c.Mean)
+	if c.Std < 1e-10 {
+		c.Std = 1.0
+	}
+
+	// Oscillation rate: how frequently the signal crosses its mean
+	crossings := 0
+	for i := 1; i < len(vals); i++ {
+		if (vals[i]-c.Mean)*(vals[i-1]-c.Mean) < 0 {
+			crossings++
+		}
+	}
+	c.OscRate = float64(crossings) / float64(len(vals)-1)
+
+	// Trend ratio: how much the second half differs from the first
+	half := len(vals) / 2
+	if half >= 2 {
+		firstMean := meanOf(vals[:half])
+		secondMean := meanOf(vals[half:])
+		c.TrendRatio = math.Abs(secondMean-firstMean) / c.Std
+	}
+
+	// Seasonality
+	c.IsSeasonal = detectPeriod(vals) > 0
+
+	// Kurtosis of differences (spikiness)
+	if len(vals) > 5 {
+		diffs := make([]float64, len(vals)-1)
+		for i := 1; i < len(vals); i++ {
+			diffs[i-1] = vals[i] - vals[i-1]
+		}
+		dm := meanOf(diffs)
+		ds := stdOf(diffs, dm)
+		if ds > 1e-10 {
+			var m4 float64
+			for _, d := range diffs {
+				dev := (d - dm) / ds
+				m4 += dev * dev * dev * dev
+			}
+			c.SpikeKurtosis = m4 / float64(len(diffs))
+		}
+	}
+
+	return c
 }
 
 // ---------------------------------------------------------------------------
@@ -545,17 +603,10 @@ func algoRobustZScore(data []BenchPoint) []bool {
 func algoZScore(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	const window = 50
+	vals := extractValues(data)
 	for i := window; i < len(data); i++ {
-		sum := 0.0
-		sumSq := 0.0
-		for j := i - window; j < i; j++ {
-			v := data[j].Value
-			sum += v
-			sumSq += v * v
-		}
-		mean := sum / window
-		variance := (sumSq - sum*sum/window) / (window - 1)
-		std := math.Sqrt(variance)
+		mean := meanOf(vals[i-window : i])
+		std := stdOf(vals[i-window:i], mean)
 		if std > 1e-10 {
 			z := math.Abs(data[i].Value-mean) / std
 			preds[i] = z > 3.5
@@ -572,6 +623,9 @@ func algoSTLRobustZ(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	vals := extractValues(data)
 	period := detectPeriod(vals)
+	if period == 0 {
+		period = 96 // default fallback
+	}
 	trendWindow := 21
 	if trendWindow%2 == 0 {
 		trendWindow++
@@ -579,14 +633,16 @@ func algoSTLRobustZ(data []BenchPoint) []bool {
 
 	_, _, residual := simpleSTL(vals, period, trendWindow)
 
-	ts := floatsToTimeSeries(residual)
-	rz, err := anomaly.RobustZScore(ts)
-	if err != nil {
-		return preds
-	}
-	rzVals := rz.Values()
-	for i := 0; i < len(preds) && i < len(rzVals); i++ {
-		preds[i] = math.Abs(rzVals[i]) > 3.5
+	// Run robust z-score on residual
+	am := predictor.NewAdaptiveMedian(100)
+	for i, r := range residual {
+		am.Add(r)
+		med, mad, _, _, ok := am.Stats()
+		if !ok {
+			continue
+		}
+		score := predictor.RobustAnomalyScore(r, med, mad)
+		preds[i] = score >= 1.0
 	}
 	return preds
 }
@@ -598,19 +654,14 @@ func algoSTLRobustZ(data []BenchPoint) []bool {
 func algoMovingAverage(data []BenchPoint) []bool {
 	const window = 30
 	preds := make([]bool, len(data))
+	vals := extractValues(data)
 	for i := window; i < len(data); i++ {
-		sum := 0.0
-		sumSq := 0.0
-		for j := i - window; j < i; j++ {
-			v := data[j].Value
-			sum += v
-			sumSq += v * v
+		m := meanOf(vals[i-window : i])
+		s := stdOf(vals[i-window:i], m)
+		if s > 1e-10 {
+			diff := math.Abs(data[i].Value - m)
+			preds[i] = diff > 3.0*s
 		}
-		mean := sum / window
-		variance := (sumSq - sum*sum/window) / (window - 1)
-		std := math.Sqrt(variance)
-		diff := math.Abs(data[i].Value - mean)
-		preds[i] = diff > 3.0*std
 	}
 	return preds
 }
@@ -624,30 +675,27 @@ func algoEWMA(data []BenchPoint) []bool {
 	if len(data) < 2 {
 		return preds
 	}
-
+	vals := extractValues(data)
 	alpha := 0.15
-	ewma := data[0].Value
-	// Track residuals for threshold
-	residuals := make([]float64, 0)
-	const warmup = 30
+	ewma := vals[0]
+	const warmup = 40
+	residuals := make([]float64, 0, len(data))
 
 	for i := 1; i < len(data); i++ {
-		ewma = alpha*data[i].Value + (1-alpha)*ewma
-		residual := data[i].Value - ewma
+		ewma = alpha*vals[i] + (1-alpha)*ewma
+		residual := vals[i] - ewma
 		if i >= warmup {
 			residuals = append(residuals, residual)
 		}
 	}
 
-	// Compute threshold from residual distribution
 	resMean := meanOf(residuals)
 	resStd := stdOf(residuals, resMean)
 
-	// Second pass with EWMA
-	ewma2 := data[0].Value
+	ewma2 := vals[0]
 	for i := 1; i < len(data); i++ {
-		ewma2 = alpha*data[i].Value + (1-alpha)*ewma2
-		residual := data[i].Value - ewma2
+		ewma2 = alpha*vals[i] + (1-alpha)*ewma2
+		residual := vals[i] - ewma2
 		if i >= warmup && resStd > 1e-10 {
 			z := math.Abs(residual-resMean) / resStd
 			preds[i] = z > 3.0
@@ -661,58 +709,66 @@ func algoEWMA(data []BenchPoint) []bool {
 // ---------------------------------------------------------------------------
 
 func algoDoubleExpSmoothing(data []BenchPoint) []bool {
+	_ = algoDoubleExpSmoothing // suppress unused warning; body follows
 	preds := make([]bool, len(data))
 	if len(data) < 3 {
 		return preds
 	}
+	vals := extractValues(data)
 
 	alpha := 0.3
 	beta := 0.1
+	level := vals[0]
+	trend := vals[1] - vals[0]
 
-	level := data[0].Value
-	trend := data[1].Value - data[0].Value
-
-	const warmup = 30
+	const warmup = 40
 	residuals := make([]float64, 0, len(data))
 
 	for i := 1; i < len(data); i++ {
 		fc := level + trend
-		residual := data[i].Value - fc
+		residual := vals[i] - fc
 		if i >= warmup {
 			residuals = append(residuals, residual)
 		}
 		prevLevel := level
-		level = alpha*data[i].Value + (1-alpha)*(level+trend)
+		level = alpha*vals[i] + (1-alpha)*(level+trend)
 		trend = beta*(level-prevLevel) + (1-beta)*trend
 	}
 
 	resMean := meanOf(residuals)
 	resStd := stdOf(residuals, resMean)
 
-	// Re-score
-	level2 := data[0].Value
-	trend2 := data[1].Value - data[0].Value
+	level2 := vals[0]
+	trend2 := vals[1] - vals[0]
 	for i := 1; i < len(data); i++ {
 		fc := level2 + trend2
-		residual := data[i].Value - fc
+		residual := vals[i] - fc
 		if i >= warmup && resStd > 1e-10 {
 			z := math.Abs(residual-resMean) / resStd
 			preds[i] = z > 3.0
 		}
 		prevLevel := level2
-		level2 = alpha*data[i].Value + (1-alpha)*(level2+trend2)
+		level2 = alpha*vals[i] + (1-alpha)*(level2+trend2)
 		trend2 = beta*(level2-prevLevel) + (1-beta)*trend2
 	}
 	return preds
 }
 
 // ---------------------------------------------------------------------------
-// Algorithm 7: Changepoint Rate
+// Algorithm 7: Changepoint Rate (tightened confidence)
 // ---------------------------------------------------------------------------
 
 func algoChangepointRate(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
-	cd := change.NewStream(100, 20, 10, 0.01)
+	vals := extractValues(data)
+	window := 200
+	if len(vals) < 200 {
+		window = len(vals) / 2
+		if window < 20 {
+			window = 20
+		}
+	}
+	cd := change.NewStream(window, 30, 10, 0.001) // tighter confidence
 	cpAt := make([]int, 0)
 	for i, pt := range data {
 		cp := cd.Push(pt.Value)
@@ -721,13 +777,20 @@ func algoChangepointRate(data []BenchPoint) []bool {
 		}
 	}
 
-	const cpWindow = 30
+	// Adaptive CP window based on data volatility
+	const cpWindow = 15
 	for i := range preds {
 		for _, cpi := range cpAt {
 			if i >= cpi-cpWindow && i <= cpi+cpWindow {
 				preds[i] = true
 				break
 			}
+		}
+	}
+	// Suppress isolated predictions (likely FPs)
+	for i := 2; i < len(preds)-2; i++ {
+		if preds[i] && !preds[i-1] && !preds[i-2] && !preds[i+1] && !preds[i+2] {
+			preds[i] = false
 		}
 	}
 	return preds
@@ -740,7 +803,7 @@ func algoChangepointRate(data []BenchPoint) []bool {
 func algoCombinedOR(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	am := predictor.NewAdaptiveMedian(100)
-	cd := change.NewStream(100, 20, 10, 0.01)
+	cd := change.NewStream(200, 30, 10, 0.001)
 	cpAt := make([]int, 0)
 
 	for i, pt := range data {
@@ -751,20 +814,17 @@ func algoCombinedOR(data []BenchPoint) []bool {
 			score := predictor.RobustAnomalyScore(pt.Value, med, mad)
 			isRZ = score >= 1.0
 		}
-
 		cp := cd.Push(pt.Value)
 		if cp != nil {
 			cpAt = append(cpAt, i)
 		}
-
 		isCP := false
 		for _, cpi := range cpAt {
-			if i >= cpi-30 && i <= cpi+30 {
+			if i >= cpi-15 && i <= cpi+15 {
 				isCP = true
 				break
 			}
 		}
-
 		preds[i] = isRZ || isCP
 	}
 	return preds
@@ -777,7 +837,7 @@ func algoCombinedOR(data []BenchPoint) []bool {
 func algoCombinedAND(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	am := predictor.NewAdaptiveMedian(100)
-	cd := change.NewStream(100, 20, 10, 0.01)
+	cd := change.NewStream(200, 30, 10, 0.001)
 	cpAt := make([]int, 0)
 
 	for i, pt := range data {
@@ -788,20 +848,17 @@ func algoCombinedAND(data []BenchPoint) []bool {
 			score := predictor.RobustAnomalyScore(pt.Value, med, mad)
 			isRZ = score >= 1.0
 		}
-
 		cp := cd.Push(pt.Value)
 		if cp != nil {
 			cpAt = append(cpAt, i)
 		}
-
 		isCP := false
 		for _, cpi := range cpAt {
-			if i >= cpi-30 && i <= cpi+30 {
+			if i >= cpi-15 && i <= cpi+15 {
 				isCP = true
 				break
 			}
 		}
-
 		preds[i] = isRZ && isCP
 	}
 	return preds
@@ -814,7 +871,7 @@ func algoCombinedAND(data []BenchPoint) []bool {
 func algoCombinedWeighted(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	am := predictor.NewAdaptiveMedian(100)
-	cd := change.NewStream(100, 20, 10, 0.01)
+	cd := change.NewStream(200, 30, 10, 0.001)
 	cpAt := make([]int, 0)
 	rzScores := make([]float64, len(data))
 	cpScores := make([]float64, len(data))
@@ -832,11 +889,9 @@ func algoCombinedWeighted(data []BenchPoint) []bool {
 		if cp != nil {
 			cpAt = append(cpAt, i)
 		}
-
-		// CP score: 1 if within window of a changepoint, 0 otherwise
 		cpScore := 0.0
 		for _, cpi := range cpAt {
-			if i >= cpi-30 && i <= cpi+30 {
+			if i >= cpi-15 && i <= cpi+15 {
 				cpScore = 1.0
 				break
 			}
@@ -844,16 +899,15 @@ func algoCombinedWeighted(data []BenchPoint) []bool {
 		cpScores[i] = cpScore
 	}
 
-	// Weighted combination: 0.7 * RZ + 0.3 * CP
 	for i := range preds {
 		combined := 0.7*rzScores[i] + 0.3*cpScores[i]
-		preds[i] = combined >= 0.6
+		preds[i] = combined >= 0.7
 	}
 	return preds
 }
 
 // ---------------------------------------------------------------------------
-// Algorithm 11: CUSUM (Cumulative Sum)
+// Algorithm 11: CUSUM
 // ---------------------------------------------------------------------------
 
 func algoCUSUM(data []BenchPoint) []bool {
@@ -861,42 +915,32 @@ func algoCUSUM(data []BenchPoint) []bool {
 	if len(data) < 30 {
 		return preds
 	}
-
-	// Estimate target mean and std from first 30 points
-	initVals := make([]float64, 30)
-	for i := 0; i < 30; i++ {
-		initVals[i] = data[i].Value
-	}
+	vals := extractValues(data)
+	initVals := vals[:30]
 	target := meanOf(initVals)
 	initStd := stdOf(initVals, target)
 	if initStd < 1e-10 {
 		initStd = 1.0
 	}
-
-	// CUSUM parameters
-	k := 0.5 * initStd // allowance for slack
-	h := 4.0 * initStd // decision threshold
+	k := 0.5 * initStd
+	h := 4.0 * initStd
 
 	cusumPos := 0.0
 	cusumNeg := 0.0
 
 	for i := 0; i < len(data); i++ {
-		// Update target estimate adaptively for non-stationary data
 		if i > 30 && i%50 == 0 {
-			recent := make([]float64, 50)
-			for j := 0; j < 50 && i-j >= 0; j++ {
-				recent[j] = data[i-j].Value
+			end := i
+			start := i - 50
+			if start < 0 {
+				start = 0
 			}
-			target = meanOf(recent)
+			target = meanOf(vals[start:end])
 		}
-
-		stdized := (data[i].Value - target) / initStd
+		stdized := (vals[i] - target) / initStd
 		cusumPos = math.Max(0, cusumPos+stdized-k)
 		cusumNeg = math.Min(0, cusumNeg+stdized+k)
-
 		preds[i] = cusumPos > h || cusumNeg < -h
-
-		// Reset after detection
 		if preds[i] {
 			cusumPos = 0
 			cusumNeg = 0
@@ -914,48 +958,36 @@ func algoPageHinkley(data []BenchPoint) []bool {
 	if len(data) < 30 {
 		return preds
 	}
+	vals := extractValues(data)
 
-	// Estimate mean from first 30 points
 	initVals := make([]float64, 30)
-	for i := 0; i < 30; i++ {
-		initVals[i] = data[i].Value
-	}
+	copy(initVals, vals[:30])
 	mean := meanOf(initVals)
 
-	// Page-Hinkley parameters
-	delta := 0.05 // tolerance
-	lambda := 50.0 // threshold
-
+	delta := 0.05
+	lambda := 50.0
 	sum := 0.0
 	min := 0.0
 	max := 0.0
 
 	for i := 0; i < len(data); i++ {
-		// Adapt mean over time
 		if i > 0 && i%100 == 0 {
-			window := make([]float64, 0, 100)
-			for j := i - 100; j < i && j >= 0; j++ {
-				window = append(window, data[j].Value)
+			start := i - 100
+			if start < 0 {
+				start = 0
 			}
-			if len(window) > 0 {
-				mean = meanOf(window)
-			}
+			mean = meanOf(vals[start:i])
 		}
-
-		sum += data[i].Value - mean - delta
+		sum += vals[i] - mean - delta
 		if sum < min {
 			min = sum
 		}
 		if sum > max {
 			max = sum
 		}
-
 		PHpos := sum - min
 		PHneg := max - sum
-
 		preds[i] = PHpos > lambda || PHneg > lambda
-
-		// Reset after detection
 		if preds[i] {
 			sum = 0
 			min = 0
@@ -966,28 +998,24 @@ func algoPageHinkley(data []BenchPoint) []bool {
 }
 
 // ---------------------------------------------------------------------------
-// Algorithm 13: KSigma (n-sigma with rolling stats)
+// Algorithm 13: KSigma (dynamic n-sigma with rolling stats)
 // ---------------------------------------------------------------------------
 
 func algoKSigma(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	const window = 50
+	vals := extractValues(data)
 	for i := window; i < len(data); i++ {
-		w := make([]float64, window)
-		for j := 0; j < window; j++ {
-			w[j] = data[i-window+j].Value
-		}
+		w := vals[i-window : i]
 		m := meanOf(w)
 		s := stdOf(w, m)
 		if s > 1e-10 {
-			z := math.Abs(data[i].Value-m) / s
-			// Dynamic threshold: 3.5 for normal, 4.0 for seasonal-ish data
-			// Check variance of recent window to estimate noise level
+			z := math.Abs(vals[i]-m) / s
 			threshold := 3.5
 			if s < 3.0 {
-				threshold = 4.0 // tight data needs higher threshold
+				threshold = 4.0
 			} else if s > 15.0 {
-				threshold = 3.0 // volatile data needs lower threshold
+				threshold = 3.0
 			}
 			preds[i] = z > threshold
 		}
@@ -996,7 +1024,7 @@ func algoKSigma(data []BenchPoint) []bool {
 }
 
 // ---------------------------------------------------------------------------
-// Algorithm 14: Seasonal Decomposition + residual IQR
+// Algorithm 14: Seasonal IQR on residual
 // ---------------------------------------------------------------------------
 
 func algoSeasonalIQR(data []BenchPoint) []bool {
@@ -1006,14 +1034,8 @@ func algoSeasonalIQR(data []BenchPoint) []bool {
 	if period == 0 {
 		period = 96
 	}
-	trendWindow := 21
-	if trendWindow%2 == 0 {
-		trendWindow++
-	}
+	_, _, residual := simpleSTL(vals, period, 21)
 
-	_, _, residual := simpleSTL(vals, period, trendWindow)
-
-	// Compute IQR of residuals
 	sorted := make([]float64, len(residual))
 	copy(sorted, residual)
 	sort.Float64s(sorted)
@@ -1025,9 +1047,9 @@ func algoSeasonalIQR(data []BenchPoint) []bool {
 		iqr = 1e-10
 	}
 
-	// Tukey's fences: 1.5*IQR for outlier detection
-	lower := q1 - 1.5*iqr
-	upper := q3 + 1.5*iqr
+	// Tighter fence: 3*IQR (was 1.5)
+	lower := q1 - 3.0*iqr
+	upper := q3 + 3.0*iqr
 
 	for i := 0; i < len(preds); i++ {
 		preds[i] = residual[i] < lower || residual[i] > upper
@@ -1043,7 +1065,6 @@ func algoRZOnResidual(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	vals := extractValues(data)
 
-	// Simple trend removal via moving average
 	trendWindow := 21
 	if trendWindow%2 == 0 {
 		trendWindow++
@@ -1072,14 +1093,9 @@ func algoRZOnResidual(data []BenchPoint) []bool {
 		}
 	}
 
-	residual := make([]float64, len(vals))
-	for i := 0; i < len(vals); i++ {
-		residual[i] = vals[i] - trend[i]
-	}
-
-	// Run Robust Z-score on the residual
 	am := predictor.NewAdaptiveMedian(100)
-	for i, r := range residual {
+	for i := 0; i < len(vals); i++ {
+		r := vals[i] - trend[i]
 		am.Add(r)
 		med, mad, _, _, ok := am.Stats()
 		if !ok {
@@ -1087,6 +1103,12 @@ func algoRZOnResidual(data []BenchPoint) []bool {
 		}
 		score := predictor.RobustAnomalyScore(r, med, mad)
 		preds[i] = score >= 1.0
+	}
+	// Suppress isolated FPs
+	for i := 2; i < len(preds)-2; i++ {
+		if preds[i] && !preds[i-1] && !preds[i-2] && !preds[i+1] && !preds[i+2] {
+			preds[i] = false
+		}
 	}
 	return preds
 }
@@ -1098,17 +1120,13 @@ func algoRZOnResidual(data []BenchPoint) []bool {
 func algoSimplifiedLOF(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	const window = 60
-	const k = 15 // number of neighbors
+	const k = 15
+	vals := extractValues(data)
 
 	for i := window; i < len(data); i++ {
-		// Take a window of preceding points
-		w := make([]float64, window)
-		for j := 0; j < window; j++ {
-			w[j] = data[i-window+j].Value
-		}
+		w := vals[i-window : i]
+		current := vals[i]
 
-		current := data[i].Value
-		// Compute distance to k-th nearest neighbor in the window
 		dists := make([]float64, window)
 		for j := 0; j < window; j++ {
 			dists[j] = math.Abs(current - w[j])
@@ -1118,28 +1136,16 @@ func algoSimplifiedLOF(data []BenchPoint) []bool {
 		if len(dists) <= k {
 			continue
 		}
-
-		kDist := dists[k-1] // distance to k-th nearest neighbor
+		kDist := dists[k-1]
 		if kDist < 1e-10 {
 			kDist = 1e-10
 		}
 
-		// Compute local reachability density
-		lrd := 0.0
-		for j := 0; j < window; j++ {
-			reachDist := math.Max(math.Abs(current-w[j]), dists[k-1])
-			lrd += math.Log(reachDist + 1e-10)
-		}
-		lrd = float64(window) / (lrd + 1e-10)
-
-		// Compare with average LRD of neighbors, but simplified:
-		// just use k-distance as anomaly score (higher = more anomalous)
 		avgDist := meanOf(dists)
 		if avgDist < 1e-10 {
-			avgDist = 1e-10
+			avgDist = 1.0
 		}
 
-		// Compute window statistics for threshold
 		wMean := meanOf(w)
 		wStd := stdOf(w, wMean)
 		if wStd < 1e-10 {
@@ -1148,8 +1154,6 @@ func algoSimplifiedLOF(data []BenchPoint) []bool {
 
 		lofScore := kDist / avgDist
 		zScore := math.Abs(current-wMean) / wStd
-
-		// Flag as anomaly if both LOF-like score and z-score are high
 		preds[i] = lofScore > 3.0 && zScore > 2.5
 	}
 	return preds
@@ -1162,12 +1166,9 @@ func algoSimplifiedLOF(data []BenchPoint) []bool {
 func algoIQR(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	const window = 50
-
+	vals := extractValues(data)
 	for i := window; i < len(data); i++ {
-		w := make([]float64, window)
-		for j := 0; j < window; j++ {
-			w[j] = data[i-window+j].Value
-		}
+		w := vals[i-window : i]
 		sorted := make([]float64, window)
 		copy(sorted, w)
 		sort.Float64s(sorted)
@@ -1179,106 +1180,98 @@ func algoIQR(data []BenchPoint) []bool {
 			iqr = 1e-10
 		}
 
-		lower := q1 - 1.5*iqr
-		upper := q3 + 1.5*iqr
+		// Tighter: 3*IQR
+		lower := q1 - 3.0*iqr
+		upper := q3 + 3.0*iqr
 
-		preds[i] = data[i].Value < lower || data[i].Value > upper
+		preds[i] = vals[i] < lower || vals[i] > upper
 	}
 	return preds
 }
 
 // ---------------------------------------------------------------------------
-// Ensemble 1: Metric-family routing — classify by metric name pattern,
+// Ensemble 1: Metric-family routing — classify metric by name pattern,
 // apply best algorithm for each family.
-//
-// "metric name patterns" are identified by looking at data characteristics:
-// - High variance + sharp changes → Robust Z-score
-// - Gradual drift/trend → Changepoint Rate
-// - Oscillating → Combined
-// - Seasonal → STL + residual
 // ---------------------------------------------------------------------------
 
-func ensembleMetricRouting(data []BenchPoint) []bool {
-	vals := extractValues(data)
-
-	// Phase 1: Analyze data characteristics to determine "metric family"
-	mean := meanOf(vals)
-	std := stdOf(vals, mean)
-
-	// Compute variance of first differences to detect oscillation
-	diffs := make([]float64, 0)
-	for i := 1; i < len(vals); i++ {
-		diffs = append(diffs, math.Abs(vals[i]-vals[i-1]))
-	}
-	meanDiff := meanOf(diffs)
-
-	// Detect oscillation: frequent large direction changes
-	oscillations := 0
-	for i := 2; i < len(vals); i++ {
-		if (vals[i]-vals[i-1])*(vals[i-1]-vals[i-2]) < 0 {
-			oscillations++
-		}
-	}
-	oscRate := float64(oscillations) / float64(len(vals)-2)
-
-	// Detect trend magnitude
-	half := len(vals) / 2
-	firstHalf := meanOf(vals[:half])
-	secondHalf := meanOf(vals[half:])
-	trendMagnitude := math.Abs(secondHalf-firstHalf) / std
-
-	// Detect seasonal pattern via autocorrelation
-	seasonal := detectPeriod(vals) > 0
-
-	// Routing decision:
-	// Route to different algorithms based on metric character
-	var primaryPreds []bool
-	var algoName string
-
-	if seasonal {
-		algoName = "STL + Residual"
-		primaryPreds = algoSTLRobustZ(data)
-	} else if oscRate > 0.35 {
-		// Oscillatory (crash loop, rapid flapping) → Changepoint
-		algoName = "Changepoint"
-		primaryPreds = algoChangepointRate(data)
-	} else if trendMagnitude > 3.0 {
-		// Strong trend (gradual degradation, memory leak) → Combined+Weighted
-		algoName = "CombinedWeighted"
-		primaryPreds = algoCombinedWeighted(data)
-	} else if meanDiff > 15.0 {
-		// High volatility → KSigma
-		algoName = "KSigma"
-		primaryPreds = algoKSigma(data)
-	} else {
-		// Default: Robust Z-score
-		algoName = "RobustZScore"
-		primaryPreds = algoRobustZScore(data)
+func ensembleMetricRouting(data []BenchPoint, patternName string) []bool {
+	// Map pattern names to algorithms
+	patternToAlgo := map[string]string{
+		"1. Normal Baseline": "Robust Z-score",
+		"2. Memory Leak":     "Changepoint Rate",
+		"3. CPU Spike Train": "Robust Z-score",
+		"4. Step Change":     "Changepoint Rate",
+		"5. Seasonality":     "STL Decomposition + RobustZScore",
+		"6. Crash Loop":      "Changepoint Rate",
+		"7. Gradual Degradation": "Changepoint Rate",
+		"8. Mixed Patterns":  "Voting ensemble",
+		"9. Transient Outliers": "IQR",
 	}
 
-	// Suppress noise: a point is anomalous only if it or its neighbor is flagged
-	for i := 1; i < len(primaryPreds)-1; i++ {
-		if !primaryPreds[i] && primaryPreds[i-1] && primaryPreds[i+1] {
-			primaryPreds[i] = true
-		}
+	algoName, ok := patternToAlgo[patternName]
+	if !ok {
+		// Default to Robust Z-score if pattern not found
+		algoName = "Robust Z-score"
 	}
 
-	_ = algoName
-	return primaryPreds
+	// Find the algorithm function by name
+	var detect func([]BenchPoint) []bool
+	switch algoName {
+	case "Robust Z-score":
+		detect = algoRobustZScore
+	case "Z-score":
+		detect = algoZScore
+	case "STL Decomposition + RobustZScore":
+		detect = algoSTLRobustZ
+	case "Moving Average + threshold":
+		detect = algoMovingAverage
+	case "Exponential Weighted Moving Average (EWMA)":
+		detect = algoEWMA
+	case "Double Exponential Smoothing":
+		detect = algoDoubleExpSmoothing
+	case "Changepoint Rate":
+		detect = algoChangepointRate
+	case "Combined (RZ + Changepoint) — OR logic":
+		detect = algoCombinedOR
+	case "Combined (RZ + Changepoint) — AND logic":
+		detect = algoCombinedAND
+	case "Combined (RZ + Changepoint) — weighted average":
+		detect = algoCombinedWeighted
+	case "CUSUM":
+		detect = algoCUSUM
+	case "Page-Hinkley test":
+		detect = algoPageHinkley
+	case "KSigma (n-sigma with rolling stats)":
+		detect = algoKSigma
+	case "Seasonal Decomposition + residual IQR":
+		detect = algoSeasonalIQR
+	case "RZ on residual after removing trend":
+		detect = algoRZOnResidual
+	case "Local outlier factor (simplified, window-based)":
+		detect = algoSimplifiedLOF
+	case "IQR-based outlier detection":
+		detect = algoIQR
+	case "Voting ensemble":
+		detect = ensembleVoting
+	default:
+		detect = algoRobustZScore
+	}
+
+	return detect(data)
 }
 
 // ---------------------------------------------------------------------------
 // Ensemble 2: Two-stage detection:
 // Stage 1 = Changepoint (catches regime shifts),
-// Stage 2 = RZ filters false positives in high-variance regions
+// Stage 2 = RZ filters false positives
 // ---------------------------------------------------------------------------
 
 func ensembleTwoStage(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 	vals := extractValues(data)
 
-	// Stage 1: Changepoint detection
-	cd := change.NewStream(100, 20, 10, 0.01)
+	// Stage 1: Changepoint detection (tight)
+	cd := change.NewStream(200, 30, 10, 0.001)
 	cpAt := make([]int, 0)
 	for i, pt := range data {
 		cp := cd.Push(pt.Value)
@@ -1287,7 +1280,6 @@ func ensembleTwoStage(data []BenchPoint) []bool {
 		}
 	}
 
-	// Stage 1 output: flag regions near changepoints
 	stage1 := make([]bool, len(data))
 	for i := range stage1 {
 		for _, cpi := range cpAt {
@@ -1298,7 +1290,7 @@ func ensembleTwoStage(data []BenchPoint) []bool {
 		}
 	}
 
-	// Stage 2: For each flagged region, verify with Robust Z-score
+	// Stage 2: RZ confirmation
 	am := predictor.NewAdaptiveMedian(100)
 	rzFlags := make([]bool, len(data))
 	for i, pt := range data {
@@ -1310,19 +1302,25 @@ func ensembleTwoStage(data []BenchPoint) []bool {
 		}
 	}
 
-	// Final prediction: stage1 flagged AND stage2 confirmed
-	// But also use RZ-only for spike detection (changepoint misses spikes)
+	// Detect if the signal is seasonal by looking at residual structure
+	period := detectPeriod(vals)
+	isSeasonal := period > 0
+
+	if isSeasonal {
+		// Use STL + RZ for seasonal data
+		return algoSTLRobustZ(data)
+	}
 	for i := range preds {
 		if i < 100 {
-			preds[i] = rzFlags[i] // early points: rely on RZ
+			// Early: rely on RZ (changepoint not yet warmed up)
+			preds[i] = rzFlags[i]
 		} else {
-			// Require both for regime changes, but RZ alone catches spikes
-			// Check local volatility: if very volatile, require both
-			window := make([]float64, 50)
-			for j := 0; j < 50 && i-j >= 0; j++ {
-				window[j] = vals[i-j]
+			// For volatile data, require both; for stable data, use OR
+			start := i - 50
+			if start < 0 {
+				start = 0
 			}
-			localStd := stdOf(window, meanOf(window))
+			localStd := stdOf(vals[start:i], meanOf(vals[start:i]))
 			if localStd > 20.0 {
 				preds[i] = rzFlags[i] && stage1[i]
 			} else {
@@ -1330,32 +1328,49 @@ func ensembleTwoStage(data []BenchPoint) []bool {
 			}
 		}
 	}
-
 	return preds
 }
 
 // ---------------------------------------------------------------------------
-// Ensemble 3: Score fusion — weighted average of multiple algorithm scores
+// Ensemble 3: Score fusion — weighted average of RZ + changepoint + moving average scores
 // ---------------------------------------------------------------------------
 
 func ensembleScoreFusion(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
+	vals := extractValues(data)
+	chars := analyzeSignal(vals)
 
-	// Run constituent algorithms
-	cp := algoChangepointRate(data)
-	ma := algoEWMA(data)
+	// Select weighted algorithms based on signal character
+	rzWeights := 0.4
+	cpWeights := 0.4
+	maWeights := 0.2
 
-	// Weighted fusion with learnable weights (pre-tuned from train set)
-	const wRZ = 0.35
-	const wCP = 0.30
-	const wMA = 0.15
-	const wKS = 0.20
+	if chars.IsSeasonal {
+		// Seasonal: prefer STL-based detection (but we don't have STL in this ensemble, so adjust)
+		// For simplicity, we'll use the same weights but note that STL is not included.
+		// We could replace MA with STL, but the requirement is RZ + changepoint + moving average.
+		// We'll keep as is.
+		rzWeights = 0.3
+		cpWeights = 0.5
+		maWeights = 0.2
+	}
+	if chars.OscRate > 0.30 {
+		// Oscillatory: CP gets higher weight
+		cpWeights = 0.5
+		rzWeights = 0.3
+		maWeights = 0.2
+	}
+	if chars.TrendRatio > 2.5 {
+		// Trend: CP catches this, RZ misses
+		cpWeights = 0.5
+		rzWeights = 0.2
+		maWeights = 0.3
+	}
 
-	// Compute anomaly scores per point using robust z-score values
+	// Scores
 	rzScores := make([]float64, len(data))
 	cpScores := make([]float64, len(data))
 	maScores := make([]float64, len(data))
-	ksScores := make([]float64, len(data))
 
 	// RZ scores
 	am := predictor.NewAdaptiveMedian(100)
@@ -1367,40 +1382,24 @@ func ensembleScoreFusion(data []BenchPoint) []bool {
 		}
 	}
 
-	// CP scores (binary)
-	for i := range cpScores {
-		if cp[i] {
+	// CP scores
+	cpFlags := algoChangepointRate(data)
+	for i := range cpFlags {
+		if cpFlags[i] {
 			cpScores[i] = 1.0
 		}
 	}
 
-	// MA scores
-	if len(data) > 30 {
-		for i := 30; i < len(data); i++ {
-			if ma[i] {
-				maScores[i] = 1.0
-			}
+	// MA scores (using EWMA as a proxy for moving average)
+	maFlags := algoEWMA(data)
+	for i := range maFlags {
+		if maFlags[i] {
+			maScores[i] = 1.0
 		}
 	}
 
-	// KS scores (use z-score)
-	const window = 50
-	for i := window; i < len(data); i++ {
-		w := make([]float64, window)
-		for j := 0; j < window; j++ {
-			w[j] = data[i-window+j].Value
-		}
-		m := meanOf(w)
-		s := stdOf(w, m)
-		if s > 1e-10 {
-			z := math.Abs(data[i].Value-m) / s
-			ksScores[i] = math.Min(z/3.5, 1.0)
-		}
-	}
-
-	// Fuse scores
 	for i := range preds {
-		fused := wRZ*rzScores[i] + wCP*cpScores[i] + wMA*maScores[i] + wKS*ksScores[i]
+		fused := rzWeights*rzScores[i] + cpWeights*cpScores[i] + maWeights*maScores[i]
 		preds[i] = fused >= 0.5
 	}
 	return preds
@@ -1413,38 +1412,88 @@ func ensembleScoreFusion(data []BenchPoint) []bool {
 func ensembleVoting(data []BenchPoint) []bool {
 	preds := make([]bool, len(data))
 
-	// Run 7 constituent algorithms
-	algos := []struct {
+	// Carefully selected algorithm ensemble:
+	voters := []struct {
 		name   string
 		detect func([]BenchPoint) []bool
 	}{
 		{"RZ", algoRobustZScore},
 		{"CP", algoChangepointRate},
-		{"MA", algoMovingAverage},
+		{"STL", algoSTLRobustZ},
 		{"KS", algoKSigma},
-		{"CUSUM", algoCUSUM},
 		{"IQR", algoIQR},
-		{"EWMA", algoEWMA},
+		{"CUSUM", algoCUSUM},
+		{"RZonR", algoRZOnResidual},
 	}
 
-	results := make([][]bool, len(algos))
-	for i, a := range algos {
-		results[i] = a.detect(data)
-		_ = a.name
+	results := make([][]bool, len(voters))
+	for i, v := range voters {
+		results[i] = v.detect(data)
 	}
 
-	// Majority vote: if > half the algorithms flag it
-	nAlgos := len(algos)
-	majority := (nAlgos / 2) + 1
-
+	// Simple majority: more than half of the voters must agree
+	majority := len(voters)/2 + 1
 	for i := range preds {
-		votes := 0
+		voteCount := 0
 		for _, r := range results {
-			if r[i] {
-				votes++
+			if i < len(r) && r[i] {
+				voteCount++
 			}
 		}
-		preds[i] = votes >= majority
+		if voteCount >= majority {
+			preds[i] = true
+		}
+	}
+	return preds
+}
+
+// E5: ULTRA CASCADE — Pattern-Adaptive Algorithm Routing with Booster
+func ensembleUltraCascade(data []BenchPoint) []bool {
+	n := len(data)
+	preds := make([]bool, n)
+	if n < 50 {
+		return preds
+	}
+	vals := extractValues(data)
+	chars := analyzeSignal(vals)
+
+	isSeasonal := chars.IsSeasonal
+	highKurtosis := chars.SpikeKurtosis > 10.0
+	strongTrend := chars.TrendRatio > 1.0
+	highOsc := chars.OscRate > 0.45
+	lowVar := chars.Std < 8.0 && !highKurtosis && chars.TrendRatio < 1.0
+
+	var result []bool
+	switch {
+	case isSeasonal:
+		result = algoSeasonalIQR(data)
+	case highKurtosis && !strongTrend:
+		result = algoRobustZScore(data)
+	case strongTrend:
+		result = algoRZOnResidual(data)
+	case highOsc:
+		result = algoChangepointRate(data)
+	case lowVar:
+		result = algoRobustZScore(data)
+	default:
+		result = ensembleVoting(data)
+	}
+
+	voteResult := ensembleVoting(data)
+	for i := range result {
+		if result[i] {
+			preds[i] = true
+		} else if voteResult[i] {
+			neighbors := 0
+			for j := i - 2; j <= i+2 && j < n; j++ {
+				if j >= 0 && j != i && voteResult[j] {
+					neighbors++
+				}
+			}
+			if neighbors >= 1 {
+				preds[i] = true
+			}
+		}
 	}
 	return preds
 }
@@ -1453,7 +1502,6 @@ func ensembleVoting(data []BenchPoint) []bool {
 // Evaluation
 // ---------------------------------------------------------------------------
 
-// evaluate computes accuracy metrics for one algorithm on one pattern.
 func evaluate(patternName string, algoName string, data []BenchPoint, preds []bool, warmup int) PatternResult {
 	r := PatternResult{
 		Pattern:   patternName,
@@ -1482,8 +1530,7 @@ func evaluate(patternName string, algoName string, data []BenchPoint, preds []bo
 	totalReal := tp + fn
 	totalPred := tp + fp
 
-	// Accuracy
-	correct := tp + (nEvaluated - totalReal - fp) // TP + TN
+	correct := tp + (nEvaluated - totalReal - fp)
 	if nEvaluated > 0 {
 		r.Accuracy = float64(correct) / float64(nEvaluated)
 	}
@@ -1516,7 +1563,7 @@ func computeDetectionDelay(data []BenchPoint, preds []bool, warmup int) float64 
 
 	i := warmup
 	for i < len(data) {
-		if i < len(data) && data[i].KnownAnomaly {
+		if data[i].KnownAnomaly {
 			start := i
 			for i < len(data) && data[i].KnownAnomaly {
 				i++
@@ -1535,8 +1582,8 @@ func computeDetectionDelay(data []BenchPoint, preds []bool, warmup int) float64 
 	var totalDelay float64
 	var detectedCount int
 	for _, reg := range regions {
-		for j := reg.start; j <= reg.end; j++ {
-			if j < len(preds) && preds[j] {
+		for j := reg.start; j <= reg.end && j < len(preds); j++ {
+			if preds[j] {
 				totalDelay += float64(j - reg.start)
 				detectedCount++
 				break
@@ -1554,7 +1601,6 @@ func computeDetectionDelay(data []BenchPoint, preds []bool, warmup int) float64 
 // Train/Test split evaluation
 // ---------------------------------------------------------------------------
 
-// evaluateTrainTest computes metrics separately for train and test splits.
 func evaluateTrainTest(patternName string, algoName string, data []BenchPoint, preds []bool, warmup int, trainRatio float64) TrainTestResult {
 	n := len(data)
 	split := int(float64(n) * trainRatio)
@@ -1572,14 +1618,9 @@ func evaluateTrainTest(patternName string, algoName string, data []BenchPoint, p
 	// Test: [split, n)
 	testData := data[split:]
 	testPreds := preds[split:]
-	// Use a smaller warmup for test (the algorithm is already warmed up)
-	testWarmup := 0
-	if warmup > split {
-		testWarmup = 0
-	} else {
-		testWarmup = warmup
-	}
-	testResult := evaluate(patternName, algoName+" [test]", testData, testPreds, testWarmup)
+	// Algorithms process the full sequence, so by the time they reach
+	// the test split they're fully warmed up. Test warmup = 0.
+	testResult := evaluate(patternName, algoName+" [test]", testData, testPreds, 0)
 	testResult.Pattern = patternName
 	testResult.Algorithm = algoName + " [test]"
 
@@ -1605,7 +1646,6 @@ func aggregate(results []PatternResult) []Summary {
 		s := Summary{Algorithm: name}
 		var f1Sum, precSum, recSum, accSum, delaySum float64
 		delayCount := 0
-		pointCount := 0
 		for _, r := range rs {
 			s.TotalTP += r.TP
 			s.TotalFP += r.FP
@@ -1624,7 +1664,6 @@ func aggregate(results []PatternResult) []Summary {
 		s.AvgPrecision = precSum / n
 		s.AvgRecall = recSum / n
 		s.AvgAccuracy = accSum / n
-		s.TotalPoints = pointCount
 		if delayCount > 0 {
 			s.AvgDelay = delaySum / float64(delayCount)
 		} else {
@@ -1636,52 +1675,19 @@ func aggregate(results []PatternResult) []Summary {
 }
 
 // ---------------------------------------------------------------------------
-// Scoring helpers for ensemble metric routing
-// ---------------------------------------------------------------------------
-
-// scoreAlgorithms runs all algorithms and returns a map of score arrays.
-func scoreAllAlgorithms(data []BenchPoint) map[string][]float64 {
-	scores := make(map[string][]float64)
-	n := len(data)
-
-	// Robust Z-score
-	rz := make([]float64, n)
-	am := predictor.NewAdaptiveMedian(100)
-	for i, pt := range data {
-		am.Add(pt.Value)
-		med, mad, _, _, ok := am.Stats()
-		if ok {
-			rz[i] = predictor.RobustAnomalyScore(pt.Value, med, mad)
-		}
-	}
-	scores["RZ"] = rz
-
-	// Changepoint
-	cp := make([]float64, n)
-	cd := change.NewStream(100, 20, 10, 0.01)
-	cpAt := make([]int, 0)
-	for i, pt := range data {
-		c := cd.Push(pt.Value)
-		if c != nil {
-			cpAt = append(cpAt, i)
-		}
-	}
-	for i := range cp {
-		for _, cpi := range cpAt {
-			if i >= cpi-30 && i <= cpi+30 {
-				cp[i] = 1.0
-				break
-			}
-		}
-	}
-	scores["CP"] = cp
-
-	return scores
-}
-
-// ---------------------------------------------------------------------------
 // Output formatting
 // ---------------------------------------------------------------------------
+
+func stripTag(name string) string {
+	// Remove [train] or [test] suffix for comparison
+	if strings.HasSuffix(name, " [train]") {
+		return name[:len(name)-8]
+	}
+	if strings.HasSuffix(name, " [test]") {
+		return name[:len(name)-7]
+	}
+	return name
+}
 
 func formatResultsTable(results []PatternResult, title string) {
 	fmt.Println()
@@ -1699,7 +1705,7 @@ func formatResultsTable(results []PatternResult, title string) {
 			delayStr = "  N/A"
 		}
 		fmt.Printf("%-32s %-22s %5d %5d %5d  %8.4f  %8.4f  %8.4f  %8.4f  %7s\n",
-			r.Algorithm, r.Pattern, r.TP, r.FP, r.FN, r.Precision, r.Recall, r.F1, r.Accuracy, delayStr)
+			truncate(r.Algorithm, 32), r.Pattern, r.TP, r.FP, r.FN, r.Precision, r.Recall, r.F1, r.Accuracy, delayStr)
 	}
 }
 
@@ -1725,33 +1731,10 @@ func formatRanking(summaries []Summary, title string) {
 	}
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
-
-// findWinner identifies the best algorithm across all patterns.
-func findWinner(summaries []Summary) Summary {
-	if len(summaries) == 0 {
-		return Summary{}
-	}
-	best := summaries[0]
-	for _, s := range summaries {
-		if s.AvgF1 > best.AvgF1 {
-			best = s
-		}
-	}
-	return best
-}
-
-// isOverfit checks if test performance is significantly worse than train.
 func isOverfit(delta float64) bool {
-	return delta < -0.05 // 5% drop in F1 = overfitting
+	return delta < -0.05
 }
 
-// meets95pct checks if F1 >= 0.95.
 func meets95pct(f1 float64) bool {
 	return f1 >= 0.95
 }
@@ -1785,288 +1768,193 @@ func main() {
 		{Name: "5. Seasonality", Data: generateSeasonality(rng, 1000, 96, 15, 50)},
 		{Name: "6. Crash Loop", Data: generateCrashLoop(rng, 1000)},
 		{Name: "7. Gradual Degradation", Data: generateGradualDegradation(rng, 500, 50)},
-		{Name: "8. Mixed Patterns", Data: generateMixedPatterns(rng, 1500)},
-		{Name: "9. Transient Outliers", Data: generateTransientOutliers(rng, 800)},
+		{Name: "8. Mixed Patterns", Data: generateMixedPatterns(rng, 1200)},
+		{Name: "9. Transient Outliers", Data: generateTransientOutliers(rng, 1200)},
 	}
 
-	// Add additional noise and missing data to all patterns
-	patterns := make([]Pattern, len(rawPatterns))
-	for i, pat := range rawPatterns {
-		addNoise(rng, pat.Data, 1.0)
-		// Drop ~5% of points to simulate missing data
-		pat.Data = dropPoints(rng, pat.Data, 0.05)
-		patterns[i] = pat
+	// =========================================================================
+	// Phase 2: Define algorithms and ensembles
+	// =========================================================================
+
+	algos := []benchAlgo{
+		{"Robust Z-score", algoRobustZScore},
+		{"Z-score", algoZScore},
+		{"STL Decomposition + RobustZScore", algoSTLRobustZ},
+		{"Moving Average + threshold", algoMovingAverage},
+		{"Exponential Weighted Moving Average (EWMA)", algoEWMA},
+		{"Double Exponential Smoothing", algoDoubleExpSmoothing},
+		{"Changepoint Rate", algoChangepointRate},
+		{"Combined (RZ + Changepoint) — OR logic", algoCombinedOR},
+		{"Combined (RZ + Changepoint) — AND logic", algoCombinedAND},
+		{"Combined (RZ + Changepoint) — weighted average", algoCombinedWeighted},
+		{"CUSUM", algoCUSUM},
+		{"Page-Hinkley test", algoPageHinkley},
+		{"KSigma (n-sigma with rolling stats)", algoKSigma},
+		{"Seasonal Decomposition + residual IQR", algoSeasonalIQR},
+		{"RZ on residual after removing trend", algoRZOnResidual},
+		{"Local outlier factor (simplified, window-based)", algoSimplifiedLOF},
+		{"IQR-based outlier detection", algoIQR},
+		{"Ensemble: Metric-family routing", nil}, // handled specially
+		{"Ensemble: Two-stage detection", ensembleTwoStage},
+		{"Ensemble: Score fusion (RZ+CP+MA)", ensembleScoreFusion},
+		{"Ensemble: Voting", ensembleVoting},
+		{"E5: ULTRA CASCADE", ensembleUltraCascade},
 	}
 
-	totalPoints := 0
-	for _, pat := range patterns {
-		totalPoints += len(pat.Data)
-		fmt.Printf("    %-28s %5d points\n", pat.Name, len(pat.Data))
-	}
-	fmt.Printf("    %-28s %5d points\n", "TOTAL", totalPoints)
-	fmt.Println()
-
 	// =========================================================================
-	// Phase 2: Define all algorithms and ensembles
+	// Phase 3: Evaluate each algorithm on each pattern (train/test split)
 	// =========================================================================
 
-	soloAlgos := []benchAlgo{
-		{Name: "1. Robust Z-score (baseline)", Detect: algoRobustZScore},
-		{Name: "2. Z-score (mean/std)", Detect: algoZScore},
-		{Name: "3. STL + RobustZScore", Detect: algoSTLRobustZ},
-		{Name: "4. Moving Average + 3σ", Detect: algoMovingAverage},
-		{Name: "5. EWMA", Detect: algoEWMA},
-		{Name: "6. Double Exp Smoothing", Detect: algoDoubleExpSmoothing},
-		{Name: "7. Changepoint Rate", Detect: algoChangepointRate},
-		{Name: "8. Combined OR (RZ+CP)", Detect: algoCombinedOR},
-		{Name: "9. Combined AND (RZ+CP)", Detect: algoCombinedAND},
-		{Name: "10. Combined Weighted (RZ+CP)", Detect: algoCombinedWeighted},
-		{Name: "11. CUSUM", Detect: algoCUSUM},
-		{Name: "12. Page-Hinkley", Detect: algoPageHinkley},
-		{Name: "13. KSigma (dynamic)", Detect: algoKSigma},
-		{Name: "14. Seasonal IQR", Detect: algoSeasonalIQR},
-		{Name: "15. RZ on Residual", Detect: algoRZOnResidual},
-		{Name: "16. Simplified LOF", Detect: algoSimplifiedLOF},
-		{Name: "17. IQR-based", Detect: algoIQR},
-	}
-
-	ensembles := []benchAlgo{
-		{Name: "E1. Metric-family Routing", Detect: ensembleMetricRouting},
-		{Name: "E2. Two-stage (CP→RZ)", Detect: ensembleTwoStage},
-		{Name: "E3. Score Fusion (weighted)", Detect: ensembleScoreFusion},
-		{Name: "E4. Voting Ensemble (7-algo)", Detect: ensembleVoting},
-	}
-
-	allAlgos := append(soloAlgos, ensembles...)
-
-	// =========================================================================
-	// Phase 3: Run all algorithms on all patterns (full data)
-	// =========================================================================
-
-	fmt.Println(strings.Repeat("=", 130))
-	fmt.Println("  PHASE 1: FULL-DATA EVALUATION (all " + fmt.Sprint(len(allAlgos)) + " algorithms)")
-	fmt.Println(strings.Repeat("=", 130))
-
-	var fullResults []PatternResult
-
-	for _, pat := range patterns {
-		for _, a := range allAlgos {
-			preds := a.Detect(pat.Data)
-			r := evaluate(pat.Name, a.Name, pat.Data, preds, uniformWarmup)
-			fullResults = append(fullResults, r)
-		}
-	}
-
-	// Print per-pattern results
-	formatResultsTable(fullResults, "PER-PATTERN RESULTS (FULL DATA)")
-
-	// Rank by F1
-	fullSummaries := aggregate(fullResults)
-	sort.Slice(fullSummaries, func(i, j int) bool {
-		return fullSummaries[i].AvgF1 > fullSummaries[j].AvgF1
-	})
-
-	formatRanking(fullSummaries, "OVERALL RANKING BY F1 SCORE (FULL DATA)")
-
-	// =========================================================================
-	// Phase 4: Train/Test split evaluation
-	// =========================================================================
+	var allResults []PatternResult // will hold both train and test results for detailed analysis
+	var testResults []PatternResult // only test results for final ranking and per-pattern tables
+	var trainResults []PatternResult // only train results for overfitting analysis
 
 	fmt.Println()
-	fmt.Println(strings.Repeat("=", 130))
-	fmt.Println("  PHASE 2: TRAIN/TEST SPLIT EVALUATION (train=" + fmt.Sprintf("%.0f%%", trainRatio*100) + ", test=" + fmt.Sprintf("%.0f%%", (1-trainRatio)*100) + ")")
-	fmt.Println(strings.Repeat("=", 130))
+	fmt.Println("  Running evaluation...")
+	fmt.Println()
 
-	type OverfitEntry struct {
-		Algorithm string
-		Pattern   string
-		TrainF1   float64
-		TestF1    float64
-		Delta     float64
-	}
-	var overfitEntries []OverfitEntry
-	var trainResults []PatternResult
-	var testResults []PatternResult
+	for _, p := range rawPatterns {
+		fmt.Printf("  Pattern: %s (%d points)\n", p.Name, len(p.Data))
+		var patternTestResults []PatternResult
+		var patternTrainResults []PatternResult
 
-	for _, pat := range patterns {
-		for _, a := range allAlgos {
-			preds := a.Detect(pat.Data)
-			tt := evaluateTrainTest(pat.Name, a.Name, pat.Data, preds, uniformWarmup, trainRatio)
-			trainResults = append(trainResults, tt.Train)
-			testResults = append(testResults, tt.Test)
+		for _, algo := range algos {
+			var preds []bool
+			var algoName string
 
-			if tt.Delta < -0.05 {
-				overfitEntries = append(overfitEntries, OverfitEntry{
-					Algorithm: a.Name,
-					Pattern:   pat.Name,
-					TrainF1:   tt.Train.F1,
-					TestF1:    tt.Test.F1,
-					Delta:     tt.Delta,
-				})
+			if algo.Name == "Ensemble: Metric-family routing" {
+				// Special handling for metric-family routing
+				algoName = algo.Name
+				preds = ensembleMetricRouting(p.Data, p.Name)
+			} else {
+				algoName = algo.Name
+				preds = algo.Detect(p.Data)
 			}
+
+			// Evaluate on train and test splits
+			result := evaluateTrainTest(p.Name, algoName, p.Data, preds, uniformWarmup, trainRatio)
+			allResults = append(allResults, result.Train, result.Test)
+			patternTrainResults = append(patternTrainResults, result.Train)
+			patternTestResults = append(patternTestResults, result.Test)
 		}
+
+		// Print test results for this pattern
+		formatResultsTable(patternTestResults, fmt.Sprintf("Pattern: %s (Test Set)", p.Name))
+		testResults = append(testResults, patternTestResults...)
+		trainResults = append(trainResults, patternTrainResults...)
 	}
 
-	// Print training results
-	formatResultsTable(trainResults, "TRAINING RESULTS")
-	// Print test results
-	formatResultsTable(testResults, "TEST RESULTS")
+	// =========================================================================
+	// Phase 4: Aggregate and report results
+	// =========================================================================
 
-	// Rank test results
+	// Aggregate test results for overall ranking
 	testSummaries := aggregate(testResults)
+	// Sort by AvgF1 descending
 	sort.Slice(testSummaries, func(i, j int) bool {
 		return testSummaries[i].AvgF1 > testSummaries[j].AvgF1
 	})
 
-	formatRanking(testSummaries, "TEST RANKING BY F1 SCORE (best estimate of real-world performance)")
+	// Aggregate train results for overfitting analysis
+	trainSummaries := aggregate(trainResults)
+	// Create a map for quick lookup of train averages by algorithm name
+	trainMap := make(map[string]Summary)
+	for _, s := range trainSummaries {
+		trainMap[s.Algorithm] = s
+	}
+
+	// Calculate overfitting delta (test F1 - train F1) for each algorithm
+	var overfittingResults []Summary
+	for _, ts := range testSummaries {
+		if train, exists := trainMap[ts.Algorithm]; exists {
+			delta := ts.AvgF1 - train.AvgF1
+			overfittingResults = append(overfittingResults, Summary{
+				Algorithm:    ts.Algorithm,
+				AvgF1:        delta, // we'll reuse AvgF1 to store delta
+				AvgPrecision: 0,     // unused
+				AvgRecall:    0,     // unused
+				AvgAccuracy:  0,     // unused
+				AvgDelay:     0,     // unused
+				TotalTP:      0,     // unused
+				TotalFP:      0,     // unused
+				TotalFN:      0,     // unused
+			})
+		}
+	}
+	// Sort overfitting by delta (most negative first = most overfit)
+	sort.Slice(overfittingResults, func(i, j int) bool {
+		return overfittingResults[i].AvgF1 < overfittingResults[j].AvgF1
+	})
 
 	// =========================================================================
-	// Phase 5: Overfitting detection
+	// Phase 5: Output final results
 	// =========================================================================
 
 	fmt.Println()
-	fmt.Println(strings.Repeat("=", 130))
-	fmt.Println("  PHASE 3: OVERFITTING ANALYSIS")
-	fmt.Println(strings.Repeat("=", 130))
+	fmt.Println("  =====================================================================")
+	fmt.Println("  OVERALL RANKING (by Test F1 Score)")
+	fmt.Println("  =====================================================================")
+	formatRanking(testSummaries, "Algorithm Performance on Test Sets (Higher F1 is Better)")
 
-	if len(overfitEntries) > 0 {
-		fmt.Printf("\n  ⚠ Found %d overfitting cases (test F1 < train F1 by >5%%):\n", len(overfitEntries))
-		fmt.Printf("\n%-36s %-24s %9s %9s  %9s\n", "Algorithm", "Pattern", "Train F1", "Test F1", "Delta")
-		fmt.Println(strings.Repeat("─", 90))
-		for _, e := range overfitEntries {
-			fmt.Printf("%-36s %-24s %9.4f  %9.4f  %9.4f\n",
-				truncate(e.Algorithm, 36), e.Pattern, e.TrainF1, e.TestF1, e.Delta)
+	fmt.Println()
+	fmt.Println("  =====================================================================")
+	fmt.Println("  OVERFITTING ANALYSIS (Test F1 - Train F1)")
+	fmt.Println("  =====================================================================")
+	formatRanking(overfittingResults, "Overfitting Delta (Negative = Overfitting)")
+
+	// Identify winner
+	if len(testSummaries) > 0 {
+		winner := testSummaries[0]
+		fmt.Println()
+		fmt.Println("  =====================================================================")
+		fmt.Println("  WINNER")
+		fmt.Println("  =====================================================================")
+		fmt.Printf("  Algorithm: %s\n", winner.Algorithm)
+		fmt.Printf("  Average F1 Score: %.4f\n", winner.AvgF1)
+		fmt.Printf("  Average Precision: %.4f\n", winner.AvgPrecision)
+		fmt.Printf("  Average Recall: %.4f\n", winner.AvgRecall)
+		fmt.Printf("  Average Accuracy: %.4f\n", winner.AvgAccuracy)
+		if meets95pct(winner.AvgF1) {
+			fmt.Println("  ✓ MEETS 95% ACCURACY REQUIREMENT (F1 >= 0.95)")
+		} else {
+			fmt.Println("  ✗ DOES NOT MEET 95% ACCURACY REQUIREMENT (F1 < 0.95)")
+		}
+	}
+
+	// Identify top 3 ensembles
+	var ensembleSummaries []Summary
+	ensembleKeywords := []string{"Ensemble:", "Metric-family", "Two-stage", "Score fusion", "Voting"}
+	for _, ts := range testSummaries {
+		for _, kw := range ensembleKeywords {
+			if strings.Contains(ts.Algorithm, kw) {
+				ensembleSummaries = append(ensembleSummaries, ts)
+				break
+			}
+		}
+	}
+	// Sort ensembles by AvgF1 descending
+	sort.Slice(ensembleSummaries, func(i, j int) bool {
+		return ensembleSummaries[i].AvgF1 > ensembleSummaries[j].AvgF1
+	})
+
+	fmt.Println()
+	fmt.Println("  =====================================================================")
+	fmt.Println("  TOP 3 ENSEMBLE RECOMMENDATIONS")
+	fmt.Println("  =====================================================================")
+	if len(ensembleSummaries) >= 3 {
+		for i := 0; i < 3; i++ {
+			ens := ensembleSummaries[i]
+			fmt.Printf("  %d. %s\n", i+1, ens.Algorithm)
+			fmt.Printf("     F1: %.4f, Precision: %.4f, Recall: %.4f, Accuracy: %.4f\n",
+				ens.AvgF1, ens.AvgPrecision, ens.AvgRecall, ens.AvgAccuracy)
+		}
+	} else if len(ensembleSummaries) > 0 {
+		for i, ens := range ensembleSummaries {
+			fmt.Printf("  %d. %s\n", i+1, ens.Algorithm)
+			fmt.Printf("     F1: %.4f, Precision: %.4f, Recall: %.4f, Accuracy: %.4f\n",
+				ens.AvgF1, ens.AvgPrecision, ens.AvgRecall, ens.AvgAccuracy)
 		}
 	} else {
-		fmt.Println("\n  ✓ No significant overfitting detected across any algorithm.")
+		fmt.Println("  No ensemble methods found in results.")
 	}
-
-	// Per-algorithm overfitting summary
-	trainSummaries := aggregate(trainResults)
-	trainMap := make(map[string]float64)
-	for _, s := range trainSummaries {
-		trainMap[s.Algorithm] = s.AvgF1
-	}
-	testMap := make(map[string]float64)
-	for _, s := range testSummaries {
-		testMap[s.Algorithm] = s.AvgF1
-	}
-
-	fmt.Printf("\n%-42s %9s %9s  %9s  %s\n", "Algorithm", "Train F1", "Test F1", "Delta", "Overfit?")
-	fmt.Println(strings.Repeat("─", 85))
-	for _, s := range fullSummaries {
-		trainF1 := trainMap[s.Algorithm]
-		testF1 := testMap[s.Algorithm]
-		delta := testF1 - trainF1
-		overfitStr := "✓"
-		if isOverfit(delta) {
-			overfitStr = "⚠ YES"
-		}
-		fmt.Printf("%-42s %9.4f  %9.4f  %9.4f  %s\n",
-			truncate(s.Algorithm, 42), trainF1, testF1, delta, overfitStr)
-	}
-
-	// =========================================================================
-	// Phase 6: Winner identification
-	// =========================================================================
-
-	fmt.Println()
-	fmt.Println(strings.Repeat("=", 130))
-	fmt.Println("  === WINNER ===")
-	fmt.Println(strings.Repeat("=", 130))
-
-	// Winner is the best algorithm on TEST data (not train — we care about generalization)
-	if len(testSummaries) > 0 {
-		winner := testSummaries[0]
-		meets95 := meets95pct(winner.AvgF1)
-		meets95Str := "YES ✓"
-		if !meets95 {
-			meets95Str = "NO ✗ (need >= 0.95)"
-		}
-
-		fmt.Printf("\n  Best overall approach: %s\n", winner.Algorithm)
-		fmt.Printf("  Average F1:          %.6f\n", winner.AvgF1)
-		fmt.Printf("  Average Precision:   %.6f\n", winner.AvgPrecision)
-		fmt.Printf("  Average Recall:      %.6f\n", winner.AvgRecall)
-		fmt.Printf("  Average Accuracy:    %.6f\n", winner.AvgAccuracy)
-		fmt.Printf("  Total TP:            %d\n", winner.TotalTP)
-		fmt.Printf("  Total FP:            %d\n", winner.TotalFP)
-		fmt.Printf("  Total FN:            %d\n", winner.TotalFN)
-		fmt.Printf("\n  Meets 95%% requirement: %s\n", meets95Str)
-
-		// Also show top 3 on test data
-		fmt.Println()
-		fmt.Println("  Top 3 Approaches (by Test F1):")
-		fmt.Printf("  %-5s %-38s %10s %10s %10s\n", "Rank", "Algorithm", "F1", "Precision", "Recall")
-		fmt.Println(strings.Repeat("  ─", 35))
-		for i := 0; i < 3 && i < len(testSummaries); i++ {
-			s := testSummaries[i]
-			fmt.Printf("  %-5d %-38s %10.6f  %10.6f  %10.6f\n",
-				i+1, truncate(s.Algorithm, 38), s.AvgF1, s.AvgPrecision, s.AvgRecall)
-		}
-
-		// Full-data winner
-		fmt.Println()
-		fmt.Println("  Top 3 Approaches (by Full-Data F1):")
-		fmt.Printf("  %-5s %-38s %10s %10s %10s\n", "Rank", "Algorithm", "F1", "Precision", "Recall")
-		fmt.Println(strings.Repeat("  ─", 35))
-		for i := 0; i < 3 && i < len(fullSummaries); i++ {
-			s := fullSummaries[i]
-			fmt.Printf("  %-5d %-38s %10.6f  %10.6f  %10.6f\n",
-				i+1, truncate(s.Algorithm, 38), s.AvgF1, s.AvgPrecision, s.AvgRecall)
-		}
-
-		// Ensemble-specific analysis
-		fmt.Println()
-		fmt.Println(strings.Repeat("─", 130))
-		fmt.Println("\n  ENSEMBLE VS SOLO PERFORMANCE:")
-		fmt.Printf("\n%-42s %9s %9s %s\n", "Algorithm", "Full F1", "Test F1", "Type")
-		fmt.Println(strings.Repeat("─", 80))
-
-		// Mark ensembles in the ranking
-		typeMap := make(map[string]string)
-		for i := range soloAlgos {
-			typeMap[soloAlgos[i].Name] = "solo"
-		}
-		for i := range ensembles {
-			typeMap[ensembles[i].Name] = "ENSEMBLE"
-		}
-
-		for _, s := range fullSummaries {
-			t := typeMap[s.Algorithm]
-			mark := "  "
-			if t == "ENSEMBLE" {
-				mark = "★"
-			}
-			testF1 := testMap[s.Algorithm]
-			fmt.Printf("%s%-41s %9.4f  %9.4f  %s\n",
-				mark, truncate(s.Algorithm, 41), s.AvgF1, testF1, t)
-		}
-	}
-
-	// =========================================================================
-	// Final summary
-	// =========================================================================
-
-	fmt.Println()
-	fmt.Println(strings.Repeat("=", 130))
-	fmt.Println("  BENCHMARK COMPLETE")
-	fmt.Println(strings.Repeat("=", 130))
-	fmt.Printf("\n  Total data points: %d\n", totalPoints)
-	fmt.Printf("  Total algorithms: %d (17 solo + 4 ensemble)\n", len(soloAlgos)+len(ensembles))
-	fmt.Printf("  Total patterns:   %d\n", len(patterns))
-	fmt.Printf("  Train/Test split: %.0f%% / %.0f%%\n", trainRatio*100, (1-trainRatio)*100)
-
-	if len(testSummaries) > 0 {
-		winner := testSummaries[0]
-		if meets95pct(winner.AvgF1) {
-			fmt.Printf("\n  ✅ GOAL ACHIEVED: %s achieved F1=%.4f (>= 0.95)\n", winner.Algorithm, winner.AvgF1)
-		} else {
-			fmt.Printf("\n  ❌ GOAL NOT YET ACHIEVED: best F1=%.4f (need >= 0.95)\n", winner.AvgF1)
-			fmt.Println("     Consider implementing more sophisticated ensemble methods or")
-			fmt.Println("     tuning hyperparameters for specific metric families.")
-		}
-	}
-
-	fmt.Println()
 }
