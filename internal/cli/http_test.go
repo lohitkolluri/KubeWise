@@ -129,6 +129,27 @@ func TestTryPasswordAuth_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestResolveRequestToken_PassButAgentNotConfigured(t *testing.T) {
+	defer saveResetGlobals(t)()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	agentURL = ts.URL
+	cachedPassword = "test-password"
+	tok, err := resolveRequestToken(context.Background())
+	if err == nil {
+		t.Fatal("expected error when agent has no password auth configured")
+	}
+	if tok != "" {
+		t.Fatalf("expected empty token, got %q", tok)
+	}
+	if !strings.Contains(err.Error(), "no password authentication configured") {
+		t.Fatalf("expected diagnostic about missing password auth, got: %v", err)
+	}
+}
+
 func TestTryPasswordAuth_WrongPassword(t *testing.T) {
 	defer saveResetGlobals(t)()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -354,6 +375,36 @@ func TestAgentRequest_405Error(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rebuild and redeploy") {
 		t.Fatalf("expected rebuild hint in error, got: %v", err)
+	}
+}
+
+func TestAgentRequest_401SurfacesPassAuthErr(t *testing.T) {
+	defer saveResetGlobals(t)()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"unauthorized"}`)
+		}
+	}))
+	defer ts.Close()
+
+	agentURL = ts.URL
+	cachedPassword = "test-password"
+	_, code, err := agentRequest(context.Background(), http.MethodGet, "/anomalies", nil)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 status code, got %d", code)
+	}
+	if err == nil {
+		t.Fatal("expected error for 401 with --pass auth failure")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") {
+		t.Fatalf("expected 'authentication failed' prefix, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no password authentication configured") {
+		t.Fatalf("expected diagnostic about missing password auth, got: %v", err)
 	}
 }
 

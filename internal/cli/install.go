@@ -140,6 +140,25 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		return runLocalInstall(out)
 	}
 
+	// Existing-install check: if KubeWise is already deployed, release the
+	// current code (git commit + push + tag) and redeploy to the new image.
+	// This is skipped for --local and --helm (--helm is handled below, but
+	// detectInstalled still catches it via the Helm release).
+	if installed, path := detectInstalled(); installed {
+		tag := nextPatchTag(latestReleaseTag())
+		imgTag := strings.TrimPrefix(tag, "v")
+		if err := gitRelease(tag, installYes, out); err != nil {
+			return err
+		}
+		printSection(out, "Redeploying existing installation")
+		if err := redeployWithTag(imgTag, path, out); err != nil {
+			printWarn(out, "%v", err)
+			return err
+		}
+		printOK(out, "KubeWise updated to %s", tag)
+		return nil
+	}
+
 	// Dev builds (running from source) should default to local manifests + dev overlay,
 	// so "kwctl install" doesn't accidentally apply remote release overlays.
 	if version.Version == "dev" &&
@@ -222,6 +241,15 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 			if err := kc.PatchConfigMapObservability(ctx, agentNS, report); err != nil {
 				printWarn(out, "could not patch observability endpoints: %v", err)
 			}
+		}
+	}
+
+	// A supplied --pass writes client_password_hash into the agent Secret,
+	// but a running pod only reloads env on a rollout. Restart so the
+	// pod picks up CLIENT_PASSWORD_HASH (otherwise --pass auth 404s).
+	if cachedPassword != "" {
+		if err := restartAgentDeployment(); err != nil {
+			printWarn(out, "could not restart agent deployment to load password: %v", err)
 		}
 	}
 

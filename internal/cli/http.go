@@ -115,19 +115,27 @@ func resolveRequestToken(ctx context.Context) (string, error) {
 	if cachedPassword != "" && !passwordAttempted {
 		passwordAttempted = true
 		tok, err := tryPasswordAuth(ctx, resolveAgentURL())
-		if err != nil {
+		switch {
+		case err != nil:
 			authErr = err
-		} else if tok != "" {
+		case tok != "":
 			apiToken = tok
 			_ = saveAPIToken(tok)
 			return tok, nil
+		default:
+			// tryPasswordAuth returned no error and no token: the agent
+			// answered 404 (password auth not configured). Record a clear
+			// diagnostic so a later 401 surfaces the real cause.
+			authErr = fmt.Errorf("agent has no password authentication configured — re-run install with --pass or run 'kwctl agent restart'")
 		}
 	}
 	if apiToken != "" {
-		return apiToken, nil
+		// Preserve authErr so a 401 from a stale token still surfaces
+		// the --pass failure reason to the user.
+		return apiToken, authErr
 	}
 	if t := os.Getenv("KUBEWISE_API_TOKEN"); t != "" {
-		return t, nil
+		return t, authErr
 	}
 	if !passwordAttempted {
 		passwordAttempted = true

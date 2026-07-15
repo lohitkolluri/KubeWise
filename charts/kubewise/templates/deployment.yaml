@@ -7,11 +7,10 @@ metadata:
     {{- include "kubewise.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # Recreate (not RollingUpdate): the agent's BoltDB holds an exclusive file
+  # lock on the shared RWO PVC, so a rolling update deadlocks on bbolt timeout.
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       {{- include "kubewise.selectorLabels" . | nindent 6 }}
