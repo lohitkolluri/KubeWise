@@ -61,11 +61,10 @@ flowchart TD
     end
   end
 
-    subgraph external["🌐  External Services"]
-      llm["LLM Providers"]:::external
-      notify["Notifiers"]:::external
-      cli["kwctl CLI / TUI"]:::external
-    end
+  subgraph external["🌐  External Services"]
+    llm["LLM Providers"]:::external
+    notify["Notifiers"]:::external
+    cli["kwctl CLI / TUI"]:::external
   end
 
   prom --> collector
@@ -203,7 +202,7 @@ flowchart LR
     ruleNN["NodeNotReady → escalate · T3 · 0.90"]:::engine
     rulePend["Pending (≥5m) → escalate · T3 · 0.85"]:::engine
     ruleRR["ReadyRatio (<0.5) → scale · T2 · 0.80"]:::engine
-    ruleCT["CPUThrottle (>50%) → patch · T2 · 0.75">:::engine
+    ruleCT["CPUThrottle (>50%) → patch · T2 · 0.75"]:::engine
     ruleMP["MemoryPressure → escalate · T3 · 0.85"]:::engine
   end
 
