@@ -384,7 +384,7 @@ func (s *Store) PruneAnomalies() (int, error) {
 		if b == nil {
 			return nil
 		}
-		return b.ForEach(func(k, v []byte) error {
+		return b.ForEach(func(_, v []byte) error {
 			var r models.AnomalyRecord
 			if err := json.Unmarshal(v, &r); err != nil {
 				return nil
@@ -405,17 +405,12 @@ func (s *Store) PruneAnomalies() (int, error) {
 	err = s.db.Update(func(tx *bolt.Tx) error {
 		main := tx.Bucket(bucketAnomalies)
 		idx := tx.Bucket(bucketAnomalyIndex)
-		open := tx.Bucket(bucketAnomalyOpen)
 		for _, d := range toDelete {
 			if err := main.Delete([]byte(d.id)); err != nil {
 				return err
 			}
 			if idx != nil {
 				_ = idx.Delete(anomalyTimeIndexKey(d.detectedAt, d.id))
-			}
-			if open != nil && isOpenAnomalyStatus(d.status) {
-				// Open index entry carries entity+signal we don't have here;
-				// stale entries are harmless and rebuilt on next Open.
 			}
 		}
 		return nil
@@ -433,10 +428,10 @@ func (s *Store) RebuildAnomalyIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketAnomalyIndex); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) { //nolint:staticcheck
 			return err
 		}
-		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketAnomalyOpen); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) { //nolint:staticcheck
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAnomalyIndex)

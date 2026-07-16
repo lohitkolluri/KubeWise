@@ -8,6 +8,7 @@ import (
 	lgtable "charm.land/lipgloss/v2/table"
 
 	"charm.land/bubbles/v2/table"
+
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 

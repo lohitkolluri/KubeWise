@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"charm.land/bubbles/v2/table"
+
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 

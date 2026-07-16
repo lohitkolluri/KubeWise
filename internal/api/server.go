@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/lohitkolluri/KubeWise/internal/agent/gate"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
-	"golang.org/x/time/rate"
 )
 
 // Store is the data access interface the API server depends on.

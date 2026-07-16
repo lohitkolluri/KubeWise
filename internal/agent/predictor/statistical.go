@@ -178,11 +178,12 @@ func quickSelectKth(arr []float64, k int) float64 {
 		}
 		arr[i], arr[right] = arr[right], arr[i]
 
-		if i == k {
+		switch {
+		case i == k:
 			return arr[k]
-		} else if k < i {
+		case k < i:
 			right = i - 1
-		} else {
+		default:
 			left = i + 1
 		}
 	}

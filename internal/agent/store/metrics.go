@@ -167,7 +167,7 @@ func (s *Store) TrimMetricHistory(d time.Duration) error {
 			return nil
 		}
 		var toDelete []string
-		b.ForEach(func(k, _ []byte) error {
+		if err := b.ForEach(func(k, _ []byte) error {
 			mb := b.Bucket(k)
 			if mb == nil {
 				return nil
@@ -178,7 +178,9 @@ func (s *Store) TrimMetricHistory(d time.Duration) error {
 				toDelete = append(toDelete, string(k))
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
 		for _, key := range toDelete {
 			if err := b.DeleteBucket([]byte(key)); err != nil {
 				return fmt.Errorf("delete series %s: %w", key, err)

@@ -12,8 +12,6 @@ var (
 	colorWarning  = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")} // amber
 	colorInfo     = compat.AdaptiveColor{Light: lipgloss.Color("#0284C7"), Dark: lipgloss.Color("#38BDF8")} // sky
 	colorSuccess  = compat.AdaptiveColor{Light: lipgloss.Color("#16A34A"), Dark: lipgloss.Color("#4ADE80")} // green
-	colorNeutral  = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#9CA3AF")} // gray
-
 	// Accent / brand
 	colorPrimary   = compat.AdaptiveColor{Light: lipgloss.Color("#7C3AED"), Dark: lipgloss.Color("#A78BFA")} // purple
 	colorAccent    = compat.AdaptiveColor{Light: lipgloss.Color("#0D9488"), Dark: lipgloss.Color("#2DD4BF")} // teal
@@ -142,11 +140,6 @@ var (
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(colorSubtle).
 			Padding(0, 1)
-
-	// ── Footer ──
-	footerStyle = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			PaddingLeft(1)
 
 	// ── Separator ──
 	hbar = mutedStyle.Render(repeatLine(48))
