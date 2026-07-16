@@ -32,6 +32,9 @@ type Predictor struct {
 	patternLastSeen map[string]int
 	patternLastEmit map[string]int
 	patterns        []PatternMatcher
+	// cpTick tracks the last scrape tick when a changepoint fired per key.
+	// Used by StrategyCombinedOR to boost scores after regime shifts.
+	cpTick map[string]int
 
 	// lastSeen tracks the last access time for each metric key, used by the
 	// cleanup goroutine to prune stale state from in-memory maps.
@@ -55,6 +58,7 @@ func NewPredictor(config ScorerConfig) *Predictor {
 		patternLastSeen: make(map[string]int),
 		patternLastEmit: make(map[string]int),
 		lastSeen:        make(map[string]time.Time),
+		cpTick:          make(map[string]int),
 		cleanupStopCh:   make(chan struct{}),
 	}
 }
@@ -318,6 +322,10 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// Before resetting the estimator, emit the score for this point — otherwise
 			// the changepoint signal is lost (previously this was a `continue`).
 			if cp.Add(pt.Value) {
+				p.mu.Lock()
+				p.cpTick[key] = p.patternTick
+				p.mu.Unlock()
+
 				cpScore := rzScore
 				if cpScore < 0.3 {
 					cpScore = 0.3
@@ -357,6 +365,17 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				continue
 			}
 
+			// --- rate-of-change boost -----------------------------------------------
+			rocBoost := 0.0
+			if len(localHistory) >= 4 {
+				vel := p.roc.Velocity(localHistory)
+				if math.Abs(vel.Slope) > 0 {
+					relSlope := math.Abs(vel.Slope) / math.Max(math.Abs(median), 1.0)
+					rocBoost = math.Min(relSlope*5.0, p.config.ROCBoostWeight)
+				}
+			}
+
+			// --- strategy-specific scoring ------------------------------------------
 			var primaryScore float64
 			switch profile.Strategy {
 			case StrategyChangepoint:
@@ -365,23 +384,32 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 					primaryScore = 0.3
 				}
 			case StrategyCombinedOR:
+				// Multi-signal fusion: RZ + residual + recent changepoint
 				primaryScore = rzScore
-				if rzScore < 0.3 {
-					primaryScore = 0.3
+
+				residualScore := 0.0
+				if len(localHistory) >= 10 {
+					var sum float64
+					for _, p := range localHistory[len(localHistory)-10:] {
+						sum += p.Value
+					}
+					trend := sum / 10.0
+					dev := math.Abs(pt.Value - trend)
+					if mad > 0 {
+						residualScore = math.Min(dev/(mad*2.0), 1.0)
+					}
 				}
+
+				cpBoost := 0.0
+				p.mu.Lock()
+				if lastTick, has := p.cpTick[key]; has && p.patternTick-lastTick <= 5 {
+					cpBoost = 0.4
+				}
+				p.mu.Unlock()
+
+				primaryScore = math.Max(primaryScore, math.Max(residualScore, cpBoost))
 			default:
 				primaryScore = rzScore
-			}
-
-			// --- rate-of-change boost -----------------------------------------------
-			rocBoost := 0.0
-			history := localHistory
-			if len(history) >= 4 {
-				vel := p.roc.Velocity(history)
-				if math.Abs(vel.Slope) > 0 {
-					relSlope := math.Abs(vel.Slope) / math.Max(math.Abs(median), 1.0)
-					rocBoost = math.Min(relSlope*5.0, p.config.ROCBoostWeight)
-				}
 			}
 
 			// --- final score --------------------------------------------------------

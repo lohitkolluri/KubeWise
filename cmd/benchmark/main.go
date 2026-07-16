@@ -18,6 +18,7 @@ import (
 	"github.com/dgryski/go-change"
 	timeseriesgo "github.com/wenta/timeseries-go"
 
+	"github.com/lohitkolluri/KubeWise/internal/agent/ml"
 	"github.com/lohitkolluri/KubeWise/internal/agent/predictor"
 )
 
@@ -1560,6 +1561,33 @@ func algoIFHybrid(data []BenchPoint) []bool {
 	return preds
 }
 
+func algoMLHalfSpace(data []BenchPoint) []bool {
+	n := len(data)
+	preds := make([]bool, n)
+	pipeline := ml.NewMLPipeline()
+	for i, pt := range data {
+		res := pipeline.Push(pt.Value)
+		preds[i] = res.IsAnomaly
+	}
+	return preds
+}
+
+func algoMLHybrid(data []BenchPoint) []bool {
+	n := len(data)
+	preds := make([]bool, n)
+	pipeline := ml.NewMLPipeline()
+	cpPreds := algoChangepointRate(data)
+	for i, pt := range data {
+		res := pipeline.Push(pt.Value)
+		preds[i] = res.IsAnomaly
+		// Boost with changepoint detections
+		if !preds[i] && cpPreds[i] {
+			preds[i] = true
+		}
+	}
+	return preds
+}
+
 func patternToMetricName(pattern string) string {
 	switch {
 	case strings.Contains(pattern, "Normal"):
@@ -1889,6 +1917,8 @@ func main() {
 		{"Production Routing (ProfileForMetric)", nil}, // tested with metric name mapping
 		{"Isolation Forest (ML)", algoIsolationForest},
 		{"IF + Production Routing (ML hybrid)", algoIFHybrid},
+		{"ML HalfSpaceTrees (production)", algoMLHalfSpace},
+		{"ML Hybrid (Detector + Predictor)", algoMLHybrid},
 	}
 
 	// =========================================================================
