@@ -54,7 +54,7 @@ const (
 	// 7 algorithms × 7 patterns), which showed 0.05 produced 905 false positives
 	// (37.8% FP rate) while keeping F1 > 0.97 on memory leaks and crash loops.
 	// Tightening to 0.01 reduces noise detections while preserving real detections.
-	DefaultChangepointConfidence = 0.01
+	DefaultChangepointConfidence = 0.02
 )
 
 // HoeffdingAnomalyScore is kept for backward compatibility with existing tests.

@@ -1498,6 +1498,53 @@ func ensembleUltraCascade(data []BenchPoint) []bool {
 	return preds
 }
 
+// Production routing: tests our actual ProfileForMetric function from
+// metric_config.go by mapping synthetic patterns to realistic metric names.
+func productionRouting(data []BenchPoint, patternName string) []bool {
+	// Map synthetic pattern to the metric name our production ProfileForMetric
+	// would receive.
+	metricName := patternToMetricName(patternName)
+	if metricName == "" {
+		return make([]bool, len(data)) // no predictions for excluded metrics
+	}
+	profile := predictor.ProfileForMetric(metricName)
+	switch profile.Strategy {
+	case predictor.StrategyRobustZScore:
+		return algoRobustZScore(data)
+	case predictor.StrategyChangepoint:
+		return algoChangepointRate(data)
+	case predictor.StrategyCombinedOR:
+		return algoCombinedOR(data)
+	default:
+		return algoRobustZScore(data)
+	}
+}
+
+func patternToMetricName(pattern string) string {
+	switch {
+	case strings.Contains(pattern, "Normal"):
+		return "pod_cpu_usage"
+	case strings.Contains(pattern, "Memory"):
+		return "" // pod_memory_usage excluded from prod detection
+	case strings.Contains(pattern, "CPU"):
+		return "pod_cpu_usage"
+	case strings.Contains(pattern, "Step"):
+		return "pod_not_ready"
+	case strings.Contains(pattern, "Season"):
+		return "pod_cpu_usage"
+	case strings.Contains(pattern, "Crash"):
+		return "crashloop"
+	case strings.Contains(pattern, "Gradual"):
+		return "node_disk_usage"
+	case strings.Contains(pattern, "Mixed"):
+		return "tcp_retransmit_rate"
+	case strings.Contains(pattern, "Transient"):
+		return "pod_cpu_usage"
+	default:
+		return "pod_cpu_usage"
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Evaluation
 // ---------------------------------------------------------------------------
@@ -1799,6 +1846,7 @@ func main() {
 		{"Ensemble: Score fusion (RZ+CP+MA)", ensembleScoreFusion},
 		{"Ensemble: Voting", ensembleVoting},
 		{"E5: ULTRA CASCADE", ensembleUltraCascade},
+		{"Production Routing (ProfileForMetric)", nil}, // tested with metric name mapping
 	}
 
 	// =========================================================================
@@ -1823,9 +1871,11 @@ func main() {
 			var algoName string
 
 			if algo.Name == "Ensemble: Metric-family routing" {
-				// Special handling for metric-family routing
 				algoName = algo.Name
 				preds = ensembleMetricRouting(p.Data, p.Name)
+			} else if algo.Name == "Production Routing (ProfileForMetric)" {
+				algoName = algo.Name
+				preds = productionRouting(p.Data, p.Name)
 			} else {
 				algoName = algo.Name
 				preds = algo.Detect(p.Data)
