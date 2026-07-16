@@ -1,0 +1,8 @@
+{
+  "input_size": 64,
+  "threshold": 0.8057779669761658,
+  "latent_dim": 8,
+  "model_params": 9336,
+  "framework": "pytorch",
+  "onnx_size_kb": 41.1
+}

@@ -1,0 +1,71 @@
+{
+  "threshold": 0.8057779669761658,
+  "overall": {
+    "f1": 0.4119762103977748,
+    "precision": 0.37954166666666667,
+    "recall": 0.45047228129172645,
+    "accuracy": 0.45827083333333335,
+    "tp": 9109,
+    "fp": 14891,
+    "fn": 11112,
+    "tn": 12888
+  },
+  "per_pattern": {
+    "normal": {
+      "f1": 0.0,
+      "precision": 0.0,
+      "recall": 1.0,
+      "accuracy": 0.26666666666666666,
+      "samples": 30
+    },
+    "cpu_spike": {
+      "f1": 0.0909090909090909,
+      "precision": 0.058823529411764705,
+      "recall": 0.2,
+      "accuracy": 0.3333333333333333,
+      "samples": 30
+    },
+    "memory_leak": {
+      "f1": 0.3870967741935484,
+      "precision": 0.42857142857142855,
+      "recall": 0.35294117647058826,
+      "accuracy": 0.36666666666666664,
+      "samples": 30
+    },
+    "step_change": {
+      "f1": 0.5,
+      "precision": 0.375,
+      "recall": 0.75,
+      "accuracy": 0.4,
+      "samples": 30
+    },
+    "crash_loop": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "accuracy": 1.0,
+      "samples": 30
+    },
+    "degradation": {
+      "f1": 0.5945945945945946,
+      "precision": 0.5238095238095238,
+      "recall": 0.6875,
+      "accuracy": 0.5,
+      "samples": 30
+    },
+    "seasonal": {
+      "f1": 0.0,
+      "precision": 0.0,
+      "recall": 1.0,
+      "accuracy": 1.0,
+      "samples": 30
+    },
+    "mixed": {
+      "f1": 0.14285714285714288,
+      "precision": 0.125,
+      "recall": 0.16666666666666666,
+      "accuracy": 0.2,
+      "samples": 30
+    }
+  }
+}
