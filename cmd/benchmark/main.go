@@ -13,10 +13,8 @@ import (
 	"math/rand"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/dgryski/go-change"
-	timeseriesgo "github.com/wenta/timeseries-go"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/predictor"
 )
@@ -83,12 +81,6 @@ func gaussian(rng *rand.Rand, mean, std float64) float64 {
 	return mean + std*rng.NormFloat64()
 }
 
-func addNoise(rng *rand.Rand, pts []BenchPoint, noiseStd float64) {
-	for i := range pts {
-		pts[i].Value += gaussian(rng, 0, noiseStd)
-	}
-}
-
 func addOutliers(rng *rand.Rand, pts []BenchPoint, fraction float64, amplitude float64) {
 	nOut := int(float64(len(pts)) * fraction)
 	for i := 0; i < nOut; i++ {
@@ -99,20 +91,6 @@ func addOutliers(rng *rand.Rand, pts []BenchPoint, fraction float64, amplitude f
 			pts[idx].Value -= amplitude
 		}
 	}
-}
-
-func dropPoints(rng *rand.Rand, pts []BenchPoint, fraction float64) []BenchPoint {
-	if fraction <= 0 {
-		return pts
-	}
-	keep := make([]BenchPoint, 0, len(pts))
-	for _, p := range pts {
-		if rng.Float64() < fraction {
-			continue
-		}
-		keep = append(keep, p)
-	}
-	return keep
 }
 
 func generateBaseline(rng *rand.Rand, n int, mean, std float64) []BenchPoint {
@@ -293,31 +271,12 @@ func abs(x int) int {
 	return x
 }
 
-func fabs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 func extractValues(pts []BenchPoint) []float64 {
 	out := make([]float64, len(pts))
 	for i, p := range pts {
 		out[i] = p.Value
 	}
 	return out
-}
-
-func floatsToTimeSeries(vals []float64) timeseriesgo.TimeSeries {
-	ts := timeseriesgo.Empty()
-	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i, v := range vals {
-		ts.AddPoint(timeseriesgo.DataPoint{
-			Timestamp: base.Add(time.Duration(i) * 30 * time.Second),
-			Value:     v,
-		})
-	}
-	return ts
 }
 
 func meanOf(vals []float64) float64 {
@@ -341,50 +300,6 @@ func stdOf(vals []float64, mean float64) float64 {
 		sq += d * d
 	}
 	return math.Sqrt(sq / float64(len(vals)-1))
-}
-
-func medianOf(vals []float64) float64 {
-	if len(vals) == 0 {
-		return 0
-	}
-	sorted := make([]float64, len(vals))
-	copy(sorted, vals)
-	sort.Float64s(sorted)
-	n := len(sorted)
-	if n%2 == 0 {
-		return (sorted[n/2-1] + sorted[n/2]) / 2
-	}
-	return sorted[n/2]
-}
-
-func madOf(vals []float64, median float64) float64 {
-	devs := make([]float64, len(vals))
-	for i, v := range vals {
-		devs[i] = math.Abs(v - median)
-	}
-	return medianOf(devs)
-}
-
-func rollingStats(window []float64) (mean, std float64) {
-	n := len(window)
-	if n == 0 {
-		return 0, 0
-	}
-	sum := 0.0
-	for _, v := range window {
-		sum += v
-	}
-	mean = sum / float64(n)
-	if n < 2 {
-		return mean, 0
-	}
-	var sq float64
-	for _, v := range window {
-		d := v - mean
-		sq += d * d
-	}
-	std = math.Sqrt(sq / float64(n-1))
-	return mean, std
 }
 
 // truncate shortens a string to maxLen.
@@ -966,8 +881,8 @@ func algoPageHinkley(data []BenchPoint) []bool {
 	delta := 0.05
 	lambda := 50.0
 	sum := 0.0
-	min := 0.0
-	max := 0.0
+	minVal := 0.0
+	maxVal := 0.0
 
 	for i := 0; i < len(data); i++ {
 		if i > 0 && i%100 == 0 {
@@ -978,19 +893,19 @@ func algoPageHinkley(data []BenchPoint) []bool {
 			mean = meanOf(vals[start:i])
 		}
 		sum += vals[i] - mean - delta
-		if sum < min {
-			min = sum
+		if sum < minVal {
+			minVal = sum
 		}
-		if sum > max {
-			max = sum
+		if sum > maxVal {
+			maxVal = sum
 		}
-		PHpos := sum - min
-		PHneg := max - sum
+		PHpos := sum - minVal
+		PHneg := maxVal - sum
 		preds[i] = PHpos > lambda || PHneg > lambda
 		if preds[i] {
 			sum = 0
-			min = 0
-			max = 0
+			minVal = 0
+			maxVal = 0
 		}
 	}
 	return preds
@@ -1561,11 +1476,12 @@ func evaluate(patternName string, algoName string, data []BenchPoint, preds []bo
 	nEvaluated := 0
 	for i := warmup; i < len(data) && i < len(preds); i++ {
 		nEvaluated++
-		if preds[i] && data[i].KnownAnomaly {
+		switch {
+		case preds[i] && data[i].KnownAnomaly:
 			tp++
-		} else if preds[i] && !data[i].KnownAnomaly {
+		case preds[i] && !data[i].KnownAnomaly:
 			fp++
-		} else if !preds[i] && data[i].KnownAnomaly {
+		case !preds[i] && data[i].KnownAnomaly:
 			fn++
 		}
 	}
@@ -1581,15 +1497,16 @@ func evaluate(patternName string, algoName string, data []BenchPoint, preds []bo
 		r.Accuracy = float64(correct) / float64(nEvaluated)
 	}
 
-	if totalReal == 0 && totalPred == 0 {
+	switch {
+	case totalReal == 0 && totalPred == 0:
 		r.Precision = 1.0
 		r.Recall = 1.0
 		r.F1 = 1.0
-	} else if totalReal == 0 && totalPred > 0 {
+	case totalReal == 0 && totalPred > 0:
 		r.Precision = 0
 		r.Recall = 1.0
 		r.F1 = 0
-	} else {
+	default:
 		if totalPred > 0 {
 			r.Precision = float64(tp) / float64(totalPred)
 		}
@@ -1687,7 +1604,7 @@ func aggregate(results []PatternResult) []Summary {
 		byAlgo[r.Algorithm] = append(byAlgo[r.Algorithm], r)
 	}
 
-	var summaries []Summary
+	summaries := make([]Summary, 0, len(byAlgo))
 	for name, rs := range byAlgo {
 		s := Summary{Algorithm: name}
 		var f1Sum, precSum, recSum, accSum, delaySum float64
@@ -1723,17 +1640,6 @@ func aggregate(results []PatternResult) []Summary {
 // ---------------------------------------------------------------------------
 // Output formatting
 // ---------------------------------------------------------------------------
-
-func stripTag(name string) string {
-	// Remove [train] or [test] suffix for comparison
-	if strings.HasSuffix(name, " [train]") {
-		return name[:len(name)-8]
-	}
-	if strings.HasSuffix(name, " [test]") {
-		return name[:len(name)-7]
-	}
-	return name
-}
 
 func formatResultsTable(results []PatternResult, title string) {
 	fmt.Println()
@@ -1777,10 +1683,6 @@ func formatRanking(summaries []Summary, title string) {
 	}
 }
 
-func isOverfit(delta float64) bool {
-	return delta < -0.05
-}
-
 func meets95pct(f1 float64) bool {
 	return f1 >= 0.95
 }
@@ -1790,7 +1692,7 @@ func meets95pct(f1 float64) bool {
 // ---------------------------------------------------------------------------
 
 func main() {
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic for reproducible benchmarks
 
 	const uniformWarmup = 100
 	const trainRatio = 0.70
@@ -1852,9 +1754,9 @@ func main() {
 	// Phase 3: Evaluate each algorithm on each pattern (train/test split)
 	// =========================================================================
 
-	var allResults []PatternResult   // will hold both train and test results for detailed analysis
-	var testResults []PatternResult  // only test results for final ranking and per-pattern tables
-	var trainResults []PatternResult // only train results for overfitting analysis
+	nAlgos := len(algos)
+	testResults := make([]PatternResult, 0, nAlgos*30)
+	trainResults := make([]PatternResult, 0, nAlgos*30)
 
 	fmt.Println()
 	fmt.Println("  Running evaluation...")
@@ -1862,27 +1764,23 @@ func main() {
 
 	for _, p := range rawPatterns {
 		fmt.Printf("  Pattern: %s (%d points)\n", p.Name, len(p.Data))
-		var patternTestResults []PatternResult
-		var patternTrainResults []PatternResult
+		patternTestResults := make([]PatternResult, 0, nAlgos)
+		patternTrainResults := make([]PatternResult, 0, nAlgos)
 
 		for _, algo := range algos {
+			algoName := algo.Name
 			var preds []bool
-			var algoName string
-
-			if algo.Name == "Ensemble: Metric-family routing" {
-				algoName = algo.Name
+			switch algoName {
+			case "Ensemble: Metric-family routing":
 				preds = ensembleMetricRouting(p.Data, p.Name)
-			} else if algo.Name == "Production Routing (ProfileForMetric)" {
-				algoName = algo.Name
+			case "Production Routing (ProfileForMetric)":
 				preds = productionRouting(p.Data, p.Name)
-			} else {
-				algoName = algo.Name
+			default:
 				preds = algo.Detect(p.Data)
 			}
 
 			// Evaluate on train and test splits
 			result := evaluateTrainTest(p.Name, algoName, p.Data, preds, uniformWarmup, trainRatio)
-			allResults = append(allResults, result.Train, result.Test)
 			patternTrainResults = append(patternTrainResults, result.Train)
 			patternTestResults = append(patternTestResults, result.Test)
 		}
@@ -1990,20 +1888,21 @@ func main() {
 	fmt.Println("  =====================================================================")
 	fmt.Println("  TOP 3 ENSEMBLE RECOMMENDATIONS")
 	fmt.Println("  =====================================================================")
-	if len(ensembleSummaries) >= 3 {
+	switch l := len(ensembleSummaries); {
+	case l >= 3:
 		for i := 0; i < 3; i++ {
 			ens := ensembleSummaries[i]
 			fmt.Printf("  %d. %s\n", i+1, ens.Algorithm)
 			fmt.Printf("     F1: %.4f, Precision: %.4f, Recall: %.4f, Accuracy: %.4f\n",
 				ens.AvgF1, ens.AvgPrecision, ens.AvgRecall, ens.AvgAccuracy)
 		}
-	} else if len(ensembleSummaries) > 0 {
+	case l > 0:
 		for i, ens := range ensembleSummaries {
 			fmt.Printf("  %d. %s\n", i+1, ens.Algorithm)
 			fmt.Printf("     F1: %.4f, Precision: %.4f, Recall: %.4f, Accuracy: %.4f\n",
 				ens.AvgF1, ens.AvgPrecision, ens.AvgRecall, ens.AvgAccuracy)
 		}
-	} else {
+	default:
 		fmt.Println("  No ensemble methods found in results.")
 	}
 }

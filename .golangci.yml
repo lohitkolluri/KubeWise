@@ -24,14 +24,7 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
-      - path: cmd/benchmark/
-        linters:
-          - gocritic
-          - gosec
-          - prealloc
-          - revive
-          - staticcheck
-          - unused
+
 
 formatters:
   enable:
