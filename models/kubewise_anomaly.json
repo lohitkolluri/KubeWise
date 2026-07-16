@@ -1,0 +1,1 @@
+{"threshold": 0.8329553604125977, "input_size": 64, "f1_score": 0.5394183601962158, "framework": "pytorch", "model": "anomaly_autoencoder"}
