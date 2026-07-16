@@ -89,7 +89,6 @@ const (
 
 var (
 	tabLabels = []string{"Dashboard", "Predict", "Anomalies", "Audit", "Approvals", "Config", "Logs", "Health"}
-	tabIcons  = []string{"◎", "◈", "▲", "◆", "★", "⚙", "¶", "♥"} //nolint:unused
 )
 
 // ── Model ──
@@ -128,8 +127,7 @@ type controlModel struct {
 	accSnap      *models.AccuracySnapshot
 
 	// Per-tab loading & error state
-	loading    bool
-	loadingTab [tabCount]bool //nolint:unused
+	loading bool
 	err        error
 	errTab     [tabCount]error
 

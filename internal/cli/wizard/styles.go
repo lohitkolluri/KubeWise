@@ -13,9 +13,7 @@ var (
 	colorWarning   = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")}
 	colorSuccess   = compat.AdaptiveColor{Light: lipgloss.Color("#16A34A"), Dark: lipgloss.Color("#4ADE80")}
 	colorNeutral   = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#9CA3AF")}
-	colorSubtle    = compat.AdaptiveColor{Light: lipgloss.Color("#4B5563"), Dark: lipgloss.Color("#D1D5DB")} //nolint:unused
-	colorMuted     = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")}
-	colorSurface   = compat.AdaptiveColor{Light: lipgloss.Color("#F9FAFB"), Dark: lipgloss.Color("#1F2937")} //nolint:unused
+	colorMuted = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")}
 	colorBorder    = compat.AdaptiveColor{Light: lipgloss.Color("#D1D5DB"), Dark: lipgloss.Color("#374151")}
 	colorHighlight = compat.AdaptiveColor{Light: lipgloss.Color("#111827"), Dark: lipgloss.Color("#F9FAFB")}
 
@@ -36,7 +34,6 @@ var (
 			Bold(true)
 
 	// Input / form
-	inputLabelStyle = lipgloss.NewStyle().Foreground(colorSubtle).Width(20) //nolint:unused
 	inputValueStyle = lipgloss.NewStyle().Foreground(colorHighlight)
 	helpStyle       = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).MarginTop(1)
 
@@ -60,7 +57,6 @@ var (
 
 	// Summary table
 	summaryKeyStyle     = lipgloss.NewStyle().Foreground(colorMuted).Width(24)
-	summaryValueStyle   = lipgloss.NewStyle().Foreground(colorHighlight) //nolint:unused
 	summarySectionStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorAccent).
@@ -74,6 +70,4 @@ var (
 	buttonStyle = lipgloss.NewStyle().
 			Foreground(colorPrimary).
 			Bold(true)
-
-	buttonDimStyle = lipgloss.NewStyle().Foreground(colorMuted) //nolint:unused
 )

@@ -12,7 +12,6 @@ const maxRecordsInMemory = 10000
 var (
 	bucketMetrics       = []byte("metrics")
 	bucketAnomalies     = []byte("anomalies")
-	bucketRemediations  = []byte("remediations")
 	bucketAuditLog      = []byte("audit_log")
 	bucketConfig        = []byte("config")
 	bucketPredictions   = []byte("predictions")
@@ -35,7 +34,6 @@ func (s *Store) Init() error {
 		for _, b := range [][]byte{
 			bucketMetrics,
 			bucketAnomalies,
-			bucketRemediations,
 			bucketAuditLog,
 			bucketConfig,
 			bucketPredictions,

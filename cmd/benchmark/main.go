@@ -710,7 +710,6 @@ func algoEWMA(data []BenchPoint) []bool {
 // ---------------------------------------------------------------------------
 
 func algoDoubleExpSmoothing(data []BenchPoint) []bool {
-	_ = algoDoubleExpSmoothing // suppress unused warning; body follows
 	preds := make([]bool, len(data))
 	if len(data) < 3 {
 		return preds
