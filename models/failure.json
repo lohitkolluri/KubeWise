@@ -1,0 +1,14 @@
+{
+  "name": "failure",
+  "n_features": 10,
+  "f1": 0.30521415467492363,
+  "precision": 0.18012391263533387,
+  "recall": 0.9989587671803415,
+  "threshold": 0.004593161400407553,
+  "tp": 14391,
+  "fp": 65504,
+  "fn": 15,
+  "tn": 90,
+  "auc": 0.5007,
+  "note": "predicts anomaly precursors \u2014 threshold-calibrated"
+}
