@@ -93,8 +93,7 @@ func TestGetFailingPods(t *testing.T) {
 		},
 	)
 
-	_ = cs // Informers need a real watch which fake doesn't fully support without extra setup
-	// Testing state conversion directly instead
+	// Testing state conversion directly instead of using informers
 	rc := NewResourcesCollector(cs, nil)
 	if rc == nil {
 		t.Fatal("expected non-nil ResourcesCollector")

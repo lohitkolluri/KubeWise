@@ -301,13 +301,6 @@ func podToState(pod *corev1.Pod) PodState {
 			}
 		}
 	}
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller != nil && *ref.Controller {
-			s.OwnerKind = ref.Kind
-			s.OwnerName = ref.Name
-			break
-		}
-	}
 	return s
 }
 

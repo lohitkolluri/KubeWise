@@ -3,6 +3,7 @@ package remediator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -202,7 +203,7 @@ func (e *K8sExecutor) deletePod(ctx context.Context, namespace, name string) (st
 func (e *K8sExecutor) scaleReplicas(ctx context.Context, namespace, name string, params map[string]string) (string, error) {
 	replicasStr, ok := params["replicas"]
 	if !ok {
-		return "", fmt.Errorf("scale_replicas requires 'replicas' parameter")
+		return "", errors.New("scale_replicas requires 'replicas' parameter")
 	}
 	replicas, err := strconv.ParseInt(replicasStr, 10, 32)
 	if err != nil {
@@ -291,7 +292,7 @@ func (e *K8sExecutor) patchResources(ctx context.Context, namespace, name string
 	}
 
 	if len(resourceParams(params)) == 0 {
-		return "", fmt.Errorf("patch_resources requires at least one resource parameter")
+		return "", errors.New("patch_resources requires at least one resource parameter")
 	}
 
 	deployment, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})

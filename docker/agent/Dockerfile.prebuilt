@@ -1,8 +1,0 @@
-# syntax=docker/dockerfile:1
-
-# Build the agent binary on the host (see: `make build-agent`), then package it.
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY bin/agent /agent
-USER 65532:65532
-EXPOSE 8080
-ENTRYPOINT ["/agent"]

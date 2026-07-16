@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -276,7 +277,7 @@ func resolveAgentServiceName() (string, error) {
 			return name, nil
 		}
 	}
-	return "", fmt.Errorf("no agent service found")
+	return "", errors.New("no agent service found")
 }
 
 func serviceExists(namespace, name string) bool {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
-	bolterrors "go.etcd.io/bbolt/errors"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
@@ -17,7 +16,7 @@ import (
 // SaveAuditRecord persists a remediation audit record.
 func (s *Store) SaveAuditRecord(r *models.AuditRecord) error {
 	if r.ID == "" {
-		return fmt.Errorf("audit record ID must not be empty")
+		return errors.New("audit record ID must not be empty")
 	}
 	data, err := json.Marshal(r)
 	if err != nil {
@@ -148,7 +147,7 @@ func (s *Store) ListAuditRecordsSince(since time.Time, limit int) ([]models.Audi
 // GetAuditRecord returns a single audit record by exact ID.
 func (s *Store) GetAuditRecord(id string) (*models.AuditRecord, error) {
 	if id == "" {
-		return nil, fmt.Errorf("audit record ID must not be empty")
+		return nil, errors.New("audit record ID must not be empty")
 	}
 	var record models.AuditRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -171,7 +170,7 @@ func (s *Store) GetAuditRecord(id string) (*models.AuditRecord, error) {
 // UpdateAuditRecord overwrites an existing audit record.
 func (s *Store) UpdateAuditRecord(r *models.AuditRecord) error {
 	if r == nil || r.ID == "" {
-		return fmt.Errorf("audit record ID must not be empty")
+		return errors.New("audit record ID must not be empty")
 	}
 	data, err := json.Marshal(r)
 	if err != nil {
@@ -180,7 +179,7 @@ func (s *Store) UpdateAuditRecord(r *models.AuditRecord) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketAuditLog)
 		if b == nil {
-			return fmt.Errorf("audit bucket missing")
+			return errors.New("audit bucket missing")
 		}
 		if b.Get([]byte(r.ID)) == nil {
 			return fmt.Errorf("audit record %q not found", r.ID)
@@ -255,10 +254,10 @@ func (s *Store) RebuildAuditIndexes() error {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketAuditIndex); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
 			return err
 		}
-		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketAuditStatus); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
 			return err
 		}
 		idx, err := tx.CreateBucket(bucketAuditIndex)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,7 +59,7 @@ Examples:
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if secretsFromStdin && len(args) == 1 {
-			return fmt.Errorf("got KEY argument while --stdin is set; use either --stdin (paste key via stdin) or pass KEY as an argument, not both")
+			return errors.New("got KEY argument while --stdin is set; use either --stdin (paste key via stdin) or pass KEY as an argument, not both")
 		}
 
 		key, err := readSecretInput(cmd, args)
@@ -67,7 +68,7 @@ Examples:
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
-			return fmt.Errorf("key must not be empty")
+			return errors.New("key must not be empty")
 		}
 		if err := validateOpenRouterKey(key); err != nil {
 			return err
@@ -120,7 +121,7 @@ Examples:
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if secretsAPITokenFromStdin && len(args) == 1 {
-			return fmt.Errorf("got TOKEN argument while --stdin is set; use either --stdin or pass TOKEN as an argument, not both")
+			return errors.New("got TOKEN argument while --stdin is set; use either --stdin or pass TOKEN as an argument, not both")
 		}
 
 		tok, err := readAPITokenInput(cmd, args)
@@ -129,7 +130,7 @@ Examples:
 		}
 		tok = strings.TrimSpace(tok)
 		if tok == "" {
-			return fmt.Errorf("token must not be empty")
+			return errors.New("token must not be empty")
 		}
 
 		secName, err := resolveAgentSecretName(cmd.Context(), "KUBEWISE_API_TOKEN")
@@ -188,7 +189,7 @@ func readSecretInput(cmd *cobra.Command, args []string) (string, error) {
 			}
 			return strings.TrimSpace(string(b)), nil
 		}
-		return "", fmt.Errorf("provide KEY, or use --stdin / --from-env")
+		return "", errors.New("provide KEY, or use --stdin / --from-env")
 	}
 }
 
@@ -215,7 +216,7 @@ func readAPITokenInput(cmd *cobra.Command, args []string) (string, error) {
 			}
 			return strings.TrimSpace(string(b)), nil
 		}
-		return "", fmt.Errorf("provide TOKEN, or use --stdin / --from-env")
+		return "", errors.New("provide TOKEN, or use --stdin / --from-env")
 	}
 }
 
@@ -224,10 +225,10 @@ var openRouterKeyRe = regexp.MustCompile(`^sk-or-v1-[A-Za-z0-9_-]{10,}$`)
 func validateOpenRouterKey(key string) error {
 	// Don’t over-validate, but catch obvious copy/paste mistakes.
 	if strings.ContainsAny(key, " \t\r\n") {
-		return fmt.Errorf("key looks malformed (contains whitespace)")
+		return errors.New("key looks malformed (contains whitespace)")
 	}
 	if !openRouterKeyRe.MatchString(key) {
-		return fmt.Errorf("key doesn't look like an OpenRouter key (expected prefix sk-or-v1-...)")
+		return errors.New("key doesn't look like an OpenRouter key (expected prefix sk-or-v1-...)")
 	}
 	return nil
 }

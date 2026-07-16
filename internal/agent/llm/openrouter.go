@@ -12,11 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cenkalti/backoff/v6"
 	openrouter "github.com/OpenRouterTeam/go-sdk"
 	"github.com/OpenRouterTeam/go-sdk/models/components"
 	"github.com/OpenRouterTeam/go-sdk/models/operations"
 	"github.com/OpenRouterTeam/go-sdk/optionalnullable"
+	"github.com/cenkalti/backoff/v6"
 	gobreaker "github.com/sony/gobreaker/v2"
 )
 
@@ -139,13 +139,13 @@ func (p *OpenRouterProvider) HasAPIKey() bool { return p.apiKey != "" }
 // ValidateKey checks that the OpenRouter API key is valid.
 func (p *OpenRouterProvider) ValidateKey(ctx context.Context) error {
 	if p.apiKey == "" {
-		return fmt.Errorf("openrouter API key is empty")
+		return errors.New("openrouter API key is empty")
 	}
 	if p.sdk == nil {
-		return fmt.Errorf("openrouter client not initialized")
+		return errors.New("openrouter client not initialized")
 	}
 	if !strings.HasPrefix(p.apiKey, "sk-or-") {
-		return fmt.Errorf("openrouter API key should start with sk-or-v1- (create one at https://openrouter.ai/settings/keys)")
+		return errors.New("openrouter API key should start with sk-or-v1- (create one at https://openrouter.ai/settings/keys)")
 	}
 	if _, err := p.sdk.APIKeys.GetCurrentKeyMetadata(ctx); err != nil {
 		return fmt.Errorf("openrouter auth failed: %w", err)
@@ -164,42 +164,22 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 	p.sessionMu.Lock()
 	if p.sdk == nil {
 		p.sessionMu.Unlock()
-		return Usage{}, fmt.Errorf("openrouter client not configured")
+		return Usage{}, errors.New("openrouter client not configured")
 	}
 	p.sessionMu.Unlock()
 
 	cbDone, err := p.circuitBreaker.Allow()
 	if err != nil {
-		return Usage{}, fmt.Errorf("openrouter circuit breaker open")
+		return Usage{}, errors.New("openrouter circuit breaker open")
 	}
 
-	// Cache parsed schema to avoid repeated json.Unmarshal calls
-	// across model retries and subsequent invocations with the same schema.
 	schemaMap, err := p.cachedSchema(schema)
 	if err != nil {
+		cbDone(err)
 		return Usage{}, fmt.Errorf("parse schema: %w", err)
 	}
 
-	// Build both response formats once before the model loop.
-	// Strict mode depends on whether the model supports strict JSON schema;
-	// only the Strict field varies per model, so we build two variants.
-	strictTrue, strictFalse := true, false
-	strictFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
-		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
-		JSONSchema: components.ChatJSONSchemaConfig{
-			Name:   "remediation_plan",
-			Strict: optionalnullable.From(&strictTrue),
-			Schema: schemaMap,
-		},
-	})
-	nonStrictFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
-		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
-		JSONSchema: components.ChatJSONSchemaConfig{
-			Name:   "remediation_plan",
-			Strict: optionalnullable.From(&strictFalse),
-			Schema: schemaMap,
-		},
-	})
+	strictFormat, nonStrictFormat := buildStrictFormats(schemaMap, "remediation_plan")
 
 	var lastErr error
 	p.mu.RLock()
@@ -210,10 +190,6 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 		if !IsFreeModel(model) {
 			responseFormat = strictFormat
 		}
-
-		// Exponential backoff per model (max 3 attempts = 1 initial + 2 retries)
-		b := backoff.NewExponentialBackOff()
-		b.MaxInterval = 5 * time.Second
 
 		var modelUsage Usage
 		modelUsage, retryErr := backoff.Retry(ctx, func() (Usage, error) {
@@ -356,6 +332,27 @@ func isRetryableOpenRouterError(err error) bool {
 	return false
 }
 
+func buildStrictFormats(schemaMap map[string]any, name string) (strict, nonStrict components.ResponseFormat) {
+	strictTrue, strictFalse := true, false
+	strict = components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
+		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
+		JSONSchema: components.ChatJSONSchemaConfig{
+			Name:   name,
+			Strict: optionalnullable.From(&strictTrue),
+			Schema: schemaMap,
+		},
+	})
+	nonStrict = components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
+		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
+		JSONSchema: components.ChatJSONSchemaConfig{
+			Name:   name,
+			Strict: optionalnullable.From(&strictFalse),
+			Schema: schemaMap,
+		},
+	})
+	return
+}
+
 func maxTokensForModel(model string) int64 {
 	if IsFreeModel(model) || strings.Contains(model, "120b") {
 		return 2048
@@ -365,11 +362,11 @@ func maxTokensForModel(model string) int64 {
 
 func extractMessageContent(res *operations.SendChatCompletionRequestResponse) (string, error) {
 	if res == nil || res.ChatResult == nil {
-		return "", fmt.Errorf("openrouter: empty response")
+		return "", errors.New("openrouter: empty response")
 	}
 	choices := res.ChatResult.GetChoices()
 	if len(choices) == 0 {
-		return "", fmt.Errorf("openrouter: no choices returned")
+		return "", errors.New("openrouter: no choices returned")
 	}
 
 	msg := choices[0].GetMessage()
@@ -391,7 +388,7 @@ func extractMessageContent(res *operations.SendChatCompletionRequestResponse) (s
 		}
 	}
 
-	return "", fmt.Errorf("openrouter: empty message content")
+	return "", errors.New("openrouter: empty message content")
 }
 
 func extractJSONObject(s string) string {

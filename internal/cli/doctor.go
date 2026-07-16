@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 
@@ -32,33 +33,30 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			printFail(out, "%s: %v", name, err)
 			ok = false
-		} else {
-			printOK(out, "%s", name)
+			return
 		}
+		printOK(out, "%s", name)
 	}
 
-	if _, err := exec.LookPath("kubectl"); err != nil {
-		check("kubectl", err)
-	} else {
-		check("kubectl", nil)
-		if kc, err := newKubeClient(); err != nil {
-			check("kubernetes cluster", err)
-		} else if err := kc.PingCluster(cmd.Context()); err != nil {
+	_, kubectlErr := exec.LookPath("kubectl")
+	check("kubectl", kubectlErr)
+	if kubectlErr == nil {
+		kc, err := newKubeClient()
+		if err != nil {
 			check("kubernetes cluster", err)
 		} else {
-			check("kubernetes cluster", nil)
+			check("kubernetes cluster", kc.PingCluster(cmd.Context()))
 		}
 	}
 
 	for _, tool := range []string{"helm", "kind", "docker"} {
-		if _, err := exec.LookPath(tool); err != nil {
+		_, err := exec.LookPath(tool)
+		if err != nil {
 			printOptional(out, "%s (optional for local dev)", tool)
-		} else if tool == "docker" {
-			if err := exec.Command("docker", "info").Run(); err != nil {
-				check("docker daemon", fmt.Errorf("not running — start Docker Desktop"))
-			} else {
-				check("docker daemon", nil)
-			}
+			continue
+		}
+		if tool == "docker" {
+			check("docker daemon", exec.Command("docker", "info").Run())
 		} else {
 			check(tool, nil)
 		}
@@ -78,7 +76,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	}
 
 	if !ok {
-		return fmt.Errorf("some checks failed")
+		return errors.New("some checks failed")
 	}
 	printOK(out, "All checks passed")
 	printNextSteps(out, "kwctl install", "kwctl ui")

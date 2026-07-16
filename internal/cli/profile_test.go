@@ -1,9 +1,6 @@
 package cli
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestActiveProfile_DefaultsWhenNoFile(t *testing.T) {
 	// Ensure we don't pick up the real user profile.
@@ -121,15 +118,16 @@ func TestParseSetArg_EmptyValue(t *testing.T) {
 
 // profilePath uses XDG_CONFIG_HOME or ~/.config. Capture it to verify path construction.
 func TestProfilePath_UsesXDG(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/test-xdg-kwctl")
+	xdgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgHome)
 	path, err := profilePath()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if path != "/tmp/test-xdg-kwctl/kwctl/config.yaml" {
-		t.Fatalf("expected path under XDG_CONFIG_HOME, got %q", path)
+	want := xdgHome + "/kwctl/config.yaml"
+	if path != want {
+		t.Fatalf("expected path %q, got %q", want, path)
 	}
-	_ = os.RemoveAll("/tmp/test-xdg-kwctl")
 }
 
 func TestSetProfileField_UnknownKey(t *testing.T) {

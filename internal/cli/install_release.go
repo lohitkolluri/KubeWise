@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,9 +96,10 @@ func parseV10Patch(tag string) int {
 }
 
 // nextPatchTag returns the next patch tag after latest.
-//   v1.0.2 → v1.0.3
-//   v1.0.9 → v1.0.10
-//   ""     → v1.0.2 (chart fallback: current Chart.yaml version is 1.0.1)
+//
+//	v1.0.2 → v1.0.3
+//	v1.0.9 → v1.0.10
+//	""     → v1.0.2 (chart fallback: current Chart.yaml version is 1.0.1)
 func nextPatchTag(latest string) string {
 	if latest == "" {
 		return "v1.0.2"
@@ -124,7 +126,7 @@ func nextPatchTag(latest string) string {
 func gitRelease(tag string, yes bool, out io.Writer) error {
 	// --- Check git availability ---
 	if _, err := exec.LookPath("git"); err != nil {
-		return fmt.Errorf("git not found in PATH")
+		return errors.New("git not found in PATH")
 	}
 
 	// --- Determine current branch ---
@@ -159,7 +161,7 @@ func gitRelease(tag string, yes bool, out io.Writer) error {
 
 		if !yes {
 			if !isTerminal(os.Stderr) {
-				return fmt.Errorf("working tree is dirty and --yes is not set — aborting (use --yes to skip the confirmation)")
+				return errors.New("working tree is dirty and --yes is not set — aborting (use --yes to skip the confirmation)")
 			}
 			_, _ = fmt.Fprint(os.Stderr, mutedStyle.Render("Proceed with the release? [y/N] "))
 			var response string
@@ -318,5 +320,3 @@ func redeployKustomize(tag string, out io.Writer) error {
 	}
 	return nil
 }
-
-

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ func agentDeploymentCandidates() []string {
 	return out
 }
 
-func findAgentPod(ctx context.Context) (podName string, err error) {
+func findAgentPod(ctx context.Context) (string, error) {
 	kc, err := newKubeClient()
 	if err != nil {
 		return "", err
@@ -99,7 +100,7 @@ func restartAgentDeployment() error {
 	if lastErr != nil {
 		return fmt.Errorf("restart agent deployment: %w", lastErr)
 	}
-	return fmt.Errorf("restart agent deployment: not found")
+	return errors.New("restart agent deployment: not found")
 }
 
 func formatConfigSummary(cfg *models.AgentConfig) string {

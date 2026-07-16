@@ -18,10 +18,7 @@ func (c *Correlator) gateByTier(tier models.RiskTier, plan models.RemediationPla
 		}
 		return ""
 	case models.RiskTier3:
-		if plan.Action.Type == "escalate" {
-			return ""
-		}
-		return "" // queued for human approval after tier gate
+		return "" // queued for human approval in RunOnce
 	case models.RiskTier4:
 		// T4 should never auto-execute, but it also shouldn't be auto-rejected
 		// when the action type is known. Instead, require explicit operator approval.
@@ -101,12 +98,14 @@ func (ta *TierAssigner) CheckCooldown(namespace, action string) bool {
 	defer ta.mu.Unlock()
 
 	key := cooldownKey(namespace, action)
-	if until, exists := ta.cooldowns[key]; exists && time.Now().Before(until) {
+	until, exists := ta.cooldowns[key]
+	if !exists {
+		return true
+	}
+	if time.Now().Before(until) {
 		return false
 	}
-	if until, exists := ta.cooldowns[key]; exists && time.Now().After(until) {
-		delete(ta.cooldowns, key)
-	}
+	delete(ta.cooldowns, key)
 	return true
 }
 

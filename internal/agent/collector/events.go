@@ -57,6 +57,7 @@ type EventsCollector struct {
 	watchNamespaces []string
 	informer        cache.Controller
 	synced          bool
+	closeCh         chan struct{}
 }
 
 // NewEventsCollector creates a new events collector.
@@ -94,6 +95,7 @@ func (ec *EventsCollector) WatchEvents(ctx context.Context) <-chan EventRecord {
 		},
 	)
 
+	ec.closeCh = make(chan struct{})
 	go ec.informer.Run(ctx.Done())
 	go func() {
 		if cache.WaitForCacheSync(ctx.Done(), ec.informer.HasSynced) {
@@ -103,6 +105,7 @@ func (ec *EventsCollector) WatchEvents(ctx context.Context) <-chan EventRecord {
 			slog.Error("events: informer cache sync failed")
 		}
 		<-ctx.Done()
+		close(ec.closeCh)
 		close(ch)
 	}()
 
@@ -138,7 +141,8 @@ func (ec *EventsCollector) filterAndSend(obj any, eventType string, ch chan<- Ev
 		record.InvolvedObject = k8sEvent.InvolvedObject.Kind + "/" + k8sEvent.InvolvedObject.Name
 	}
 
-	// Send with backpressure — drop if channel full after 5s
+	// Send with backpressure — drop if channel full after 5s,
+	// or abort if the collector is shutting down (prevents send on closed channel).
 	timer := time.NewTimer(5 * time.Second)
 	select {
 	case ch <- record:
@@ -147,6 +151,10 @@ func (ec *EventsCollector) filterAndSend(obj any, eventType string, ch chan<- Ev
 		}
 	case <-timer.C:
 		slog.Warn("events: channel full, timed out sending event", "reason", record.Reason, "object", record.InvolvedObject)
+	case <-ec.closeCh:
+		if !timer.Stop() {
+			<-timer.C
+		}
 	}
 }
 

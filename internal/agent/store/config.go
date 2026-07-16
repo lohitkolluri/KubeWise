@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	bolt "go.etcd.io/bbolt"
@@ -14,7 +15,7 @@ const configKey = "agent_config"
 // SaveConfig persists the agent configuration.
 func (s *Store) SaveConfig(cfg *models.AgentConfig) error {
 	if cfg == nil {
-		return fmt.Errorf("config must not be nil")
+		return errors.New("config must not be nil")
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {

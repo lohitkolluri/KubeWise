@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -217,7 +218,7 @@ func (c *Client) PatchConfigMapObservability(ctx context.Context, namespace stri
 	}
 	raw, ok := cm.Data["config.yaml"]
 	if !ok {
-		return fmt.Errorf("configmap missing config.yaml")
+		return errors.New("configmap missing config.yaml")
 	}
 	patches := map[string]string{}
 	if report.Metrics != nil {

@@ -1,3 +1,4 @@
+// Package llm provides LLM client integration with circuit breaker resilience.
 package llm
 
 import (

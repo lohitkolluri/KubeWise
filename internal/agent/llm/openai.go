@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,7 +70,7 @@ func (p *OpenAICompatibleProvider) SetModel(model string) {
 // ValidateKey checks that the API key is valid against the provider's endpoints.
 func (p *OpenAICompatibleProvider) ValidateKey(ctx context.Context) error {
 	if p.apiKey == "" {
-		return fmt.Errorf("openapi-compatible API key is empty")
+		return errors.New("openapi-compatible API key is empty")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v1/models", nil)
 	if err != nil {
@@ -125,15 +126,15 @@ func (p *OpenAICompatibleProvider) StructuredOutput(ctx context.Context, systemP
 // StructuredOutputWithUsage sends a prompt and returns a typed response with token usage.
 func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	if p.apiKey == "" {
-		return Usage{}, fmt.Errorf("openapi-compatible API key is empty")
+		return Usage{}, errors.New("openapi-compatible API key is empty")
 	}
 	if p.model == "" {
-		return Usage{}, fmt.Errorf("openapi-compatible model is empty")
+		return Usage{}, errors.New("openapi-compatible model is empty")
 	}
 
 	cbDone, err := p.circuitBreaker.Allow()
 	if err != nil {
-		return Usage{}, fmt.Errorf("openapi-compatible circuit breaker open")
+		return Usage{}, errors.New("openapi-compatible circuit breaker open")
 	}
 
 	// Broadest compatibility: request JSON object output, and also embed the JSON schema in the system prompt.
@@ -142,10 +143,6 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 	if len(schema) > 0 {
 		schemaHint = "\n\nReturn ONLY valid JSON that matches this JSON Schema:\n" + string(schema)
 	}
-
-	// Exponential backoff for retry (max 3 attempts = 1 initial + 2 retries)
-	b := backoff.NewExponentialBackOff()
-	b.MaxInterval = 5 * time.Second
 
 	var usage Usage
 	_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
@@ -190,7 +187,7 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 			return struct{}{}, err
 		}
 		if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
-			return struct{}{}, fmt.Errorf("openapi-compatible: empty message content")
+			return struct{}{}, errors.New("openapi-compatible: empty message content")
 		}
 
 		content := strings.TrimSpace(out.Choices[0].Message.Content)

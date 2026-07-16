@@ -33,10 +33,10 @@ help: ## Show this help
 build: build-agent build-kwctl ## Build agent (linux) and kwctl (host)
 
 build-agent: ## Cross-compile agent for TARGETARCH (linux)
-	@source scripts/lib.sh && go_build_agent "$(BIN_DIR)/agent"
+	@GOOS=linux GOARCH=$(TARGETARCH) CGO_ENABLED=0 go build -o "$(BIN_DIR)/agent" ./cmd/agent
 
 build-kwctl: ## Build kwctl for host OS/arch
-	@source scripts/lib.sh && go_build_kwctl "$(BIN_DIR)/kwctl"
+	@GOOS= CGO_ENABLED=0 go build -o "$(BIN_DIR)/kwctl" ./cmd/kwctl
 
 test: ## Run all Go tests
 	go test ./... -count=1
@@ -63,10 +63,10 @@ helm-lint: ## Validate Helm chart templates
 	@helm template kubewise ./charts/kubewise >/dev/null
 
 docker-agent: ## Build agent container image
-	@source scripts/lib.sh && docker_build_agent "$(AGENT_IMAGE)"
+	@docker buildx build --load -t "$(AGENT_IMAGE)" -f docker/agent/Dockerfile .
 
 docker-forecaster: ## Build forecaster sidecar image
-	@source scripts/lib.sh && docker_build_forecaster "$(FCST_IMAGE)"
+	@docker buildx build --load -t "$(FCST_IMAGE)" -f forecaster-sidecar/Dockerfile forecaster-sidecar
 
 docker-all: docker-agent docker-forecaster ## Build all images
 
@@ -79,10 +79,10 @@ deploy-dev: ## Build images, load into kind, apply manifests, rollout
 deploy: apply-manifests rollout ## Apply manifests and restart agent
 
 apply-manifests: ## kubectl apply -k overlays/dev
-	@source scripts/lib.sh && kubectl_apply_manifests dev
+	@kubectl apply -k manifests/overlays/dev
 
 rollout: ## Restart agent deployment
-	@source scripts/lib.sh && rollout_agent
+	@kubectl rollout restart deployment -n $(KUBEWISE_NAMESPACE) kubewise-agent
 
 port-forward: ## (Fallback) manual port-forward to localhost:8080
 	@echo "If installed via Helm:      kubectl -n $(KUBEWISE_NAMESPACE) port-forward svc/kubewise 8080:8080"

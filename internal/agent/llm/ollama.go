@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,17 +92,13 @@ func (p *OllamaProvider) StructuredOutput(ctx context.Context, systemPrompt, use
 func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPrompt, userContent string, schema json.RawMessage, respPtr interface{}) (Usage, error) {
 	cbDone, err := p.circuitBreaker.Allow()
 	if err != nil {
-		return Usage{}, fmt.Errorf("ollama circuit breaker open")
+		return Usage{}, errors.New("ollama circuit breaker open")
 	}
 
 	var schemaMap map[string]any
 	if err := json.Unmarshal(schema, &schemaMap); err != nil {
 		return Usage{}, fmt.Errorf("parse schema: %w", err)
 	}
-
-	// Exponential backoff for retry (max 3 attempts = 1 initial + 2 retries)
-	b := backoff.NewExponentialBackOff()
-	b.MaxInterval = 5 * time.Second
 
 	var usage Usage
 	_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
@@ -155,7 +152,7 @@ func (p *OllamaProvider) StructuredOutputWithUsage(ctx context.Context, systemPr
 		}
 		content := strings.TrimSpace(chatResp.Message.Content)
 		if content == "" {
-			return struct{}{}, fmt.Errorf("ollama: empty message content")
+			return struct{}{}, errors.New("ollama: empty message content")
 		}
 		if err := json.Unmarshal([]byte(content), respPtr); err != nil {
 			if jsonBody := extractJSONObject(content); jsonBody != "" {

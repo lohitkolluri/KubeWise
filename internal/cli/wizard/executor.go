@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -122,7 +123,7 @@ func llmModel(s State) string {
 
 func (s State) helmInstall(ctx context.Context, log *stringsBuilder) error {
 	if _, err := exec.LookPath("helm"); err != nil {
-		return fmt.Errorf("helm not found in PATH")
+		return errors.New("helm not found in PATH")
 	}
 
 	// Avoid passing secrets via argv; write values to a 0600 temp file and `-f` it.
@@ -249,6 +250,3 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
-
-// Ensure context is used (linter guard).
-var _ = context.Background

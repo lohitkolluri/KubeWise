@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	systemPromptOnce sync.Once
+	systemPromptOnce   sync.Once
 	cachedSystemPrompt string
 )
 

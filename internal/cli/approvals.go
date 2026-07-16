@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -62,7 +63,7 @@ var approveCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := strings.TrimSpace(args[0])
 		if id == "" {
-			return fmt.Errorf("missing id")
+			return errors.New("missing id")
 		}
 		_ = approvalReason
 		if err := approveRemediation(id); err != nil {
@@ -80,10 +81,10 @@ var rejectCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := strings.TrimSpace(args[0])
 		if id == "" {
-			return fmt.Errorf("missing id")
+			return errors.New("missing id")
 		}
 		if strings.TrimSpace(approvalReason) == "" {
-			return fmt.Errorf("reason must not be empty")
+			return errors.New("reason must not be empty")
 		}
 		if err := rejectRemediation(id, approvalReason); err != nil {
 			return err

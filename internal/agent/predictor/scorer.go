@@ -3,16 +3,16 @@ package predictor
 import "math"
 
 // ScorerConfig controls the anomaly scoring pipeline.  The primary signal is
-// the Hoeffding-based anomaly score from the adaptive median estimator.
-// A secondary ROC-acceleration boost is added when a metric is trending
-// sharply upward or downward.
+// the robust Z-score (modified Z-score via Iglewicz & Hoaglin) from the
+// adaptive median estimator.  A secondary ROC-acceleration boost is added
+// when a metric is trending sharply upward or downward.
 type ScorerConfig struct {
-	// HoeffdingDelta is the false-positive target for the Hoeffding bound
-	// (default 0.05 = 5%).
+	// HoeffdingDelta is the false-positive target for the modified Z-score
+	// anomaly threshold (default 0.05 = 5%).
 	HoeffdingDelta float64
 
-	// HoeffdingK is the sensitivity multiplier: score reaches 1.0 when
-	// |x-median| >= K * epsilon (default 5.0).
+	// HoeffdingK is the sensitivity multiplier for the robust Z-score:
+	// score reaches 1.0 when |x-median| >= K * epsilon (default 5.0).
 	HoeffdingK float64
 
 	// MinWarmup is the minimum data points per metric key before scoring
@@ -61,7 +61,7 @@ func DefaultScorerConfig() ScorerConfig {
 	}
 }
 
-// Scorer combines the primary Hoeffding anomaly score with a secondary
+// Scorer combines the primary robust Z-score with a secondary
 // ROC-acceleration boost.
 type Scorer struct {
 	config ScorerConfig

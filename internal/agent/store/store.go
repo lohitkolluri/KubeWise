@@ -35,36 +35,28 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) ensureAuditIndexes() error {
+func (s *Store) ensureIndexes(mainBucket, indexBucket []byte, rebuildFn func() error) error {
 	need := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
-		main := tx.Bucket(bucketAuditLog)
-		idx := tx.Bucket(bucketAuditIndex)
+		main := tx.Bucket(mainBucket)
+		idx := tx.Bucket(indexBucket)
 		if main != nil && main.Stats().KeyN > 0 && (idx == nil || idx.Stats().KeyN == 0) {
 			need = true
 		}
 		return nil
 	})
 	if need {
-		return s.RebuildAuditIndexes()
+		return rebuildFn()
 	}
 	return nil
 }
 
+func (s *Store) ensureAuditIndexes() error {
+	return s.ensureIndexes(bucketAuditLog, bucketAuditIndex, s.RebuildAuditIndexes)
+}
+
 func (s *Store) ensureAnomalyIndexes() error {
-	need := false
-	_ = s.db.View(func(tx *bolt.Tx) error {
-		main := tx.Bucket(bucketAnomalies)
-		idx := tx.Bucket(bucketAnomalyIndex)
-		if main != nil && main.Stats().KeyN > 0 && (idx == nil || idx.Stats().KeyN == 0) {
-			need = true
-		}
-		return nil
-	})
-	if need {
-		return s.RebuildAnomalyIndexes()
-	}
-	return nil
+	return s.ensureIndexes(bucketAnomalies, bucketAnomalyIndex, s.RebuildAnomalyIndexes)
 }
 
 // Backup writes a consistent snapshot of the bbolt database to w.

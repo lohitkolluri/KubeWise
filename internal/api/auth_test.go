@@ -98,13 +98,13 @@ func TestAuthMiddleware_RequireTokenFailsClosedWhenTokenMissing(t *testing.T) {
 }
 
 func TestSecureCompare(t *testing.T) {
-	if secureCompare("abc", "abc") != true {
+	if !secureCompare("abc", "abc") {
 		t.Fatal("expected match")
 	}
-	if secureCompare("abc", "abd") != false {
+	if secureCompare("abc", "abd") {
 		t.Fatal("expected mismatch")
 	}
-	if secureCompare("", "abc") != false {
+	if secureCompare("", "abc") {
 		t.Fatal("expected false for empty got")
 	}
 }

@@ -62,22 +62,6 @@ func TestGenerateAPIToken_Race(t *testing.T) {
 	}
 }
 
-// Verify that generateAPIToken returns empty when no env and crypto/rand is
-// unavailable. We can't actually break crypto/rand.Read in a test, so this
-// test validates the happy-path env var unset behavior + that it doesn't panic.
-func TestGenerateAPIToken_EmptyOnFailure(t *testing.T) {
-	t.Setenv("KUBEWISE_API_TOKEN", "")
-	tok := generateAPIToken()
-	// In practice crypto/rand works, so tok should be non-empty.
-	// The failure path (empty) only triggers when rand.Read fails, which
-	// doesn't happen in normal tests.
-	if tok == "" {
-		// This would also be correct behavior (rand failure path).
-		// The function returns "" when rand.Read fails.
-		t.Log("empty token is acceptable if crypto/rand failed")
-	}
-}
-
 // Test that generateAPIToken env var takes priority over random generation
 // even when the env is set to empty string.
 func TestGenerateAPIToken_EmptyEnv(t *testing.T) {

@@ -2,6 +2,7 @@ package remediator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -347,10 +348,10 @@ func friendlyLogError(err error) error {
 		return nil
 	}
 	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("pod/container gone (logs only exist while the pod object exists)")
+		return errors.New("pod/container gone (logs only exist while the pod object exists)")
 	}
 	if apierrors.IsForbidden(err) {
-		return fmt.Errorf("forbidden (check agent RBAC for pods/log)")
+		return errors.New("forbidden (check agent RBAC for pods/log)")
 	}
 	return err
 }

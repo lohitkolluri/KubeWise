@@ -422,7 +422,7 @@ func TestVerifyStartupSpikeThenSteady(t *testing.T) {
 
 	anomalyCount := 0
 	totalAfterWarmup := 0
-	for i, v := range sequence {
+	for _, v := range sequence {
 		m := MetricResult{
 			Name: "test_startup_cpu",
 			Values: []MetricPoint{{
@@ -446,7 +446,6 @@ func TestVerifyStartupSpikeThenSteady(t *testing.T) {
 				}
 			}
 		}
-		_ = i
 	}
 
 	t.Logf("startup scenario: %d anomalies after warmup out of %d points", anomalyCount, totalAfterWarmup)

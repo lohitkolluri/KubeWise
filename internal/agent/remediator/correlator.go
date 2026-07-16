@@ -2,6 +2,7 @@ package remediator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -194,102 +195,16 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	}
 
 	metricsSummary := c.buildMetricsSummary(metricsData)
-
-	var plan models.RemediationPlan
-	var userPrompt, investigation string
 	systemPrompt := llm.SystemPrompt()
 	schema := llm.RemediationSchema()
-	fromCache := cachedPlan != nil
 
-	if fromCache {
-		plan = *cachedPlan
-		normalizePlan(&plan, correlatable)
-	} else {
-		if c.investigator != nil {
-			invCtx, invCancel := gatherTimeout(ctx)
-			investigation = c.investigator.Gather(invCtx, correlatable)
-			invCancel()
-			if investigation != "" {
-				slog.Info("remediator: gathered cluster investigation context", "bytes", len(investigation))
-			}
-		}
-
-		userPrompt = llm.BuildUserPrompt(correlatable, metricsSummary, investigation)
-		if c.llmRouter != nil && c.featureFlags.LLMRouter {
-			llmInput := llmrouter.LLMInput{
-				SystemPrompt:   systemPrompt,
-				UserContent:    userPrompt,
-				ResponseSchema: schema,
-			}
-			if _, err := c.llmRouter.RouteStructured(ctx, llmrouter.TaskRCA, llmInput, &plan); err != nil {
-				return fmt.Errorf("llm router correlation: %w", err)
-			}
-		} else {
-			if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
-				return fmt.Errorf("llm correlation: %w", err)
-			}
-		}
-
-		normalizePlan(&plan, correlatable)
-		plan.Investigation = models.InvestigationContext{Summary: investigation}
+	plan, userPrompt, fromCache, err := c.resolvePlan(ctx, correlatable, cachedPlan, metricsSummary, systemPrompt, schema)
+	if err != nil {
+		return err
 	}
 
-	if err := validateRunbookSteps(plan, correlatable, cfg); err != nil {
-		// One-shot repair attempt for common structural issues where the model
-		// picked a valid action type but omitted required parameters.
-		if c.shouldRetryAfterValidation(err) {
-			var repaired models.RemediationPlan
-			repairSystem := systemPrompt + "\n\nREPAIR INSTRUCTIONS:\n" +
-				"- If you choose patch_resources, you MUST include at least one of cpu_request,cpu_limit,memory_request,memory_limit.\n" +
-				"- If you cannot supply required parameters for patch_resources, choose escalate (not noop) so the operator can patch manually.\n" +
-				"- If you cannot supply required parameters for scale_replicas, choose escalate or restart_pod when appropriate.\n" +
-				"- Never output empty parameters for patch_resources or scale_replicas.\n"
-			if c.llmRouter != nil && c.featureFlags.LLMRouter {
-				llmInput := llmrouter.LLMInput{
-					SystemPrompt:   repairSystem,
-					UserContent:    userPrompt,
-					ResponseSchema: schema,
-				}
-				if _, rerr := c.llmRouter.RouteStructured(ctx, llmrouter.TaskRemediation, llmInput, &repaired); rerr == nil {
-					normalizePlan(&repaired, correlatable)
-					repaired.Investigation = models.InvestigationContext{Summary: investigation}
-					if verr := validateRunbookSteps(repaired, correlatable, cfg); verr == nil {
-						plan = repaired
-					} else {
-						err = verr
-					}
-				}
-			} else {
-				if rerr := c.llmClient.StructuredOutput(ctx, repairSystem, userPrompt, schema, &repaired); rerr == nil {
-					normalizePlan(&repaired, correlatable)
-					repaired.Investigation = models.InvestigationContext{Summary: investigation}
-					if verr := validateRunbookSteps(repaired, correlatable, cfg); verr == nil {
-						plan = repaired
-					} else {
-						err = verr
-					}
-				}
-			}
-		}
-
-		if err != nil && (isIncompletePatchError(err) || isIncompletePatchPlan(plan)) {
-			escalateForIncompletePatch(&plan)
-			if verr := validateRunbookSteps(plan, correlatable, cfg); verr == nil {
-				err = nil
-			} else {
-				err = verr
-			}
-		}
-
-		if err != nil {
-			// Validation failures are not operator actions; treat as an internal failure
-			// and keep anomalies in a correlatable state (so a future cycle can retry
-			// with new context / different plan).
-			c.logAudit(&plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
-			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
-			slog.Error("remediator: plan validation failed", "error", err)
-			return nil
-		}
+	if err := c.validateAndRepairPlan(ctx, &plan, correlatable, cfg, userPrompt, systemPrompt, schema); err != nil {
+		return nil // validation failures are non-fatal — anomalies stay correlatable
 	}
 
 	if isIncompletePatchPlan(plan) {
@@ -361,6 +276,105 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 	}
 
 	return c.executePlanAndVerify(ctx, plan, tier, matched, userPrompt, reason)
+}
+
+// resolvePlan returns a plan from cache or by calling the LLM.
+// Returns the plan, user prompt text, whether it came from cache, and any error.
+func (c *Correlator) resolvePlan(ctx context.Context, correlatable []models.AnomalyRecord, cachedPlan *models.RemediationPlan, metricsSummary, systemPrompt string, schema json.RawMessage) (models.RemediationPlan, string, bool, error) {
+	if cachedPlan != nil {
+		plan := *cachedPlan
+		normalizePlan(&plan, correlatable)
+		return plan, "", true, nil
+	}
+
+	var investigation string
+	if c.investigator != nil {
+		invCtx, invCancel := gatherTimeout(ctx)
+		investigation = c.investigator.Gather(invCtx, correlatable)
+		invCancel()
+		if investigation != "" {
+			slog.Info("remediator: gathered cluster investigation context", "bytes", len(investigation))
+		}
+	}
+
+	userPrompt := llm.BuildUserPrompt(correlatable, metricsSummary, investigation)
+	var plan models.RemediationPlan
+
+	if c.llmRouter != nil && c.featureFlags.LLMRouter {
+		llmInput := llmrouter.LLMInput{
+			SystemPrompt:   systemPrompt,
+			UserContent:    userPrompt,
+			ResponseSchema: schema,
+		}
+		if _, err := c.llmRouter.RouteStructured(ctx, llmrouter.TaskRCA, llmInput, &plan); err != nil {
+			return plan, "", false, fmt.Errorf("llm router correlation: %w", err)
+		}
+	} else {
+		if err := c.llmClient.StructuredOutput(ctx, systemPrompt, userPrompt, schema, &plan); err != nil {
+			return plan, "", false, fmt.Errorf("llm correlation: %w", err)
+		}
+	}
+
+	normalizePlan(&plan, correlatable)
+	plan.Investigation = models.InvestigationContext{Summary: investigation}
+	return plan, userPrompt, false, nil
+}
+
+// validateAndRepairPlan validates the plan and attempts one-shot repair for
+// common structural issues. Returns nil if the plan is valid (or was repaired
+// to validity); on failure the anomalies remain correlatable for a future cycle.
+func (c *Correlator) validateAndRepairPlan(ctx context.Context, plan *models.RemediationPlan, correlatable []models.AnomalyRecord, cfg RemediationConfig, userPrompt, systemPrompt string, schema json.RawMessage) error {
+	if err := validateRunbookSteps(*plan, correlatable, cfg); err != nil {
+		if c.shouldRetryAfterValidation(err) {
+			repaired := c.repairAfterFailure(ctx, err, *plan, correlatable, cfg, userPrompt, systemPrompt, schema)
+			*plan = repaired
+		}
+
+		if err != nil && (isIncompletePatchError(err) || isIncompletePatchPlan(*plan)) {
+			escalateForIncompletePatch(plan)
+			if verr := validateRunbookSteps(*plan, correlatable, cfg); verr == nil {
+				err = nil
+			} else {
+				err = verr
+			}
+		}
+
+		if err != nil {
+			c.logAudit(plan, correlatable, models.RiskTier4, models.AuditFailed, fmt.Sprintf("plan validation failed: %v", err), userPrompt, "")
+			c.markAnomalyStatus(correlatable, models.AnomalyStatusCorrelated, nil)
+			slog.Error("remediator: plan validation failed", "error", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// repairAfterFailure sends the plan back to the LLM with repair instructions.
+func (c *Correlator) repairAfterFailure(ctx context.Context, _ error, plan models.RemediationPlan, correlatable []models.AnomalyRecord, cfg RemediationConfig, userPrompt, systemPrompt string, schema json.RawMessage) models.RemediationPlan {
+	repairSystem := systemPrompt + "\n\nREPAIR INSTRUCTIONS:\n" +
+		"- If you choose patch_resources, you MUST include at least one of cpu_request,cpu_limit,memory_request,memory_limit.\n" +
+		"- If you cannot supply required parameters for patch_resources, choose escalate (not noop) so the operator can patch manually.\n" +
+		"- If you cannot supply required parameters for scale_replicas, choose escalate or restart_pod when appropriate.\n" +
+		"- Never output empty parameters for patch_resources or scale_replicas.\n"
+
+	var repaired models.RemediationPlan
+	var rerr error
+	if c.llmRouter != nil && c.featureFlags.LLMRouter {
+		llmInput := llmrouter.LLMInput{SystemPrompt: repairSystem, UserContent: userPrompt, ResponseSchema: schema}
+		_, rerr = c.llmRouter.RouteStructured(ctx, llmrouter.TaskRemediation, llmInput, &repaired)
+	} else {
+		rerr = c.llmClient.StructuredOutput(ctx, repairSystem, userPrompt, schema, &repaired)
+	}
+	if rerr != nil {
+		return plan
+	}
+
+	normalizePlan(&repaired, correlatable)
+	repaired.Investigation = models.InvestigationContext{Summary: plan.Investigation.Summary}
+	if verr := validateRunbookSteps(repaired, correlatable, cfg); verr != nil {
+		return plan
+	}
+	return repaired
 }
 
 func (c *Correlator) dryRunSummary(plan models.RemediationPlan) string {

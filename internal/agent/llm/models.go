@@ -5,38 +5,17 @@ import (
 )
 
 // DefaultModel is the primary OpenRouter model for remediation.
-// Default to the RCA-optimized deepseek tier.
-const DefaultModel = RCAModel
+const DefaultModel = "deepseek/deepseek-v4-flash"
 
-// Tier-specific model constants for the LLM router (Phase 1.5).
-// These are the recommended production model IDs as of July 2026.
-const (
-	// T1: extraction / classification — cheap and fast.
-	ExtractionModel     = "mistralai/mistral-nemo"
-	ClassificationModel = "mistralai/mistral-nemo"
+// FallbackModel is the universal fallback when the primary model fails.
+const FallbackModel = "deepseek/deepseek-v4-flash"
 
-	// T2: root cause analysis — strong reasoning at moderate cost.
-	RCAModel = "deepseek/deepseek-v4-flash"
-
-	// T3: code / YAML generation — best at structured output.
-	RemediationModel = "qwen/qwen3-coder"
-
-	// T4: universal fallback when all other tiers fail.
-	FallbackModel = "deepseek/deepseek-v4-flash"
-)
-
-// Free OpenRouter models (zero cost, rate-limited). Good for local dev with rich prompts.
-const (
-	FreeModelGPTOSS = "openai/gpt-oss-120b:free" // 131K ctx, strong reasoning
-	FreeModelLaguna = "poolside/laguna-m.1:free" // 262K ctx, coding agent
-)
-
-// DevDefaultModel is the recommended model for kind/local dev.
-const DevDefaultModel = RCAModel
+// FreeModelGPTOSS is a free OpenRouter model good for local dev (131K ctx).
+const FreeModelGPTOSS = "openai/gpt-oss-120b:free"
 
 // FallbackModels are tried when the primary model times out or returns retryable errors.
 var FallbackModels = []string{
-	RCAModel,
+	DefaultModel,
 }
 
 // IsFreeModel reports OpenRouter :free tier models (relaxed JSON schema, higher token budget).

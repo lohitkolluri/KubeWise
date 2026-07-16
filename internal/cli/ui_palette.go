@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -305,7 +306,7 @@ func paletteAuditSincePrompt() func(m *controlModel) paletteOutcome {
 				}
 				// Validate early for nicer UX.
 				if _, err := time.Parse(time.RFC3339, m.auditSince); err != nil {
-					return "", fmt.Errorf("invalid RFC3339 timestamp")
+					return "", errors.New("invalid RFC3339 timestamp")
 				}
 				return "audit since filter = " + m.auditSince, nil
 			},
@@ -380,7 +381,7 @@ func paletteProfilePrompt(key, title, current string) func(_ *controlModel) pale
 
 func applyScrapeInterval(m *controlModel, v string) (string, error) {
 	if m.config == nil {
-		return "", fmt.Errorf("no agent config")
+		return "", errors.New("no agent config")
 	}
 	m.config.ScrapeInterval = v
 	if err := putAgentConfig(m.config); err != nil {
@@ -391,7 +392,7 @@ func applyScrapeInterval(m *controlModel, v string) (string, error) {
 
 func applyPrometheusURL(m *controlModel, v string) (string, error) {
 	if m.config == nil {
-		return "", fmt.Errorf("no agent config")
+		return "", errors.New("no agent config")
 	}
 	m.config.PrometheusAddress = v
 	if err := putAgentConfig(m.config); err != nil {
@@ -402,7 +403,7 @@ func applyPrometheusURL(m *controlModel, v string) (string, error) {
 
 func applyLLMProvider(m *controlModel, v string) (string, error) {
 	if m.config == nil {
-		return "", fmt.Errorf("no agent config")
+		return "", errors.New("no agent config")
 	}
 	m.config.LLMProvider = v
 	if err := putAgentConfig(m.config); err != nil {
@@ -413,7 +414,7 @@ func applyLLMProvider(m *controlModel, v string) (string, error) {
 
 func applyLLMModel(m *controlModel, v string) (string, error) {
 	if m.config == nil {
-		return "", fmt.Errorf("no agent config")
+		return "", errors.New("no agent config")
 	}
 	m.config.LLMModel = v
 	if err := putAgentConfig(m.config); err != nil {
@@ -424,11 +425,11 @@ func applyLLMModel(m *controlModel, v string) (string, error) {
 
 func applyRateLimit(m *controlModel, v string) (string, error) {
 	if m.config == nil {
-		return "", fmt.Errorf("no agent config")
+		return "", errors.New("no agent config")
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
-		return "", fmt.Errorf("invalid rate limit")
+		return "", errors.New("invalid rate limit")
 	}
 	m.config.Remediation.RateLimit = n
 	if err := putAgentConfig(m.config); err != nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -449,7 +450,7 @@ func applyHelmInstallWithObservability(out io.Writer, obsCfg observabilityHelmCo
 		apiTok = promptAPIToken(out)
 	}
 	if apiTok == "" && requireToken {
-		return fmt.Errorf("API token required — set KUBEWISE_API_TOKEN or run in a terminal to enter one interactively")
+		return errors.New("API token required — set KUBEWISE_API_TOKEN or run in a terminal to enter one interactively")
 	}
 
 	// Subchart toggles: if we have an explicit override URL, disable the subchart.
@@ -591,7 +592,7 @@ func waitForAnyAgentDeployment(ctx context.Context, kc *k8s.Client, namespace, p
 	if lastErr != nil {
 		return lastErr
 	}
-	return fmt.Errorf("deployment not found")
+	return errors.New("deployment not found")
 }
 
 // ---------------------------------------------------------------------------
@@ -753,11 +754,11 @@ func runInstallWizard(out io.Writer) error {
 
 func runLocalInstall(out io.Writer) error {
 	if _, err := exec.LookPath("bash"); err != nil {
-		return fmt.Errorf("bash required for --local install")
+		return errors.New("bash required for --local install")
 	}
 	script := findBootstrapScript()
 	if script == "" {
-		return fmt.Errorf("hack/bootstrap.sh not found — run from repo root or set KUBEWISE_REPO")
+		return errors.New("hack/bootstrap.sh not found — run from repo root or set KUBEWISE_REPO")
 	}
 	c := exec.Command("bash", script, "--local", "--yes") //nolint:gosec // CLI tool, intentional local install
 	c.Stdout = out
@@ -791,14 +792,14 @@ func findBootstrapScript() string {
 
 func requireKubectl() error {
 	if _, err := exec.LookPath("kubectl"); err != nil {
-		return fmt.Errorf("kubectl not found in PATH — install kubectl first")
+		return errors.New("kubectl not found in PATH — install kubectl first")
 	}
 	return nil
 }
 
 func requireHelm() error {
 	if _, err := exec.LookPath("helm"); err != nil {
-		return fmt.Errorf("helm not found in PATH — install Helm or use kwctl install without --helm")
+		return errors.New("helm not found in PATH — install Helm or use kwctl install without --helm")
 	}
 	return nil
 }

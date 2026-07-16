@@ -1,6 +1,7 @@
 package remediator
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,13 +34,13 @@ func (c *Correlator) shouldRetryAfterValidation(err error) bool {
 // validateRemediationPlan checks a single action/plan for policy and structural validity.
 func validateRemediationPlan(cfg RemediationConfig, plan models.RemediationPlan, anomalies []models.AnomalyRecord) error {
 	if plan.Action.Type == "" {
-		return fmt.Errorf("action type is empty")
+		return errors.New("action type is empty")
 	}
 	if !knownActionTypes[plan.Action.Type] {
 		return fmt.Errorf("unknown action type %q", plan.Action.Type)
 	}
 	if plan.Action.Namespace == "" {
-		return fmt.Errorf("namespace is empty")
+		return errors.New("namespace is empty")
 	}
 	if isBuiltInProtectedNamespace(plan.Action.Namespace) {
 		return fmt.Errorf("namespace %s is protected", plan.Action.Namespace)
@@ -83,26 +84,32 @@ func validateRemediationPlan(cfg RemediationConfig, plan models.RemediationPlan,
 		}
 	}
 	if plan.Action.Rationale == "" {
-		return fmt.Errorf("rationale is empty")
+		return errors.New("rationale is empty")
 	}
 	switch plan.Action.Type {
 	case "scale_replicas":
 		if _, ok := plan.Action.Parameters["replicas"]; !ok {
-			return fmt.Errorf("scale_replicas requires replicas parameter")
+			return errors.New("scale_replicas requires replicas parameter")
 		}
 	case "patch_resources":
-		hasResource := false
-		for k := range plan.Action.Parameters {
-			switch k {
-			case "cpu_request", "cpu_limit", "memory_request", "memory_limit":
-				hasResource = true
-			}
-		}
-		if !hasResource {
-			return fmt.Errorf("patch_resources requires at least one resource parameter")
+		if !hasResourceParameters(plan.Action.Parameters) {
+			return errors.New("patch_resources requires at least one resource parameter")
 		}
 	}
 	return nil
+}
+
+// hasResourceParameters checks that a params map contains at least one
+// CPU/memory resource key. Shared between validation and the incomplete-patch
+// escalation guard.
+func hasResourceParameters(params map[string]string) bool {
+	for k := range params {
+		switch k {
+		case "cpu_request", "cpu_limit", "memory_request", "memory_limit":
+			return true
+		}
+	}
+	return false
 }
 
 // validateRunbookSteps validates every non-wait step in a remediation runbook.

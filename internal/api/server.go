@@ -3,7 +3,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -43,15 +43,13 @@ type Store interface {
 
 // Server serves the KubeWise HTTP API with middleware for auth, CORS, and rate limiting.
 type Server struct {
-	store        Store
-	remediator   Remediator
-	server       *http.Server
-	startAt      time.Time
-	scrapes      atomic.Int64
-	gateStats    atomic.Value // gate.Stats
-	apiToken     string
-	corsOrigin   string
-	requireToken bool
+	store      Store
+	remediator Remediator
+	server     *http.Server
+	startAt    time.Time
+	scrapes    atomic.Int64
+	gateStats  atomic.Value // gate.Stats
+	apiToken   string
 }
 
 // NewServer creates an HTTP API server backed by the given store.
@@ -65,27 +63,25 @@ func NewServer(store Store, addr string) (*Server, error) {
 	allowUnauth := os.Getenv("KUBEWISE_ALLOW_UNAUTH") == "true"
 	requireToken := os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" || !allowUnauth
 	if apiToken == "" && requireToken {
-		return nil, fmt.Errorf("api: KUBEWISE_API_TOKEN required but not set (set KUBEWISE_ALLOW_UNAUTH=true for local dev)")
+		return nil, errors.New("api: KUBEWISE_API_TOKEN required but not set (set KUBEWISE_ALLOW_UNAUTH=true for local dev)")
 	}
 
 	s := &Server{
-		store:        store,
-		startAt:      time.Now(),
-		apiToken:     apiToken,
-		corsOrigin:   corsOrigin,
-		requireToken: requireToken,
+		store:    store,
+		startAt:  time.Now(),
+		apiToken: apiToken,
 	}
 	s.gateStats.Store(gate.Stats{})
 	s.registerRoutes(mux)
-		s.server = &http.Server{
-			Addr: addr,
-			Handler: withMiddleware(mux, middlewareConfig{
-				apiToken:      apiToken,
-				corsOrigin:    corsOrigin,
-				requireToken:  requireToken,
-				limiter:       rate.NewLimiter(rate.Limit(60/60.0), 10),
-				publicLimiter: rate.NewLimiter(rate.Limit(5/60.0), 5),
-			}),
+	s.server = &http.Server{
+		Addr: addr,
+		Handler: withMiddleware(mux, middlewareConfig{
+			apiToken:      apiToken,
+			corsOrigin:    corsOrigin,
+			requireToken:  requireToken,
+			limiter:       rate.NewLimiter(rate.Limit(60/60.0), 10),
+			publicLimiter: rate.NewLimiter(rate.Limit(5/60.0), 5),
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -107,7 +103,7 @@ func (s *Server) SetGateStats(stats gate.Stats) {
 // Serve starts the HTTP listener and blocks until the server stops.
 func (s *Server) Serve() error {
 	if s.server == nil {
-		return fmt.Errorf("server not initialized")
+		return errors.New("server not initialized")
 	}
 	return s.server.ListenAndServe()
 }

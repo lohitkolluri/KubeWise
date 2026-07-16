@@ -2,6 +2,7 @@ package predictor
 
 import (
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,11 +28,11 @@ const (
 	DefaultAdaptiveMedianWindow = 100
 
 	// DefaultHoeffdingDelta is the default false-positive target for the
-	// Hoeffding inequality bound (5%).
+	// modified Z-score anomaly threshold (5%).
 	DefaultHoeffdingDelta = 0.05
 
-	// DefaultHoeffdingK is the default sensitivity multiplier: score reaches
-	// 1.0 when |x-median| >= K * epsilon.
+	// DefaultHoeffdingK is the default sensitivity multiplier: the robust
+	// Z-score reaches 1.0 when |x-median| >= K * epsilon.
 	DefaultHoeffdingK = 5.0
 
 	// MinimumWarmupPoints is the minimum data points before producing anomaly scores.
@@ -55,18 +56,6 @@ const (
 	// Tightening to 0.01 reduces noise detections while preserving real detections.
 	DefaultChangepointConfidence = 0.02
 )
-
-// HoeffdingAnomalyScore is kept for backward compatibility with existing tests.
-// It delegates to RobustAnomalyScore using max(rng, mad*6) as the dispersion estimate.
-// Deprecated: use RobustAnomalyScore directly.
-func HoeffdingAnomalyScore(value, median, rng float64, n int, delta, k float64) float64 {
-	// Use MAD as the primary dispersion measure if available.
-	mad := rng
-	if mad <= 0 {
-		mad = 1e-10
-	}
-	return RobustAnomalyScore(value, median, mad)
-}
 
 // ---------------------------------------------------------------------------
 // AdaptiveMedian — sliding-window robust central tendency + dispersion
@@ -131,32 +120,24 @@ func (a *AdaptiveMedian) Stats() (median, mad, rng float64, n int, ok bool) {
 
 	// Quickselect-based median: O(n) average instead of O(n log n) full sort.
 	// We need a mutable copy since quickselect reorders elements.
-	sorted := make([]float64, n)
-	copy(sorted, a.values)
+	sorted := slices.Clone(a.values)
 
 	// Track min/max for range while finding median.
 	// Using quickselect avoids the O(n log n) cost of a full sort.
-	min, max := sorted[0], sorted[0]
+	minVal, maxVal := sorted[0], sorted[0]
 	for _, v := range sorted[1:] {
-		if v < min {
-			min = v
+		if v < minVal {
+			minVal = v
 		}
-		if v > max {
-			max = v
+		if v > maxVal {
+			maxVal = v
 		}
 	}
-	rng = max - min
+	rng = maxVal - minVal
 
 	if n%2 == 0 {
-		// Lower median via quickselect, then scan for the next higher value.
 		lo := quickSelectKth(sorted, n/2-1)
-		// Find the smallest value > lo (the upper median).
-		hi := max
-		for _, v := range sorted {
-			if v > lo && v < hi {
-				hi = v
-			}
-		}
+		hi := quickSelectKth(sorted, n/2)
 		median = (lo + hi) / 2
 	} else {
 		median = quickSelectKth(sorted, n/2)
@@ -209,7 +190,7 @@ func quickSelectKth(arr []float64, k int) float64 {
 }
 
 // ---------------------------------------------------------------------------
-// HoeffdingAnomalyScore — distribution-free anomaly scoring
+// RobustAnomalyScore — robust Z-score anomaly scoring (Iglewicz & Hoaglin)
 // ---------------------------------------------------------------------------
 
 // RobustAnomalyScore computes a normalized anomaly score in [0,1] using the
@@ -221,8 +202,8 @@ func quickSelectKth(arr []float64, k int) float64 {
 // A score >= 1.0 corresponds to |Z| >= 3.5, which is the standard threshold
 // for "potentially anomalous" with robust statistics. This is proven in
 // production at multiple large-scale monitoring systems (Datadog, Netflix,
-// Twitter) and is more robust than the Hoeffding bound for non-stationary
-// metrics because it adapts to the actual data distribution via MAD.
+// Twitter) and adapts to the actual data distribution via MAD, making it
+// suitable for non-stationary metrics.
 func RobustAnomalyScore(value, median, mad float64) float64 {
 	if mad < 1e-10 {
 		return 0

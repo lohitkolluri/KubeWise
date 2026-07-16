@@ -59,14 +59,14 @@ type Agent struct {
 	healthMu           sync.Mutex
 	anomalySeq         uint64
 	eventSeq           atomic.Uint64
-	forecastOffset   map[string]int
-	forecastOffsetMu sync.Mutex
-	runMu            sync.Mutex
-		stopOnce           sync.Once
-		stopCh             chan struct{}
-		runCtx             context.Context
-		runCancel          context.CancelFunc
-		k8sCancel          context.CancelFunc
+	forecastOffset     map[string]int
+	forecastOffsetMu   sync.Mutex
+	runMu              sync.Mutex
+	stopOnce           sync.Once
+	stopCh             chan struct{}
+	runCtx             context.Context
+	runCancel          context.CancelFunc
+	k8sCancel          context.CancelFunc
 }
 
 // NewAgent creates and wires the complete agent pipeline.

@@ -131,14 +131,7 @@ func (r *LLMRouter) RouteStructured(ctx context.Context, task TaskType, input LL
 
 // isNonRetryable returns true for errors that should not trigger a fallback.
 func isNonRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
 	// Context cancellation is not retryable — the caller is shutting down.
-	if errors.Is(err, context.Canceled) {
-		return true
-	}
-	// Schema validation failures won't resolve with a different model.
-	// We detect these by checking if the error is from JSON parsing.
-	return false
+	// errors.Is(nil, context.Canceled) returns false, so a nil check is implicit.
+	return errors.Is(err, context.Canceled)
 }

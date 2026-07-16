@@ -1,12 +1,23 @@
 package store
 
 import (
+	"fmt"
+	"time"
+
 	bolt "go.etcd.io/bbolt"
 )
 
 // maxRecordsInMemory is the safety limit for loading records into memory.
 // Lists beyond this require filtering to prevent OOM.
 const maxRecordsInMemory = 10000
+
+// timeIndexKey returns a time-ordered index key for reverse-chronological listing.
+// The timestamp is bitwise-inverted so that bbolt's natural byte-order iteration
+// returns newest entries first.
+func timeIndexKey(t time.Time, id string) []byte {
+	inv := ^uint64(t.UnixNano())
+	return []byte(fmt.Sprintf("%016x|%s", inv, id))
+}
 
 // Bucket names used by the store.
 var (

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/store"
@@ -23,14 +23,7 @@ func fakePrometheusServer(t *testing.T, responseJSON string) *httptest.Server {
 }
 
 func TestNewPrometheusCollector(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
+	s, err := store.Open(filepath.Join(t.TempDir(), "agent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,14 +54,7 @@ func TestCollectMetrics_ValidResponse(t *testing.T) {
 	server := fakePrometheusServer(t, resp)
 	defer server.Close()
 
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
+	s, err := store.Open(filepath.Join(t.TempDir(), "agent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,14 +87,7 @@ func TestCollectMetrics_ServerError(t *testing.T) {
 	server := fakePrometheusServer(t, `{"status":"error","errorType":"internal","error":"something broke"}`)
 	defer server.Close()
 
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
+	s, err := store.Open(filepath.Join(t.TempDir(), "agent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,14 +124,7 @@ func TestCollectQuery(t *testing.T) {
 	server := fakePrometheusServer(t, resp)
 	defer server.Close()
 
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = f.Close()
-	defer os.Remove(f.Name())
-
-	s, err := store.Open(f.Name())
+	s, err := store.Open(filepath.Join(t.TempDir(), "agent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

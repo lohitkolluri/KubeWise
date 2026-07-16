@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ func eventDedupKey(ns, involved, reason string) string {
 // last-seen timestamp rather than creating a new record.
 func (s *Store) SaveEvent(event *StoredEvent) error {
 	if event.ID == "" {
-		return fmt.Errorf("event ID must not be empty")
+		return errors.New("event ID must not be empty")
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketEvents)
@@ -92,8 +93,7 @@ func (s *Store) putEventTimeIndex(tx *bolt.Tx, t time.Time, id string) error {
 
 // eventTimeIndexKey returns a time-ordered key for event listing (newest first).
 func eventTimeIndexKey(t time.Time, id string) []byte {
-	inv := ^uint64(t.UnixNano())
-	return []byte(fmt.Sprintf("%016x|%s", inv, id))
+	return timeIndexKey(t, id)
 }
 
 // ListEvents returns persisted events matching the filter, newest first.

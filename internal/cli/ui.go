@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -128,8 +129,8 @@ type controlModel struct {
 
 	// Per-tab loading & error state
 	loading bool
-	err        error
-	errTab     [tabCount]error
+	err     error
+	errTab  [tabCount]error
 
 	// Detail view
 	detail         string
@@ -695,7 +696,7 @@ func (m *controlModel) handleMainKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					value:       "rejected via kwctl",
 					apply: func(_ *controlModel, value string) (string, error) {
 						if strings.TrimSpace(value) == "" {
-							return "", fmt.Errorf("reason must not be empty")
+							return "", errors.New("reason must not be empty")
 						}
 						if err := rejectRemediation(id, value); err != nil {
 							return "", err

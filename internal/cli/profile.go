@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,10 +146,7 @@ func activeProfile() Profile {
 }
 
 func applyProfileDefaults() {
-	// Priority order:
-	// 1) explicit flags
-	// 2) explicit env vars
-	// 3) selected profile (or default)
+	// Priority: 1) explicit flags, 2) env vars, 3) selected profile (or default)
 	if profileName != "" {
 		pf, err := loadProfileFile()
 		if err == nil {
@@ -182,44 +180,45 @@ func applyProfileDefaults() {
 		}
 	}
 	p := activeProfile()
-	if agentURL == "" {
-		if u := os.Getenv("KUBEWISE_AGENT_URL"); u != "" {
-			agentURL = u
-		} else {
-			agentURL = p.AgentURL
-		}
-	}
+	applyProfileField(&agentURL, p.AgentURL, os.Getenv("KUBEWISE_AGENT_URL"))
 	if agentNS == "" || agentNS == "kubewise" {
-		if p.AgentNamespace != "" {
-			agentNS = p.AgentNamespace
-		}
+		agentNS = orDefault(agentNS, p.AgentNamespace)
 	}
 	if agentSvc == "" || agentSvc == "kubewise" {
-		if p.AgentService != "" {
-			agentSvc = p.AgentService
-		}
+		agentSvc = orDefault(agentSvc, p.AgentService)
 	}
-	// The root flag default is "table". Allow profile to override only when the
-	// user didn't explicitly choose another output format.
-	if outputFormat == "table" && p.Output != "" {
-		outputFormat = p.Output
-	}
-	if kubeconfig == "" && p.Kubeconfig != "" {
-		kubeconfig = p.Kubeconfig
-	}
-	if contextName == "" && p.Context != "" {
-		contextName = p.Context
+	if outputFormat == "table" {
+		outputFormat = orDefault(outputFormat, p.Output)
 	}
 	if httpTimeout <= 0 {
 		httpTimeout = p.TimeoutSeconds
 	}
+	if kubeconfig == "" {
+		kubeconfig = orDefault(kubeconfig, p.Kubeconfig)
+	}
+	if contextName == "" {
+		contextName = orDefault(contextName, p.Context)
+	}
 	if apiToken == "" {
-		if t := os.Getenv("KUBEWISE_API_TOKEN"); t != "" {
-			apiToken = t
+		apiToken = orDefault(os.Getenv("KUBEWISE_API_TOKEN"), p.APIToken)
+	}
+}
+
+func applyProfileField(field *string, profileVal, envVal string) {
+	if *field == "" {
+		if envVal != "" {
+			*field = envVal
 		} else {
-			apiToken = p.APIToken
+			*field = profileVal
 		}
 	}
+}
+
+func orDefault(val, def string) string {
+	if val != "" {
+		return val
+	}
+	return def
 }
 
 func setProfileField(name, key, value string) error {
@@ -251,7 +250,7 @@ func setProfileField(name, key, value string) error {
 	case "timeout", "timeout_seconds":
 		var n int
 		if _, err := fmt.Sscanf(value, "%d", &n); err != nil || n <= 0 {
-			return fmt.Errorf("timeout must be a positive integer")
+			return errors.New("timeout must be a positive integer")
 		}
 		prof.TimeoutSeconds = n
 	case "kubeconfig":

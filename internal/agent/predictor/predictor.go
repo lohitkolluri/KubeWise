@@ -3,6 +3,7 @@ package predictor
 import (
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +13,7 @@ import (
 )
 
 // Predictor is the Tier-1 anomaly detection engine.  It uses a robust
-// adaptive-median estimator combined with Hoeffding-bound anomaly scoring and
+// adaptive-median estimator combined with modified Z-score anomaly scoring and
 // Bayesian Online Changepoint Detection for regime-change adaptation.
 type Predictor struct {
 	estimators     map[string]*AdaptiveMedian
@@ -192,8 +193,7 @@ func (p *Predictor) AddPattern(m PatternMatcher) {
 // metrics, events, and resource state.
 func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyRecord, resources ResourceSnapshot) []models.PredictionResult {
 	p.mu.RLock()
-	patterns := make([]PatternMatcher, len(p.patterns))
-	copy(patterns, p.patterns)
+	patterns := slices.Clone(p.patterns)
 	p.mu.RUnlock()
 
 	var results []models.PredictionResult
@@ -239,12 +239,18 @@ func (p *Predictor) RunPatterns(metrics []MetricResult, events []models.AnomalyR
 	return results
 }
 
+// metricStat tracks per-key stats for the diagnostic summary at the end of Run().
+type metricStat struct {
+	dp    int
+	score float64
+}
+
 // Run performs statistical anomaly detection on the given metrics.
 //
 // The pipeline per metric point is:
 //  1. Accumulate into the adaptive-median estimator.
 //  2. Periodically run the changepoint detector; reset window on regime shift.
-//  3. After warmup, compute the Hoeffding-bound anomaly score.
+//  3. After warmup, compute the robust-Z-score anomaly score.
 //  4. Compute a rate-of-change boost from recent history (velocity/acceleration).
 //  5. Combine and emit results with score >= 0.3.
 func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, error) {
@@ -253,12 +259,6 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 	}
 
 	var results []models.PredictionResult
-
-	// Track per-key stats for the diagnostic summary at the end of Run().
-	type metricStat struct {
-		dp    int
-		score float64
-	}
 	seen := make(map[string]*metricStat)
 
 	for _, mr := range metrics {
@@ -289,17 +289,13 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				p.changepoints[key] = cp
 			}
 
-			// Keep a bounded history for ROC computations. No copy needed —
-			// no concurrent goroutine modifies this slice during Run().
 			p.history[key] = append(p.history[key], pt)
 			if len(p.history[key]) > maxPatternHistory {
 				p.history[key] = p.history[key][len(p.history[key])-maxPatternHistory:]
 			}
-
-			// Pre-read patternTick + cpTick for CombinedOR strategy so the
-			// cpBoost check doesn't need a separate lock later.
 			ptick := p.patternTick
 			cpTickVal, hasCpTick := p.cpTick[key]
+			history := p.history[key]
 
 			p.mu.Unlock()
 			// --- warmup phase ------------------------------------------------------
@@ -350,14 +346,9 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				p.mu.Unlock()
 
 				if emitCp {
-					results = append(results, models.PredictionResult{
-						Type:       "changepoint",
-						Entity:     entityName(mr.Name, pt.Labels),
-						Namespace:  pt.Labels["namespace"],
-						MetricName: mr.Name,
-						Score:      cpScore,
-						Timestamp:  time.Now(),
-					})
+					results = append(results, makePrediction(
+						"changepoint", entityName(mr.Name, pt.Labels), pt.Labels["namespace"], mr.Name, cpScore,
+					))
 				}
 				est.Reset()
 				est.Add(pt.Value)
@@ -370,7 +361,6 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			// --- rate-of-change boost -----------------------------------------------
 			rocBoost := 0.0
-			history := p.history[key]
 			if len(history) >= 4 {
 				vel := p.roc.Velocity(history)
 				if math.Abs(vel.Slope) > 0 {
@@ -450,54 +440,14 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			p.mu.Unlock()
 
 			if emit {
-				results = append(results, models.PredictionResult{
-					Type:       "statistical",
-					Entity:     entityName(mr.Name, pt.Labels),
-					Namespace:  pt.Labels["namespace"],
-					MetricName: mr.Name,
-					Score:      score,
-					Timestamp:  time.Now(),
-				})
+				results = append(results, makePrediction(
+					"statistical", entityName(mr.Name, pt.Labels), pt.Labels["namespace"], mr.Name, score,
+				))
 			}
 		}
 	}
 
-	// --- diagnostic summary ----------------------------------------------------
-	loggedKeys := len(seen)
-	warmup := 0
-	maxScore := 0.0
-	maxKey := ""
-	aboveThreshold := 0
-	belowThreshold := 0
-	for k, st := range seen {
-		switch {
-		case st.dp < p.config.MinWarmup:
-			warmup++
-		case st.score >= p.config.MinScore:
-			aboveThreshold++
-			if st.score > maxScore {
-				maxScore = st.score
-				maxKey = k
-			}
-		case st.score >= 0:
-			belowThreshold++
-			if st.score > maxScore {
-				maxScore = st.score
-				maxKey = k
-			}
-		}
-	}
-	if loggedKeys > 0 {
-		slog.Info("predictor: scoring stats",
-			"keys", loggedKeys,
-			"warmup", warmup,
-			"scoring", loggedKeys-warmup,
-			"above_min", aboveThreshold,
-			"below_min", belowThreshold,
-			"max_score", maxScore,
-			"max_key", maxKey,
-		)
-	}
+	logScoringDiagnostics(seen, p.config.MinWarmup, p.config.MinScore)
 
 	return results, nil
 }
@@ -526,4 +476,56 @@ func entityName(metricName string, labels map[string]string) string {
 		}
 	}
 	return metricName
+}
+
+// makePrediction builds a PredictionResult from its components.
+func makePrediction(resultType, entity, namespace, metricName string, score float64) models.PredictionResult {
+	return models.PredictionResult{
+		Type:       resultType,
+		Entity:     entity,
+		Namespace:  namespace,
+		MetricName: metricName,
+		Score:      score,
+		Timestamp:  time.Now(),
+	}
+}
+
+// logScoringDiagnostics emits a structured log line summarizing scoring stats.
+func logScoringDiagnostics(seen map[string]*metricStat, minWarmup int, minScore float64) {
+	loggedKeys := len(seen)
+	if loggedKeys == 0 {
+		return
+	}
+	warmup := 0
+	maxScore := 0.0
+	maxKey := ""
+	aboveThreshold := 0
+	belowThreshold := 0
+	for k, st := range seen {
+		switch {
+		case st.dp < minWarmup:
+			warmup++
+		case st.score >= minScore:
+			aboveThreshold++
+			if st.score > maxScore {
+				maxScore = st.score
+				maxKey = k
+			}
+		case st.score >= 0:
+			belowThreshold++
+			if st.score > maxScore {
+				maxScore = st.score
+				maxKey = k
+			}
+		}
+	}
+	slog.Info("predictor: scoring stats",
+		"keys", loggedKeys,
+		"warmup", warmup,
+		"scoring", loggedKeys-warmup,
+		"above_min", aboveThreshold,
+		"below_min", belowThreshold,
+		"max_score", maxScore,
+		"max_key", maxKey,
+	)
 }

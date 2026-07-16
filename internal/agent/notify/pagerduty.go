@@ -43,13 +43,6 @@ type pagerDutyImage struct {
 	Href string `json:"href,omitempty"`
 }
 
-// pagerDutyResponse is the response from the PagerDuty Events API v2.
-type pagerDutyResponse struct {
-	Status   string `json:"status"`
-	Message  string `json:"message"`
-	DedupKey string `json:"dedup_key"`
-}
-
 // pagerDutySeverity maps KubeWise severity to PagerDuty severity.
 func pagerDutySeverity(s string) string {
 	switch s {
@@ -113,14 +106,9 @@ func (n *Notifier) buildPagerDutyPayload(routingKey string, ev Event) pagerDutyP
 // sendPagerDuty sends an event to the PagerDuty Events API v2.
 func (n *Notifier) sendPagerDuty(ctx context.Context, routingKey string, ev Event) error {
 	payload := n.buildPagerDutyPayload(routingKey, ev)
-	var resp pagerDutyResponse
 	if err := n.postJSON(ctx, pagerDutyEventsURL, payload); err != nil {
 		return fmt.Errorf("pagerduty: %w", err)
 	}
-	// postJSON only returns error on HTTP-level failures; we need to inspect response body.
-	// This is handled by a typed wrapper — for now, postJSON does the job since
-	// PagerDuty returns 200/201 for success and >=400 for failures.
-	_ = resp
 	return nil
 }
 

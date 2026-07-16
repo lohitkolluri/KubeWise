@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -255,7 +256,7 @@ func (p *GitHubPlugin) getOwnerRepo(action models.ToolAction) (string, string) {
 func (p *GitHubPlugin) getRepo(ctx context.Context, action models.ToolAction) (*models.ToolResult, error) {
 	owner, repo := p.getOwnerRepo(action)
 	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("owner and repo are required")
+		return nil, errors.New("owner and repo are required")
 	}
 	req, err := p.newRequest(ctx, "GET", "/repos/"+owner+"/"+repo, nil)
 	if err != nil {
@@ -276,7 +277,7 @@ func (p *GitHubPlugin) getFile(ctx context.Context, action models.ToolAction) (*
 	path := action.Args["path"]
 	ref := action.Args["ref"]
 	if owner == "" || repo == "" || path == "" {
-		return nil, fmt.Errorf("owner, repo, and path are required")
+		return nil, errors.New("owner, repo, and path are required")
 	}
 	apiPath := "/repos/" + owner + "/" + repo + "/contents/" + path
 	if ref != "" {
@@ -300,7 +301,7 @@ func (p *GitHubPlugin) getPR(ctx context.Context, action models.ToolAction) (*mo
 	owner, repo := p.getOwnerRepo(action)
 	pr := action.Args["pr"]
 	if owner == "" || repo == "" || pr == "" {
-		return nil, fmt.Errorf("owner, repo, and pr are required")
+		return nil, errors.New("owner, repo, and pr are required")
 	}
 	req, err := p.newRequest(ctx, "GET", "/repos/"+owner+"/"+repo+"/pulls/"+pr, nil)
 	if err != nil {
@@ -323,7 +324,7 @@ func (p *GitHubPlugin) listPRs(ctx context.Context, action models.ToolAction) (*
 		state = "open"
 	}
 	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("owner and repo are required")
+		return nil, errors.New("owner and repo are required")
 	}
 	req, err := p.newRequest(ctx, "GET", "/repos/"+owner+"/"+repo+"/pulls?state="+state+"&per_page=20", nil)
 	if err != nil {
@@ -342,7 +343,7 @@ func (p *GitHubPlugin) listPRs(ctx context.Context, action models.ToolAction) (*
 func (p *GitHubPlugin) searchPRs(ctx context.Context, action models.ToolAction) (*models.ToolResult, error) {
 	query := action.Args["query"]
 	if query == "" {
-		return nil, fmt.Errorf("search query is required")
+		return nil, errors.New("search query is required")
 	}
 	q := url.QueryEscape(query + " type:pr")
 	req, err := p.newRequest(ctx, "GET", "/search/issues?q="+q+"&per_page=20", nil)
@@ -363,7 +364,7 @@ func (p *GitHubPlugin) getIssue(ctx context.Context, action models.ToolAction) (
 	owner, repo := p.getOwnerRepo(action)
 	issue := action.Args["issue"]
 	if owner == "" || repo == "" || issue == "" {
-		return nil, fmt.Errorf("owner, repo, and issue are required")
+		return nil, errors.New("owner, repo, and issue are required")
 	}
 	req, err := p.newRequest(ctx, "GET", "/repos/"+owner+"/"+repo+"/issues/"+issue, nil)
 	if err != nil {
@@ -386,7 +387,7 @@ func (p *GitHubPlugin) listIssues(ctx context.Context, action models.ToolAction)
 		state = "open"
 	}
 	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("owner and repo are required")
+		return nil, errors.New("owner and repo are required")
 	}
 	req, err := p.newRequest(ctx, "GET", "/repos/"+owner+"/"+repo+"/issues?state="+state+"&per_page=20", nil)
 	if err != nil {
@@ -445,7 +446,7 @@ func (p *GitHubPlugin) createPR(ctx context.Context, action models.ToolAction) (
 	head := action.Args["head"]
 	base := action.Args["base"]
 	if owner == "" || repo == "" || title == "" || head == "" || base == "" {
-		return nil, fmt.Errorf("owner, repo, title, head, and base are required")
+		return nil, errors.New("owner, repo, title, head, and base are required")
 	}
 
 	body := createPRBody{
@@ -481,7 +482,7 @@ func (p *GitHubPlugin) mergePR(ctx context.Context, action models.ToolAction) (*
 	owner, repo := p.getOwnerRepo(action)
 	pr := action.Args["pr"]
 	if owner == "" || repo == "" || pr == "" {
-		return nil, fmt.Errorf("owner, repo, and pr are required")
+		return nil, errors.New("owner, repo, and pr are required")
 	}
 
 	var payload io.Reader
@@ -509,7 +510,7 @@ func (p *GitHubPlugin) closePR(ctx context.Context, action models.ToolAction) (*
 	owner, repo := p.getOwnerRepo(action)
 	pr := action.Args["pr"]
 	if owner == "" || repo == "" || pr == "" {
-		return nil, fmt.Errorf("owner, repo, and pr are required")
+		return nil, errors.New("owner, repo, and pr are required")
 	}
 
 	body := map[string]string{"state": "closed"}
@@ -538,7 +539,7 @@ func (p *GitHubPlugin) commentPR(ctx context.Context, action models.ToolAction) 
 	pr := action.Args["pr"]
 	comment := action.Args["body"]
 	if owner == "" || repo == "" || pr == "" || comment == "" {
-		return nil, fmt.Errorf("owner, repo, pr, and body are required")
+		return nil, errors.New("owner, repo, pr, and body are required")
 	}
 
 	payload, err := json.Marshal(commentBody{Body: comment})
@@ -565,7 +566,7 @@ func (p *GitHubPlugin) closeIssue(ctx context.Context, action models.ToolAction)
 	issue := action.Args["issue"]
 	comment := action.Args["comment"]
 	if owner == "" || repo == "" || issue == "" {
-		return nil, fmt.Errorf("owner, repo, and issue are required")
+		return nil, errors.New("owner, repo, and issue are required")
 	}
 
 	var closePayload map[string]interface{}
@@ -589,11 +590,8 @@ func (p *GitHubPlugin) closeIssue(ctx context.Context, action models.ToolAction)
 		if err != nil {
 			return nil, err
 		}
-		_, _, err = p.doRequest(commentReq)
-		if err != nil {
-			// Non-fatal: try to close anyway
-			_ = err
-		}
+		// Non-fatal: try to close anyway
+		_, _, _ = p.doRequest(commentReq)
 	}
 
 	req, err := p.newRequest(ctx, "PATCH", "/repos/"+owner+"/"+repo+"/issues/"+issue, bytes.NewReader(payload))

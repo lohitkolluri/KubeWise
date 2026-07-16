@@ -2,6 +2,7 @@ package remediator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -21,7 +22,7 @@ func (c *Correlator) executePlanAndVerify(
 	if c.executor == nil {
 		c.logAudit(&plan, matched, tier, models.AuditRejected, "k8s executor unavailable", prompt, "")
 		c.markAnomalyStatus(matched, models.AnomalyStatusRejected, nil)
-		return fmt.Errorf("k8s executor unavailable")
+		return errors.New("k8s executor unavailable")
 	}
 
 	steps := plan.EffectiveSteps()

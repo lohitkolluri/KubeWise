@@ -1,7 +1,7 @@
 package store_test
 
 import (
-	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,14 +11,7 @@ import (
 )
 
 func TestOpenClose(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	_ = f.Close()
-	defer os.Remove(path)
-
+	path := filepath.Join(t.TempDir(), "agent.db")
 	s, err := store.Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -29,14 +22,7 @@ func TestOpenClose(t *testing.T) {
 }
 
 func TestMetricsRingBuffer(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	_ = f.Close()
-	defer os.Remove(path)
-
+	path := filepath.Join(t.TempDir(), "agent.db")
 	s, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -63,14 +49,7 @@ func TestMetricsRingBuffer(t *testing.T) {
 }
 
 func TestAnomalyCRUD(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	_ = f.Close()
-	defer os.Remove(path)
-
+	path := filepath.Join(t.TempDir(), "agent.db")
 	s, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -123,14 +102,7 @@ func TestAnomalyCRUD(t *testing.T) {
 }
 
 func TestConfigSaveLoad(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	_ = f.Close()
-	defer os.Remove(path)
-
+	path := filepath.Join(t.TempDir(), "agent.db")
 	s, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -171,14 +143,7 @@ func TestConfigSaveLoad(t *testing.T) {
 }
 
 func TestTrimOlderThan(t *testing.T) {
-	f, err := os.CreateTemp("", "kw-store-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	_ = f.Close()
-	defer os.Remove(path)
-
+	path := filepath.Join(t.TempDir(), "agent.db")
 	s, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)

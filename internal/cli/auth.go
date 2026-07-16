@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -74,10 +75,10 @@ Examples:
 		case len(args) == 1:
 			tok = strings.TrimSpace(args[0])
 		default:
-			return fmt.Errorf("provide TOKEN, or use --stdin / --from-env")
+			return errors.New("provide TOKEN, or use --stdin / --from-env")
 		}
 		if tok == "" {
-			return fmt.Errorf("token must not be empty")
+			return errors.New("token must not be empty")
 		}
 		if err := setProfileField(profileName, "api-token", tok); err != nil {
 			return err

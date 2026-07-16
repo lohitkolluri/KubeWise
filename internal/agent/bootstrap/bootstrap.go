@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -235,34 +236,37 @@ func buildLLMConfig(cfg *models.AgentConfig) llm.Config {
 }
 
 func validateLLM(llmCfg llm.Config) {
-	if llmCfg.Provider == "openrouter" && llmCfg.APIKey != "" {
-		checkCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		client, err := llm.NewClient(llmCfg)
-		if err != nil {
-			slog.Error("llm client error", "error", err)
-			return
-		}
-		if err := client.ValidateKey(checkCtx); err != nil {
-			slog.Error("LLM key validation failed", "error", err)
+	if llmCfg.Provider != "openrouter" && llmCfg.Provider != "ollama" {
+		return
+	}
+
+	timeout := 15 * time.Second
+	if llmCfg.Provider == "ollama" {
+		timeout = 10 * time.Second
+	}
+
+	checkCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	client, err := llm.NewClient(llmCfg)
+	if err != nil {
+		slog.Error("llm client error", "error", err)
+		return
+	}
+
+	if err := client.ValidateKey(checkCtx); err != nil {
+		if llmCfg.Provider == "ollama" {
+			slog.Error("ollama unreachable", "error", err)
 		} else {
-			slog.Info("LLM provider validated", "provider", client.ProviderName())
+			slog.Error("LLM key validation failed", "error", err)
 		}
 		return
 	}
+
 	if llmCfg.Provider == "ollama" {
-		checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		client, err := llm.NewClient(llmCfg)
-		if err != nil {
-			slog.Error("ollama client error", "error", err)
-			return
-		}
-		if err := client.ValidateKey(checkCtx); err != nil {
-			slog.Error("ollama unreachable", "error", err)
-		} else {
-			slog.Info("ollama ready", "url", llmCfg.BaseURL)
-		}
+		slog.Info("ollama ready", "url", llmCfg.BaseURL)
+	} else {
+		slog.Info("LLM provider validated", "provider", client.ProviderName())
 	}
 }
 
@@ -271,7 +275,7 @@ func validateAPIAuth() error {
 		slog.Warn("agent: KUBEWISE_API_TOKEN is not set — agent HTTP API is unauthenticated")
 	}
 	if os.Getenv("KUBEWISE_REQUIRE_API_TOKEN") == "true" && strings.TrimSpace(os.Getenv("KUBEWISE_API_TOKEN")) == "" {
-		return fmt.Errorf("KUBEWISE_REQUIRE_API_TOKEN is set but KUBEWISE_API_TOKEN is empty — refusing to start")
+		return errors.New("KUBEWISE_REQUIRE_API_TOKEN is set but KUBEWISE_API_TOKEN is empty — refusing to start")
 	}
 	return nil
 }

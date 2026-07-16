@@ -2,6 +2,8 @@
 package predictor
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -125,23 +127,16 @@ func aggregatePodMemorySeries(pts []MetricPoint) []MetricPoint {
 		return nil
 	}
 	byTS := make(map[int64]float64)
-	labels := make(map[string]string)
-	for k, v := range pts[0].Labels {
-		labels[k] = v
-	}
+	labels := maps.Clone(pts[0].Labels)
 	for _, p := range pts {
 		byTS[p.Timestamp.UnixNano()] += p.Value
 	}
 	result := make([]MetricPoint, 0, len(byTS))
 	for ts, val := range byTS {
-		ptLabels := make(map[string]string, len(labels))
-		for k, v := range labels {
-			ptLabels[k] = v
-		}
 		result = append(result, MetricPoint{
 			Value:     val,
 			Timestamp: time.Unix(0, ts),
-			Labels:    ptLabels,
+			Labels:    maps.Clone(labels),
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -161,8 +156,7 @@ func aggregatePodRestartSeries(pts []MetricPoint) []MetricPoint {
 		}
 	}
 	if len(containers) <= 1 {
-		sorted := make([]MetricPoint, len(pts))
-		copy(sorted, pts)
+		sorted := slices.Clone(pts)
 		sort.Slice(sorted, func(i, j int) bool {
 			return sorted[i].Timestamp.Before(sorted[j].Timestamp)
 		})

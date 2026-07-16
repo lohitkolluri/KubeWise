@@ -3,6 +3,7 @@ package wizard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -27,7 +28,7 @@ func detectClusterCmd() tea.Cmd {
 		defer cancel()
 
 		if _, err := exec.LookPath("kubectl"); err != nil {
-			return detectResult{Error: fmt.Errorf("kubectl not found in PATH")}
+			return detectResult{Error: errors.New("kubectl not found in PATH")}
 		}
 
 		// 1. Server version.

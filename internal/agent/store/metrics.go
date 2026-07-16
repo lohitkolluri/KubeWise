@@ -2,8 +2,10 @@ package store
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,7 +64,7 @@ func (s *Store) AppendMetricSeries(name string, labels map[string]string, value 
 
 		tsKey := itob(ts.UnixNano())
 		val := make([]byte, 8)
-		binary.LittleEndian.PutUint64(val, float64bits(value))
+		binary.LittleEndian.PutUint64(val, math.Float64bits(value))
 
 		if err := b.Put(tsKey, val); err != nil {
 			return err
@@ -104,17 +106,14 @@ func (s *Store) GetMetricSeries(name string, labels map[string]string, n int) ([
 		k, v := c.Last()
 		for k != nil && len(points) < n {
 			points = append(points, MetricPoint{
-				Value: float64frombits(binary.LittleEndian.Uint64(v)),
+				Value: math.Float64frombits(binary.LittleEndian.Uint64(v)),
 				TS:    time.Unix(0, btoi(k)),
 			})
 			k, v = c.Prev()
 		}
 		return nil
 	})
-	// Reverse so oldest is first
-	for i, j := 0, len(points)-1; i < j; i, j = i+1, j-1 {
-		points[i], points[j] = points[j], points[i]
-	}
+	slices.Reverse(points)
 	return points, err
 }
 
@@ -135,8 +134,7 @@ func (s *Store) ListMetricSeries(metricName string) ([]string, error) {
 
 // TrimOlderThan removes metric samples older than the given duration.
 func (s *Store) TrimOlderThan(d time.Duration) error {
-	cutoff := time.Now().Add(-d)
-	cutoffKey := itob(cutoff.UnixNano())
+	cutoffUnix := time.Now().Add(-d).UnixNano()
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketMetrics)
 		return b.ForEach(func(name, _ []byte) error {
@@ -146,7 +144,7 @@ func (s *Store) TrimOlderThan(d time.Duration) error {
 			}
 			c := mb.Cursor()
 			for k, _ := c.First(); k != nil; k, _ = c.First() {
-				if btoi(k) >= btoi(cutoffKey) {
+				if btoi(k) >= cutoffUnix {
 					break
 				}
 				if err := mb.Delete(k); err != nil {
@@ -158,19 +156,11 @@ func (s *Store) TrimOlderThan(d time.Duration) error {
 	})
 }
 
-func float64bits(f float64) uint64 {
-	return math.Float64bits(f)
-}
-
-func float64frombits(bits uint64) float64 {
-	return math.Float64frombits(bits)
-}
-
 // TrimMetricHistory removes entire metric series that haven't received a new sample
 // within the specified duration (e.g. 24h). This prevents unbounded growth from
 // short-lived pods and ephemeral entities.
 func (s *Store) TrimMetricHistory(d time.Duration) error {
-	cutoff := time.Now().Add(-d)
+	cutoffUnix := time.Now().Add(-d).UnixNano()
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketMetrics)
 		if b == nil {
@@ -184,7 +174,7 @@ func (s *Store) TrimMetricHistory(d time.Duration) error {
 			}
 			c := mb.Cursor()
 			k2, _ := c.Last()
-			if k2 == nil || time.Unix(0, btoi(k2)).Before(cutoff) {
+			if k2 == nil || btoi(k2) < cutoffUnix {
 				toDelete = append(toDelete, string(k))
 			}
 			return nil
@@ -202,7 +192,7 @@ func (s *Store) TrimMetricHistory(d time.Duration) error {
 func ParseSeriesKey(key string) (string, map[string]string, error) {
 	parts := strings.Split(key, "/")
 	if len(parts) == 0 {
-		return "", nil, fmt.Errorf("empty series key")
+		return "", nil, errors.New("empty series key")
 	}
 	name := parts[0]
 	labels := make(map[string]string)

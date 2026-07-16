@@ -236,21 +236,16 @@ func inferTargetFromAnomalies(anomalies []models.AnomalyRecord, preferNS string)
 }
 
 func isIncompletePatchPlan(plan models.RemediationPlan) bool {
-	if plan.Action.Type == "patch_resources" && len(plan.Action.Parameters) == 0 {
+	// patch_resources without resource parameters: caught by validateRemediationPlan
+	// and escalated via isIncompletePatchError in the validation retry path. This check
+	// serves as a belt-and-suspenders guard.
+	if plan.Action.Type == "patch_resources" && !hasResourceParameters(plan.Action.Parameters) {
 		return true
 	}
-	for _, step := range plan.Steps {
-		if step.Type == "patch_resources" && len(step.Parameters) == 0 {
-			return true
-		}
-	}
+	// noop with "demoted from patch_resources" rationale: passes validation (noop is valid)
+	// but should still escalate so the operator applies resources manually.
 	if plan.Action.Type == "noop" && strings.Contains(plan.Action.Rationale, "demoted from patch_resources") {
 		return true
-	}
-	for _, step := range plan.Steps {
-		if step.Type == "noop" && strings.Contains(step.Rationale, "demoted from patch_resources") {
-			return true
-		}
 	}
 	return false
 }

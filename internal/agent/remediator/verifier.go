@@ -2,6 +2,7 @@ package remediator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -54,7 +55,7 @@ func NewVerifierWithPrometheus(clientset kubernetes.Interface, promAddr string) 
 // Verify runs all checks in the plan. Returns nil when every check passes.
 func (v *Verifier) Verify(ctx context.Context, plan models.RemediationPlan) error {
 	if v == nil || v.clientset == nil {
-		return fmt.Errorf("verifier unavailable")
+		return errors.New("verifier unavailable")
 	}
 	checks := plan.Verification.Checks
 	if len(checks) == 0 {
@@ -297,11 +298,11 @@ func (v *Verifier) checkDeploymentReady(ctx context.Context, namespace, name str
 // value. Returns an error if any result series exceeds the threshold.
 func (v *Verifier) checkPromQL(ctx context.Context, check models.VerificationCheck) error {
 	if v.promAPI == nil {
-		return fmt.Errorf("promql check skipped: no Prometheus API configured")
+		return errors.New("promql check skipped: no Prometheus API configured")
 	}
 	query, ok := check.Parameters["query"]
 	if !ok || query == "" {
-		return fmt.Errorf("promql check requires 'query' parameter")
+		return errors.New("promql check requires 'query' parameter")
 	}
 	thresholdStr, ok := check.Parameters["threshold"]
 	if !ok {

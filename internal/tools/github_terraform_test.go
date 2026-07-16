@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"testing"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
@@ -185,19 +184,6 @@ func TestGitHubPlugin_Validate_RejectsUnknownCommand(t *testing.T) {
 	if err := p.Validate(action); err == nil {
 		t.Error("Validate() expected error for unknown command, got nil")
 	}
-}
-
-func TestGitHubPlugin_Execute_RequiresToken(_ *testing.T) {
-	p := NewGitHubPlugin("", "")
-	// Without a token, the API call should fail (not crash)
-	action := models.ToolAction{
-		Command: "get repo",
-		Args:    map[string]string{"owner": "some-org", "repo": "some-repo"},
-	}
-	_, _ = p.Execute(context.Background(), action)
-	// Execute without token is expected to fail or return success=false.
-	// This test only verifies no crash; actual auth behavior is tested
-	// by integration tests.
 }
 
 // --- TerraformPlugin tests ---

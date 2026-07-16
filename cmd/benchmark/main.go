@@ -520,11 +520,11 @@ func autocorr(vals []float64, lag int) float64 {
 // ---------------------------------------------------------------------------
 
 type SignalChars struct {
-	Mean         float64
-	Std          float64
-	OscRate      float64
-	TrendRatio   float64
-	IsSeasonal   bool
+	Mean          float64
+	Std           float64
+	OscRate       float64
+	TrendRatio    float64
+	IsSeasonal    bool
 	SpikeKurtosis float64
 }
 
@@ -1196,15 +1196,15 @@ func algoIQR(data []BenchPoint) []bool {
 func ensembleMetricRouting(data []BenchPoint, patternName string) []bool {
 	// Map pattern names to algorithms
 	patternToAlgo := map[string]string{
-		"1. Normal Baseline": "Robust Z-score",
-		"2. Memory Leak":     "Changepoint Rate",
-		"3. CPU Spike Train": "Robust Z-score",
-		"4. Step Change":     "Changepoint Rate",
-		"5. Seasonality":     "STL Decomposition + RobustZScore",
-		"6. Crash Loop":      "Changepoint Rate",
+		"1. Normal Baseline":     "Robust Z-score",
+		"2. Memory Leak":         "Changepoint Rate",
+		"3. CPU Spike Train":     "Robust Z-score",
+		"4. Step Change":         "Changepoint Rate",
+		"5. Seasonality":         "STL Decomposition + RobustZScore",
+		"6. Crash Loop":          "Changepoint Rate",
 		"7. Gradual Degradation": "Changepoint Rate",
-		"8. Mixed Patterns":  "Voting ensemble",
-		"9. Transient Outliers": "IQR",
+		"8. Mixed Patterns":      "Voting ensemble",
+		"9. Transient Outliers":  "IQR",
 	}
 
 	algoName, ok := patternToAlgo[patternName]
@@ -1518,10 +1518,6 @@ func productionRouting(data []BenchPoint, patternName string) []bool {
 		return algoRobustZScore(data)
 	}
 }
-
-
-
-
 
 func patternToMetricName(pattern string) string {
 	switch {
@@ -1856,8 +1852,8 @@ func main() {
 	// Phase 3: Evaluate each algorithm on each pattern (train/test split)
 	// =========================================================================
 
-	var allResults []PatternResult // will hold both train and test results for detailed analysis
-	var testResults []PatternResult // only test results for final ranking and per-pattern tables
+	var allResults []PatternResult   // will hold both train and test results for detailed analysis
+	var testResults []PatternResult  // only test results for final ranking and per-pattern tables
 	var trainResults []PatternResult // only train results for overfitting analysis
 
 	fmt.Println()

@@ -101,7 +101,7 @@ func scoreBucket(score float64) string {
 // Zero-byte separators between fields prevent collisions (e.g. "ab"+"cd" vs "a"+"bcd").
 func Fingerprint(entity, namespace, metricName, pattern string, score float64) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s", entity, namespace, metricName, pattern, scoreBucket(score))
+	_, _ = fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s", entity, namespace, metricName, pattern, scoreBucket(score))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -204,18 +204,6 @@ func (c *Cache) Stats() Stats {
 		TTL:      c.cfg.TTL,
 	}
 }
-
-// Anomaly is implemented by types that can be fingerprinted for semantic cache lookups.
-type Anomaly interface {
-	GetEntity() string
-	GetNamespace() string
-	GetMetricName() string
-	GetPattern() string
-	GetScore() float64
-}
-
-// anomalyAdapter adapts a struct with the right field names to the Anomaly interface.
-// Fields are matched by name convention.
 
 // Keys returns all fingerprints currently in the cache (for inspection/debug).
 func (c *Cache) Keys() []string {

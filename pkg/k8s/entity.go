@@ -1,29 +1,7 @@
 // Package k8s provides entity resolution utilities for KubeWise.
 package k8s
 
-import (
-	"strings"
-
-	corev1 "k8s.io/api/core/v1"
-)
-
-// ResolveOwner extracts the controlling owner kind and name from a pod's OwnerReferences.
-// Returns ("", "") when no controller owner is found (e.g., static pods).
-func ResolveOwner(pod *corev1.Pod) (kind, name string) {
-	if pod == nil {
-		return "", ""
-	}
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller != nil && *ref.Controller {
-			return ref.Kind, ref.Name
-		}
-	}
-	if len(pod.OwnerReferences) > 0 {
-		ref := pod.OwnerReferences[0]
-		return ref.Kind, ref.Name
-	}
-	return "", ""
-}
+import "strings"
 
 // InferWorkloadFromPodName attempts to derive the workload (deployment/statefulset/daemonset)
 // name from a pod name using standard K8s naming conventions. Used as a fallback when
@@ -64,17 +42,4 @@ func PodBelongsToWorkload(podName, workload string) bool {
 		}
 	}
 	return false
-}
-
-// FormatEntityID creates a stable entity identifier for a workload.
-// Format: "namespace/kind/name" or "namespace/name" for backward compatibility.
-// This is used for correlation across pod restarts.
-func FormatEntityID(namespace, ownerKind, ownerName string) string {
-	if ownerKind == "" || ownerName == "" {
-		return ""
-	}
-	if namespace == "" {
-		return ownerKind + "/" + ownerName
-	}
-	return namespace + "/" + ownerKind + "/" + ownerName
 }

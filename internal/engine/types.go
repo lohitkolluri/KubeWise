@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -95,10 +96,10 @@ type Rule interface {
 func ValidateResult(r RuleResult) []error {
 	var errs []error
 	if r.RuleName == "" {
-		errs = append(errs, fmt.Errorf("ruleName is empty"))
+		errs = append(errs, errors.New("ruleName is empty"))
 	}
 	if r.Action == "" {
-		errs = append(errs, fmt.Errorf("action is empty"))
+		errs = append(errs, errors.New("action is empty"))
 	}
 	if r.Confidence < 0 || r.Confidence > 1 {
 		errs = append(errs, fmt.Errorf("confidence %.2f out of range [0,1]", r.Confidence))
@@ -107,7 +108,7 @@ func ValidateResult(r RuleResult) []error {
 		errs = append(errs, fmt.Errorf("target is empty for action %q", r.Action))
 	}
 	if len(r.Evidence) == 0 {
-		errs = append(errs, fmt.Errorf("evidence is empty"))
+		errs = append(errs, errors.New("evidence is empty"))
 	}
 	return errs
 }

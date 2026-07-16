@@ -39,11 +39,6 @@ jobs:
           node-version: '22'
           registry-url: https://registry.npmjs.org
 
-      - name: Publish npm packages
-        run: chmod +x scripts/npm-publish.sh && ./scripts/npm-publish.sh "${{ github.ref_name }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
   # ── Multi-arch container images pushed to GHCR ──────────────────────────────
   docker:
     runs-on: ubuntu-latest

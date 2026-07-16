@@ -24,7 +24,7 @@ We aim to acknowledge reports within 72 hours and provide a fix or mitigation ti
 - Set `KUBEWISE_API_TOKEN` and `security.requireApiToken=true` (Helm) or `KUBEWISE_REQUIRE_API_TOKEN=true` in production.
 - Use namespace-scoped RBAC (`rbac.clusterScoped=false`) when the agent only watches specific namespaces.
 - Keep remediation in `dry-run` until approvals and audit workflows are validated.
-- Do not commit `manifests/base/15-secret.yaml` or API keys to git.
+- Do not commit `manifests/base/15-secret.yaml` (copy from `15-secret.example.yaml`) or API keys to git.
 
 ## Agent surface area
 

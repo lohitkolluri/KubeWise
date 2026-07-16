@@ -3,6 +3,7 @@ package remediator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -57,14 +58,14 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 		return fmt.Errorf("record %s is not pending approval (status=%s)", record.ID, record.Status)
 	}
 	if c.executor == nil {
-		return fmt.Errorf("k8s executor unavailable")
+		return errors.New("k8s executor unavailable")
 	}
 
 	plan := record.Plan
 	cfg := c.snapshotConfig()
 
 	if cfg.Mode == "off" {
-		return fmt.Errorf("remediation is disabled (mode=off), cannot approve")
+		return errors.New("remediation is disabled (mode=off), cannot approve")
 	}
 
 	anomalies, err := c.store.ListAnomalies(100)
@@ -105,30 +106,29 @@ func (c *Correlator) ApproveRecord(ctx context.Context, id string) error {
 	}
 
 	verifyNote := c.verifyAfterRemediation(ctx, plan, result)
-
-	if verifyNote == "" {
-		record.Status = models.AuditVerified
+	if verifyNote != "" {
+		record.Status = models.AuditVerifyFailed
 		record.VerificationNote = verifyNote
 		record.ExecutedAt = &now
-		record.VerifiedAt = &now
 		record.K8sResult = result
 		if err := c.store.UpdateAuditRecord(record); err != nil {
 			return err
 		}
-		c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
-		slog.Info("remediator: approved, executed and verified runbook", "steps", len(steps), "namespace", plan.Action.Namespace, "target", plan.Action.Target)
+		c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
+		slog.Warn("remediator: approved and executed but verification failed", "note", verifyNote)
 		return nil
 	}
 
-	record.Status = models.AuditVerifyFailed
+	record.Status = models.AuditVerified
 	record.VerificationNote = verifyNote
 	record.ExecutedAt = &now
+	record.VerifiedAt = &now
 	record.K8sResult = result
 	if err := c.store.UpdateAuditRecord(record); err != nil {
 		return err
 	}
-	c.markAnomalyStatus(matched, models.AnomalyStatusRemediated, &now)
-	slog.Warn("remediator: approved and executed but verification failed", "note", verifyNote)
+	c.markAnomalyStatus(matched, models.AnomalyStatusResolved, &now)
+	slog.Info("remediator: approved, executed and verified runbook", "steps", len(steps), "namespace", plan.Action.Namespace, "target", plan.Action.Target)
 	return nil
 }
 

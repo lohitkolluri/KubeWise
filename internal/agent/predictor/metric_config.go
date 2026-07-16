@@ -61,7 +61,9 @@ var metricProfiles = []struct {
 }
 
 // ProfileForMetric returns the detection profile for a given metric name.
-// The first matching prefix wins; empty prefix is the fallback default.
+// The first matching prefix wins; the empty-prefix entry is the fallback default.
+// (The last entry in metricProfiles has an empty prefix and always matches,
+// so the loop always returns before its end.)
 func ProfileForMetric(metricName string) MetricProfile {
 	for _, m := range metricProfiles {
 		if m.Prefix == "" {

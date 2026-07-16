@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,7 +146,7 @@ func resolveRequestToken(ctx context.Context) (string, error) {
 			// tryPasswordAuth returned no error and no token: the agent
 			// answered 404 (password auth not configured). Record a clear
 			// diagnostic so a later 401 surfaces the real cause.
-			authErr = fmt.Errorf("agent has no password authentication configured — re-run install with --pass or run 'kwctl agent restart'")
+			authErr = errors.New("agent has no password authentication configured — re-run install with --pass or run 'kwctl agent restart'")
 		}
 	}
 	if apiToken != "" {
@@ -188,14 +189,11 @@ func agentWrite(ctx context.Context, path string, body any) ([]byte, int, error)
 			return lastBody, lastCode, lastErr
 		}
 	}
-	if lastCode == http.StatusMethodNotAllowed || lastCode == http.StatusNotFound {
-		hint := strings.TrimSpace(string(lastBody))
-		if hint == "" {
-			hint = "endpoint missing on running agent"
-		}
-		return lastBody, lastCode, fmt.Errorf("agent returned %d on %s — redeploy with: bash hack/deploy-dev.sh (%s)", lastCode, path, hint)
+	hint := strings.TrimSpace(string(lastBody))
+	if hint == "" {
+		hint = "endpoint missing on running agent"
 	}
-	return lastBody, lastCode, lastErr
+	return lastBody, lastCode, fmt.Errorf("agent returned %d on %s — redeploy with: bash hack/deploy-dev.sh (%s)", lastCode, path, hint)
 }
 
 // tryPasswordAuth attempts to get an API token by exchanging the password

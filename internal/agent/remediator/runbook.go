@@ -2,6 +2,7 @@ package remediator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -18,7 +19,7 @@ var waitActionType = "wait"
 func (e *K8sExecutor) ExecuteRunbook(ctx context.Context, plan models.RemediationPlan, dryRun bool) (string, error) {
 	steps := plan.EffectiveSteps()
 	if len(steps) == 0 {
-		return "", fmt.Errorf("runbook has no steps")
+		return "", errors.New("runbook has no steps")
 	}
 
 	var results []string

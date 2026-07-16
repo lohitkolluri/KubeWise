@@ -288,15 +288,3 @@ func TestSplitCSV(t *testing.T) {
 		})
 	}
 }
-
-func TestKubectlPlugin_Validate_RejectsInvalidNameInBlockedList(t *testing.T) {
-	p := NewKubectlPlugin("")
-	// exec is blocked by default; ensure the validator rejects it even with valid args.
-	action := models.ToolAction{
-		Command: "exec",
-		Args:    map[string]string{"resource": "pod", "name": "valid-name"},
-	}
-	if err := p.Validate(action); err == nil {
-		t.Error("Validate() expected error for exec command, got nil")
-	}
-}

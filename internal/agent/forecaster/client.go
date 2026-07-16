@@ -5,6 +5,7 @@ package forecaster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -82,13 +83,13 @@ func NewClient(address string, timeout time.Duration) (*Client, error) {
 // Forecast sends metric history to the Python sidecar and returns predictions.
 func (c *Client) Forecast(ctx context.Context, req *ForecastRequest) (*ForecastResponse, error) {
 	if req == nil {
-		return nil, fmt.Errorf("forecast request is nil")
+		return nil, errors.New("forecast request is nil")
 	}
 	if len(req.Values) != len(req.Timestamps) {
 		return nil, fmt.Errorf("values and timestamps length mismatch: %d vs %d", len(req.Values), len(req.Timestamps))
 	}
 	if len(req.Values) == 0 {
-		return nil, fmt.Errorf("forecast request has no values")
+		return nil, errors.New("forecast request has no values")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)

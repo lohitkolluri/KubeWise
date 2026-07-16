@@ -13,7 +13,7 @@ var (
 	colorWarning   = compat.AdaptiveColor{Light: lipgloss.Color("#CA8A04"), Dark: lipgloss.Color("#FBBF24")}
 	colorSuccess   = compat.AdaptiveColor{Light: lipgloss.Color("#16A34A"), Dark: lipgloss.Color("#4ADE80")}
 	colorNeutral   = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#9CA3AF")}
-	colorMuted = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")}
+	colorMuted     = compat.AdaptiveColor{Light: lipgloss.Color("#6B7280"), Dark: lipgloss.Color("#6B7280")}
 	colorBorder    = compat.AdaptiveColor{Light: lipgloss.Color("#D1D5DB"), Dark: lipgloss.Color("#374151")}
 	colorHighlight = compat.AdaptiveColor{Light: lipgloss.Color("#111827"), Dark: lipgloss.Color("#F9FAFB")}
 

@@ -110,11 +110,7 @@ func (s *Server) handleAnomalies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, records)
 }
 
-func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
+func (s *Server) handleConfigGet(w http.ResponseWriter, _ *http.Request) {
 	cfg, err := s.store.LoadConfig()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load config: %v", err))
@@ -128,10 +124,6 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut && r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	var cfg models.AgentConfig
 	if err := decodeJSON(w, r, &cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

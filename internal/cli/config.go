@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,11 +12,6 @@ import (
 	"github.com/lohitkolluri/KubeWise/internal/agent/llm"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
-
-func init() {
-	configCmd.AddCommand(configShowCmd, configSetCmd, configApplyCmd, configInitCmd)
-	rootCmd.AddCommand(configCmd)
-}
 
 var configCmd = &cobra.Command{
 	Use:   "config",
@@ -29,9 +25,17 @@ var configShowCmd = &cobra.Command{
 	RunE:    runConfigShow,
 }
 
-// Legacy: `kwctl config` without subcommand shows config.
 func init() {
-	configCmd.RunE = runConfigShow
+	configCmd.AddCommand(configShowCmd, configSetCmd, configApplyCmd, configInitCmd)
+	configCmd.RunE = runConfigShow // Legacy: `kwctl config` without subcommand shows config.
+	rootCmd.AddCommand(configCmd)
+
+	configApplyCmd.Flags().StringP("file", "f", "", "YAML config file")
+	_ = configApplyCmd.MarkFlagRequired("file")
+
+	configInitCmd.Flags().StringVarP(&configInitFile, "file", "f", "agent-config.yaml", "output YAML file path")
+	configInitCmd.Flags().BoolVar(&configInitPrint, "print", false, "print YAML to stdout instead of writing a file")
+	configInitCmd.Flags().StringVar(&configInitFrom, "from", "agent", "source: agent (current) or defaults")
 }
 
 func runConfigShow(cmd *cobra.Command, _ []string) error {
@@ -99,7 +103,7 @@ var configApplyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		file, _ := cmd.Flags().GetString("file")
 		if file == "" {
-			return fmt.Errorf("--file is required")
+			return errors.New("--file is required")
 		}
 		data, err := os.ReadFile(file) //nolint:gosec // user-provided config file path via --file flag
 		if err != nil {
@@ -115,11 +119,6 @@ var configApplyCmd = &cobra.Command{
 		printOK(cmd.OutOrStdout(), "Config applied — restart the agent pod to apply runtime changes")
 		return nil
 	},
-}
-
-func init() {
-	configApplyCmd.Flags().StringP("file", "f", "", "YAML config file")
-	_ = configApplyCmd.MarkFlagRequired("file")
 }
 
 var (
@@ -170,12 +169,6 @@ Examples:
 		printOK(cmd.OutOrStdout(), "Wrote %s", configInitFile)
 		return nil
 	},
-}
-
-func init() {
-	configInitCmd.Flags().StringVarP(&configInitFile, "file", "f", "agent-config.yaml", "output YAML file path")
-	configInitCmd.Flags().BoolVar(&configInitPrint, "print", false, "print YAML to stdout instead of writing a file")
-	configInitCmd.Flags().StringVar(&configInitFrom, "from", "agent", "source: agent (current) or defaults")
 }
 
 func defaultAgentConfigTemplate() *models.AgentConfig {
