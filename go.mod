@@ -17,7 +17,6 @@ require (
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/spf13/cobra v1.10.2
-	github.com/wenta/timeseries-go v0.3.0
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/crypto v0.54.0
 	golang.org/x/term v0.45.0
