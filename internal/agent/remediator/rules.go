@@ -8,9 +8,8 @@ import (
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
-// buildMetricSummaries extracts metric summaries from anomalies for the rule engine.
-func (c *Correlator) buildMetricSummaries(anomalies []models.AnomalyRecord) []engine.MetricSummary {
-	data := c.extractMetricSeries(anomalies)
+// buildMetricSummaries extracts metric summaries from pre-computed metric data for the rule engine.
+func (c *Correlator) buildMetricSummaries(data []metricData) []engine.MetricSummary {
 	summaries := make([]engine.MetricSummary, 0, len(data))
 	for _, d := range data {
 		if len(d.Pts) == 0 {
@@ -42,10 +41,10 @@ func (c *Correlator) buildMetricSummaries(anomalies []models.AnomalyRecord) []en
 
 // evaluateRules runs the rule engine against correlatable anomalies.
 // Returns true if a deterministic match was processed (short-circuit LLM).
-func (c *Correlator) evaluateRules(ctx context.Context, cfg RemediationConfig, correlatable []models.AnomalyRecord) (bool, error) {
+func (c *Correlator) evaluateRules(ctx context.Context, cfg RemediationConfig, correlatable []models.AnomalyRecord, metricsData []metricData) (bool, error) {
 	ruleInput := engine.Input{
 		Anomalies: correlatable,
-		Metrics:   c.buildMetricSummaries(correlatable),
+		Metrics:   c.buildMetricSummaries(metricsData),
 	}
 	ruleResults, err := c.ruleEngine.Evaluate(ctx, ruleInput)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/lohitkolluri/KubeWise/internal/agent/gate"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
+	"golang.org/x/time/rate"
 )
 
 // Store is the data access interface the API server depends on.
@@ -79,11 +80,11 @@ func NewServer(store Store, addr string) (*Server, error) {
 		s.server = &http.Server{
 			Addr: addr,
 			Handler: withMiddleware(mux, middlewareConfig{
-				apiToken:          apiToken,
-				corsOrigin:        corsOrigin,
-				requireToken:      requireToken,
-				rateLimiter:       newRateLimiter(rateLimitPerMinute, rateLimitBurst),
-				publicRateLimiter: newRateLimiter(publicRateLimitPerMinute, publicRateLimitBurst),
+				apiToken:      apiToken,
+				corsOrigin:    corsOrigin,
+				requireToken:  requireToken,
+				limiter:       rate.NewLimiter(rate.Limit(60/60.0), 10),
+				publicLimiter: rate.NewLimiter(rate.Limit(5/60.0), 5),
 			}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

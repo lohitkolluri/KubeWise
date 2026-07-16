@@ -159,7 +159,7 @@ func (c *PrometheusCollector) filterResult(r MetricResult) MetricResult {
 	if len(c.watchNamespaces) == 0 {
 		return r
 	}
-	out := MetricResult{Name: r.Name}
+	out := MetricResult{Name: r.Name, Values: make([]MetricPoint, 0, len(r.Values))}
 	for _, pt := range r.Values {
 		if ns := pt.Labels["namespace"]; ns != "" && !nsutil.InScope(ns, c.watchNamespaces) {
 			continue

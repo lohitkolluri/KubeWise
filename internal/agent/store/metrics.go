@@ -69,18 +69,14 @@ func (s *Store) AppendMetricSeries(name string, labels map[string]string, value 
 		}
 
 		// Ring buffer: drop oldest sample when over limit (single delete per write).
-		c := b.Cursor()
-		count := 0
-		for k, _ := c.First(); k != nil; k, _ = c.Next() {
-			count++
-			if count > maxSamplesPerMetric {
-				kOld, _ := c.First()
-				if kOld != nil {
-					if err := b.Delete(kOld); err != nil {
-						return err
-					}
+		// Use bbolt's inline Stats().KeyN for O(1) count instead of iterating all keys.
+		if b.Stats().KeyN > maxSamplesPerMetric {
+			c := b.Cursor()
+			kOld, _ := c.First()
+			if kOld != nil {
+				if err := b.Delete(kOld); err != nil {
+					return err
 				}
-				break
 			}
 		}
 		return nil

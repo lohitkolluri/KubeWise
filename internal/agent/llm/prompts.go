@@ -4,14 +4,22 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
+var (
+	systemPromptOnce sync.Once
+	cachedSystemPrompt string
+)
+
 // SystemPrompt returns the system prompt for the remediation SRE agent.
 // Follows the four-block design: Identity → Capabilities → Constraints → Format.
+// The prompt is static — cached after the first call.
 func SystemPrompt() string {
-	return `You are a Senior Kubernetes SRE at a large-scale production environment. Your sole purpose is to analyze cluster anomalies and produce precise, minimal-risk remediation plans.
+	systemPromptOnce.Do(func() {
+		cachedSystemPrompt = `You are a Senior Kubernetes SRE at a large-scale production environment. Your sole purpose is to analyze cluster anomalies and produce precise, minimal-risk remediation plans.
 
 CAPABILITIES
 You can analyze the following signals from Prometheus and Kubernetes:
@@ -62,11 +70,24 @@ TARGET FORMAT (critical — validation will fail otherwise):
 
 FORMAT
 Return ONLY a valid JSON object matching the provided schema. No preamble, no explanation, no markdown formatting.`
+	})
+	return cachedSystemPrompt
 }
 
 // BuildUserPrompt constructs the user prompt from anomaly records, metrics, and investigation context.
 func BuildUserPrompt(anomalies []models.AnomalyRecord, metricsSummary, investigation string) string {
+	// Pre-allocate buffer to reduce reallocations: headers + anomalies + metrics + investigation + targets + footer.
+	invLen := len(investigation)
+	const maxInvestigation = 12000
+	if invLen > maxInvestigation {
+		invLen = maxInvestigation
+	}
+	est := 256 + len(anomalies)*150 + len(metricsSummary) + invLen + len(anomalies)*100 + 200
+	if est < 1024 {
+		est = 1024
+	}
 	var b strings.Builder
+	b.Grow(est)
 
 	b.WriteString("Analyze the following Kubernetes cluster anomalies and produce a remediation plan.\n\n")
 

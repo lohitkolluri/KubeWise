@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v6"
+	gobreaker "github.com/sony/gobreaker/v2"
 )
 
 // OpenAICompatibleProvider implements an OpenAPI/OpenAI-compatible Chat Completions backend.
@@ -18,7 +21,7 @@ type OpenAICompatibleProvider struct {
 	apiKey         string
 	model          string
 	client         *http.Client
-	circuitBreaker *CircuitBreaker
+	circuitBreaker *gobreaker.TwoStepCircuitBreaker[any]
 }
 
 // NewOpenAICompatibleProvider creates an OpenAI-compatible Chat Completions backend.
@@ -33,11 +36,19 @@ func NewOpenAICompatibleProvider(baseURL, model, apiKey string) *OpenAICompatibl
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	return &OpenAICompatibleProvider{
-		baseURL:        baseURL,
-		apiKey:         apiKey,
-		model:          model,
-		client:         &http.Client{Timeout: 120 * time.Second},
-		circuitBreaker: newCircuitBreaker(3, 30*time.Second),
+		baseURL: baseURL,
+		apiKey:  apiKey,
+		model:   model,
+		client:  &http.Client{Timeout: 120 * time.Second},
+		circuitBreaker: gobreaker.NewTwoStepCircuitBreaker[any](gobreaker.Settings{
+			Name:        "llm-circuit-breaker",
+			MaxRequests: 1,
+			Interval:    0,
+			Timeout:     30 * time.Second,
+			ReadyToTrip: func(counts gobreaker.Counts) bool {
+				return counts.ConsecutiveFailures >= 3
+			},
+		}),
 	}
 }
 
@@ -120,7 +131,8 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 		return Usage{}, fmt.Errorf("openapi-compatible model is empty")
 	}
 
-	if !p.circuitBreaker.Allow() {
+	cbDone, err := p.circuitBreaker.Allow()
+	if err != nil {
 		return Usage{}, fmt.Errorf("openapi-compatible circuit breaker open")
 	}
 
@@ -131,71 +143,78 @@ func (p *OpenAICompatibleProvider) StructuredOutputWithUsage(ctx context.Context
 		schemaHint = "\n\nReturn ONLY valid JSON that matches this JSON Schema:\n" + string(schema)
 	}
 
-	reqBody := openAIChatReq{
-		Model: p.model,
-		Messages: []openAIMsg{
-			{Role: "system", Content: systemPrompt + schemaHint},
-			{Role: "user", Content: userContent},
-		},
-		Temperature:    0.2,
-		ResponseFormat: &openAIFormat{Type: "json_object"},
-	}
-	b, err := json.Marshal(reqBody)
-	if err != nil {
-		return Usage{}, err
-	}
+	// Exponential backoff for retry (max 3 attempts = 1 initial + 2 retries)
+	b := backoff.NewExponentialBackOff()
+	b.MaxInterval = 5 * time.Second
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(b))
-	if err != nil {
-		return Usage{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	var usage Usage
+	_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
+		reqBody := openAIChatReq{
+			Model: p.model,
+			Messages: []openAIMsg{
+				{Role: "system", Content: systemPrompt + schemaHint},
+				{Role: "user", Content: userContent},
+			},
+			Temperature:    0.2,
+			ResponseFormat: &openAIFormat{Type: "json_object"},
+		}
+		b, err := json.Marshal(reqBody)
+		if err != nil {
+			return struct{}{}, backoff.Permanent(err)
+		}
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		p.circuitBreaker.Failure()
-		return Usage{}, fmt.Errorf("chat completion: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(b))
+		if err != nil {
+			return struct{}{}, backoff.Permanent(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-	if err != nil {
-		p.circuitBreaker.Failure()
-		return Usage{}, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		p.circuitBreaker.Failure()
-		return Usage{}, fmt.Errorf("chat completion failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer func() { _ = resp.Body.Close() }()
 
-	var out openAIChatResp
-	if err := json.Unmarshal(body, &out); err != nil {
-		p.circuitBreaker.Failure()
-		return Usage{}, fmt.Errorf("decode response: %w", err)
-	}
-	if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
-		p.circuitBreaker.Failure()
-		return Usage{}, fmt.Errorf("openapi-compatible: empty message content")
-	}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		if err != nil {
+			return struct{}{}, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return struct{}{}, fmt.Errorf("chat completion failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
 
-	content := strings.TrimSpace(out.Choices[0].Message.Content)
-	// Some providers wrap JSON in markdown fences; strip a minimal subset.
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+		var out openAIChatResp
+		if err := json.Unmarshal(body, &out); err != nil {
+			return struct{}{}, err
+		}
+		if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+			return struct{}{}, fmt.Errorf("openapi-compatible: empty message content")
+		}
 
-	if err := json.Unmarshal([]byte(content), respPtr); err != nil {
-		p.circuitBreaker.Failure()
-		return Usage{}, fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
+		content := strings.TrimSpace(out.Choices[0].Message.Content)
+		content = strings.TrimPrefix(content, "```json")
+		content = strings.TrimPrefix(content, "```")
+		content = strings.TrimSuffix(content, "```")
+		content = strings.TrimSpace(content)
+
+		if err := json.Unmarshal([]byte(content), respPtr); err != nil {
+			return struct{}{}, fmt.Errorf("parse structured output: %w (raw: %s)", err, content)
+		}
+
+		usage = estimateUsage(systemPrompt, userContent, respPtr)
+		if out.Usage != nil {
+			usage.InputTokens = out.Usage.PromptTokens
+			usage.OutputTokens = out.Usage.CompletionTokens
+		}
+		return struct{}{}, nil
+	}, backoff.WithMaxTries(3))
+
+	if retryErr != nil {
+		cbDone(retryErr)
+		return Usage{}, retryErr
 	}
-	p.circuitBreaker.Success()
-	usage := estimateUsage(systemPrompt, userContent, respPtr)
-	if out.Usage != nil {
-		usage.InputTokens = out.Usage.PromptTokens
-		usage.OutputTokens = out.Usage.CompletionTokens
-	}
+	cbDone(nil)
 	return usage, nil
 }

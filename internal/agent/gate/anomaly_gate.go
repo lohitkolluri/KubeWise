@@ -148,7 +148,6 @@ func (g *AnomalyGate) ObserveScore(entity string, metricName string, score float
 		}
 	}
 	g.recordSustainmentScore(hKey, score, now)
-	g.pruneStaleLocked(now, now.Add(-24*time.Hour))
 }
 
 // PruneStale removes gate state for entities not seen within maxAge.

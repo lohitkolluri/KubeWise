@@ -167,10 +167,14 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		}
 	}
 
+	// Extract metric series once and share between rule engine and LLM code paths,
+	// avoiding duplicate N+1 SQLite queries per RunOnce cycle.
+	metricsData := c.extractMetricSeries(correlatable)
+
 	// Rule engine fast path (gated by feature flag). Runs before investigator/LLM to short-circuit
 	// known failure patterns that don't need LLM reasoning.
 	if c.featureFlags.RuleEngine && c.ruleEngine != nil {
-		match, err := c.evaluateRules(ctx, cfg, correlatable)
+		match, err := c.evaluateRules(ctx, cfg, correlatable, metricsData)
 		if err != nil {
 			slog.Error("remediator: rule engine error", "error", err)
 		}
@@ -189,7 +193,7 @@ func (c *Correlator) RunOnce(ctx context.Context) error {
 		}
 	}
 
-	metricsSummary := c.buildMetricsSummary(correlatable)
+	metricsSummary := c.buildMetricsSummary(metricsData)
 
 	var plan models.RemediationPlan
 	var userPrompt, investigation string
@@ -432,8 +436,7 @@ func (c *Correlator) markAnomalyStatus(records []models.AnomalyRecord, status st
 	}
 }
 
-func (c *Correlator) buildMetricsSummary(anomalies []models.AnomalyRecord) string {
-	data := c.extractMetricSeries(anomalies)
+func (c *Correlator) buildMetricsSummary(data []metricData) string {
 	summaries := make([]llm.MetricSummary, 0, len(data))
 	for _, d := range data {
 		if len(d.Pts) == 0 {

@@ -18,7 +18,6 @@ import (
 	"github.com/dgryski/go-change"
 	timeseriesgo "github.com/wenta/timeseries-go"
 
-	"github.com/lohitkolluri/KubeWise/internal/agent/ml"
 	"github.com/lohitkolluri/KubeWise/internal/agent/predictor"
 )
 
@@ -1522,32 +1521,7 @@ func productionRouting(data []BenchPoint, patternName string) []bool {
 
 
 
-func algoMLHalfSpace(data []BenchPoint) []bool {
-	n := len(data)
-	preds := make([]bool, n)
-	pipeline := ml.NewMLPipeline()
-	for i, pt := range data {
-		res := pipeline.Push(pt.Value)
-		preds[i] = res.IsAnomaly
-	}
-	return preds
-}
 
-func algoMLHybrid(data []BenchPoint) []bool {
-	n := len(data)
-	preds := make([]bool, n)
-	pipeline := ml.NewMLPipeline()
-	cpPreds := algoChangepointRate(data)
-	for i, pt := range data {
-		res := pipeline.Push(pt.Value)
-		preds[i] = res.IsAnomaly
-		// Boost with changepoint detections
-		if !preds[i] && cpPreds[i] {
-			preds[i] = true
-		}
-	}
-	return preds
-}
 
 func patternToMetricName(pattern string) string {
 	switch {
@@ -1876,8 +1850,6 @@ func main() {
 		{"Ensemble: Voting", ensembleVoting},
 		{"E5: ULTRA CASCADE", ensembleUltraCascade},
 		{"Production Routing (ProfileForMetric)", nil}, // tested with metric name mapping
-		{"ML HalfSpaceTrees (production)", algoMLHalfSpace},
-		{"ML Hybrid (Detector + Predictor)", algoMLHybrid},
 	}
 
 	// =========================================================================

@@ -68,6 +68,10 @@ func (s *Store) ensureAnomalyIndexes() error {
 }
 
 // Backup writes a consistent snapshot of the bbolt database to w.
+// Note: db.View() captures a consistent snapshot via tx.WriteTo(), which
+// serializes the entire database into memory. For large databases (>100MB),
+// this can be memory-intensive. The snapshot is written incrementally to w
+// during serialization, but the full b-tree must be traversed.
 func (s *Store) Backup(w io.Writer) error {
 	return s.db.View(func(tx *bolt.Tx) error {
 		_, err := tx.WriteTo(w)

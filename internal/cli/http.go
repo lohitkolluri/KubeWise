@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,7 +25,22 @@ var (
 
 	passwordAttempted bool   // prevents repeated password prompts per session
 	cachedPassword    string // password from --pass flag, set by installCmd
+
+	// sharedTransport holds a persistent http.Transport with connection pooling
+	// so TCP connections are reused across requests instead of being closed.
+	sharedTransport     http.RoundTripper
+	sharedTransportOnce sync.Once
 )
+
+func initSharedTransport() http.RoundTripper {
+	sharedTransportOnce.Do(func() {
+		sharedTransport = &http.Transport{
+			MaxIdleConns:    10,
+			IdleConnTimeout: 90 * time.Second,
+		}
+	})
+	return sharedTransport
+}
 
 func resolveAgentURL() string {
 	if agentURL != "" {
@@ -41,7 +57,10 @@ func agentHTTPClient() *http.Client {
 	if timeout <= 0 {
 		timeout = 15
 	}
-	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	return &http.Client{
+		Timeout:   time.Duration(timeout) * time.Second,
+		Transport: initSharedTransport(),
+	}
 }
 
 func agentRequest(ctx context.Context, method, path string, body any) ([]byte, int, error) {

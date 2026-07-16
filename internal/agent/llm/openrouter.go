@@ -12,10 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cenkalti/backoff/v6"
 	openrouter "github.com/OpenRouterTeam/go-sdk"
 	"github.com/OpenRouterTeam/go-sdk/models/components"
 	"github.com/OpenRouterTeam/go-sdk/models/operations"
 	"github.com/OpenRouterTeam/go-sdk/optionalnullable"
+	gobreaker "github.com/sony/gobreaker/v2"
 )
 
 // OpenRouterProvider sends structured requests via the OpenRouter API.
@@ -28,7 +30,8 @@ type OpenRouterProvider struct {
 	apiKey         string
 	model          string
 	sessionID      string
-	circuitBreaker *CircuitBreaker
+	circuitBreaker *gobreaker.TwoStepCircuitBreaker[any]
+	schemaCache    sync.Map // map[string]map[string]any — caches parsed JSON schemas
 }
 
 // NewOpenRouterProvider creates an OpenRouter backend.
@@ -38,8 +41,17 @@ func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
 		model = DefaultModel
 	}
 	var sdk *openrouter.OpenRouter
+	cb := gobreaker.NewTwoStepCircuitBreaker[any](gobreaker.Settings{
+		Name:        "llm-circuit-breaker",
+		MaxRequests: 1,
+		Interval:    0,
+		Timeout:     30 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 3
+		},
+	})
 	p := &OpenRouterProvider{
-		circuitBreaker: newCircuitBreaker(3, 30*time.Second),
+		circuitBreaker: cb,
 	}
 	if apiKey != "" {
 		baseOpts := []openrouter.SDKOption{
@@ -156,53 +168,103 @@ func (p *OpenRouterProvider) StructuredOutputWithUsage(ctx context.Context, syst
 	}
 	p.sessionMu.Unlock()
 
-	if !p.circuitBreaker.Allow() {
+	cbDone, err := p.circuitBreaker.Allow()
+	if err != nil {
 		return Usage{}, fmt.Errorf("openrouter circuit breaker open")
 	}
 
-	var schemaMap map[string]any
-	if err := json.Unmarshal(schema, &schemaMap); err != nil {
+	// Cache parsed schema to avoid repeated json.Unmarshal calls
+	// across model retries and subsequent invocations with the same schema.
+	schemaMap, err := p.cachedSchema(schema)
+	if err != nil {
 		return Usage{}, fmt.Errorf("parse schema: %w", err)
 	}
+
+	// Build both response formats once before the model loop.
+	// Strict mode depends on whether the model supports strict JSON schema;
+	// only the Strict field varies per model, so we build two variants.
+	strictTrue, strictFalse := true, false
+	strictFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
+		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
+		JSONSchema: components.ChatJSONSchemaConfig{
+			Name:   "remediation_plan",
+			Strict: optionalnullable.From(&strictTrue),
+			Schema: schemaMap,
+		},
+	})
+	nonStrictFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
+		Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
+		JSONSchema: components.ChatJSONSchemaConfig{
+			Name:   "remediation_plan",
+			Strict: optionalnullable.From(&strictFalse),
+			Schema: schemaMap,
+		},
+	})
 
 	var lastErr error
 	p.mu.RLock()
 	chain := modelChain(p.model)
 	p.mu.RUnlock()
 	for i, model := range chain {
-		strict := !IsFreeModel(model)
-		responseFormat := components.CreateResponseFormatJSONSchema(components.ChatFormatJSONSchemaConfig{
-			Type: components.ChatFormatJSONSchemaConfigTypeJSONSchema,
-			JSONSchema: components.ChatJSONSchemaConfig{
-				Name:   "remediation_plan",
-				Strict: optionalnullable.From(&strict),
-				Schema: schemaMap,
-			},
-		})
-		usage, err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
-		if err == nil {
-			p.circuitBreaker.Success()
+		responseFormat := nonStrictFormat
+		if !IsFreeModel(model) {
+			responseFormat = strictFormat
+		}
+
+		// Exponential backoff per model (max 3 attempts = 1 initial + 2 retries)
+		b := backoff.NewExponentialBackOff()
+		b.MaxInterval = 5 * time.Second
+
+		var modelUsage Usage
+		modelUsage, retryErr := backoff.Retry(ctx, func() (Usage, error) {
+			usage, err := p.structuredOutputWithModel(ctx, model, systemPrompt, userContent, responseFormat, respPtr)
+			if err == nil {
+				return usage, nil
+			}
+			if !isRetryableOpenRouterError(err) {
+				return Usage{}, backoff.Permanent(err)
+			}
+			return Usage{}, err
+		}, backoff.WithMaxTries(3))
+
+		if retryErr == nil {
+			cbDone(nil)
 			p.consecutiveRetryableErrors.Store(0)
 			if i > 0 {
 				slog.Info("llm: openrouter fallback model succeeded", "model", model)
 			}
-			return usage, nil
+			return modelUsage, nil
 		}
-		lastErr = err
-		if !isRetryableOpenRouterError(err) {
-			p.circuitBreaker.Failure()
+
+		lastErr = retryErr
+		if re := backoff.AsRetryError(retryErr); re != nil && errors.Is(re.Cause, backoff.ErrPermanent) {
+			cbDone(re.LastErr)
 			p.consecutiveRetryableErrors.Store(0)
-			return Usage{}, err
+			return Usage{}, re.LastErr
 		}
+
 		if p.consecutiveRetryableErrors.Add(1) >= 5 {
-			p.circuitBreaker.Failure()
+			slog.Warn("llm: openrouter consecutive retryable errors threshold crossed", "count", 5)
 		}
 		if i < len(chain)-1 {
-			slog.Warn("llm: openrouter model failed, trying fallback", "model", model, "error", err)
+			slog.Warn("llm: openrouter model failed, trying fallback", "model", model, "error", lastErr)
 		}
 	}
-	p.circuitBreaker.Failure()
+	cbDone(lastErr)
 	return Usage{}, lastErr
+}
+
+func (p *OpenRouterProvider) cachedSchema(schema json.RawMessage) (map[string]any, error) {
+	schemaStr := string(schema)
+	if cached, ok := p.schemaCache.Load(schemaStr); ok {
+		return cached.(map[string]any), nil
+	}
+	var schemaMap map[string]any
+	if err := json.Unmarshal(schema, &schemaMap); err != nil {
+		return nil, err
+	}
+	p.schemaCache.Store(schemaStr, schemaMap)
+	return schemaMap, nil
 }
 
 func (p *OpenRouterProvider) structuredOutputWithModel(

@@ -270,7 +270,7 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			key := metricKey(mr.Name, pt.Labels)
 			profile := ProfileForMetric(mr.Name)
 
-			// --- state access -------------------------------------------------------
+			// --- batch state read ---------------------------------------------------
 			p.mu.Lock()
 
 			p.lastSeen[key] = time.Now()
@@ -289,14 +289,17 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				p.changepoints[key] = cp
 			}
 
-			// Keep a bounded history for ROC computations. Copy under lock
-			// for safe concurrent access.
+			// Keep a bounded history for ROC computations. No copy needed —
+			// no concurrent goroutine modifies this slice during Run().
 			p.history[key] = append(p.history[key], pt)
 			if len(p.history[key]) > maxPatternHistory {
 				p.history[key] = p.history[key][len(p.history[key])-maxPatternHistory:]
 			}
-			localHistory := make([]MetricPoint, len(p.history[key]))
-			copy(localHistory, p.history[key])
+
+			// Pre-read patternTick + cpTick for CombinedOR strategy so the
+			// cpBoost check doesn't need a separate lock later.
+			ptick := p.patternTick
+			cpTickVal, hasCpTick := p.cpTick[key]
 
 			p.mu.Unlock()
 			// --- warmup phase ------------------------------------------------------
@@ -322,10 +325,6 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 			// Before resetting the estimator, emit the score for this point — otherwise
 			// the changepoint signal is lost (previously this was a `continue`).
 			if cp.Add(pt.Value) {
-				p.mu.Lock()
-				p.cpTick[key] = p.patternTick
-				p.mu.Unlock()
-
 				cpScore := rzScore
 				if cpScore < 0.3 {
 					cpScore = 0.3
@@ -335,29 +334,33 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				if minScore <= 0 {
 					minScore = p.config.MinScore
 				}
+
+				// Single lock: cpTick + streak + history reset (was 3 separate locks).
+				emitCp := false
+				p.mu.Lock()
+				p.cpTick[key] = ptick
 				if cpScore >= minScore {
-					p.mu.Lock()
 					p.streak[key]++
 					if p.streak[key] >= profile.Persistence || p.streak[key] >= 1 {
-						p.mu.Unlock()
-						results = append(results, models.PredictionResult{
-							Type:       "changepoint",
-							Entity:     entityName(mr.Name, pt.Labels),
-							Namespace:  pt.Labels["namespace"],
-							MetricName: mr.Name,
-							Score:      cpScore,
-							Timestamp:  time.Now(),
-						})
-					} else {
-						p.mu.Unlock()
+						emitCp = true
 					}
 				}
-				est.Reset()
-				est.Add(pt.Value)
-				p.mu.Lock()
 				p.history[key] = nil
 				p.datapoints[key] = 1
 				p.mu.Unlock()
+
+				if emitCp {
+					results = append(results, models.PredictionResult{
+						Type:       "changepoint",
+						Entity:     entityName(mr.Name, pt.Labels),
+						Namespace:  pt.Labels["namespace"],
+						MetricName: mr.Name,
+						Score:      cpScore,
+						Timestamp:  time.Now(),
+					})
+				}
+				est.Reset()
+				est.Add(pt.Value)
 				continue
 			}
 
@@ -367,8 +370,9 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 
 			// --- rate-of-change boost -----------------------------------------------
 			rocBoost := 0.0
-			if len(localHistory) >= 4 {
-				vel := p.roc.Velocity(localHistory)
+			history := p.history[key]
+			if len(history) >= 4 {
+				vel := p.roc.Velocity(history)
 				if math.Abs(vel.Slope) > 0 {
 					relSlope := math.Abs(vel.Slope) / math.Max(math.Abs(median), 1.0)
 					rocBoost = math.Min(relSlope*5.0, p.config.ROCBoostWeight)
@@ -388,9 +392,9 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 				primaryScore = rzScore
 
 				residualScore := 0.0
-				if len(localHistory) >= 10 {
+				if len(history) >= 10 {
 					var sum float64
-					for _, p := range localHistory[len(localHistory)-10:] {
+					for _, p := range history[len(history)-10:] {
 						sum += p.Value
 					}
 					trend := sum / 10.0
@@ -400,12 +404,11 @@ func (p *Predictor) Run(metrics []MetricResult) ([]models.PredictionResult, erro
 					}
 				}
 
+				// Use cached cpTick from entry lock — no separate lock needed.
 				cpBoost := 0.0
-				p.mu.Lock()
-				if lastTick, has := p.cpTick[key]; has && p.patternTick-lastTick <= 5 {
+				if hasCpTick && ptick-cpTickVal <= 5 {
 					cpBoost = 0.4
 				}
-				p.mu.Unlock()
 
 				primaryScore = math.Max(primaryScore, math.Max(residualScore, cpBoost))
 			default:

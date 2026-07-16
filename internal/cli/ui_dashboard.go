@@ -7,7 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	lgtable "charm.land/lipgloss/v2/table"
 
-	"github.com/lohitkolluri/KubeWise/internal/cli/kwtable"
+	"charm.land/bubbles/v2/table"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -354,7 +354,7 @@ func renderDashAgentFooter(cfg *models.AgentConfig, width int) string {
 	return lipgloss.NewStyle().MarginTop(1).Width(width).Render(line)
 }
 
-func colTitles(cols []kwtable.Column) []string {
+func colTitles(cols []table.Column) []string {
 	titles := make([]string, len(cols))
 	for i, c := range cols {
 		titles[i] = c.Title
@@ -362,7 +362,7 @@ func colTitles(cols []kwtable.Column) []string {
 	return titles
 }
 
-func kwRowsToStrings(rows []kwtable.Row) [][]string {
+func kwRowsToStrings(rows []table.Row) [][]string {
 	out := make([][]string, len(rows))
 	for i, row := range rows {
 		out[i] = []string(row)

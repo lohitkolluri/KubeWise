@@ -16,7 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 
-	"github.com/lohitkolluri/KubeWise/internal/cli/kwtable"
+	"charm.land/bubbles/v2/table"
 	"github.com/lohitkolluri/KubeWise/pkg/models"
 )
 
@@ -163,12 +163,12 @@ type controlModel struct {
 	confirmTargetID string // for confirmApproveRemediation
 	confirmAffirm   bool   // true = primary action focused
 
-	// Tables (kwtable — bubbles/table fork with full-row selection styling)
-	predTable     kwtable.Model
-	anomTable     kwtable.Model
-	auditTable    kwtable.Model
-	approvalTable kwtable.Model
-	healthTable   kwtable.Model
+	// Tables (bubbles/table)
+	predTable     table.Model
+	anomTable     table.Model
+	auditTable    table.Model
+	approvalTable table.Model
+	healthTable   table.Model
 
 	// UI components
 	cursor [tabCount]int
@@ -763,7 +763,7 @@ func (m *controlModel) clampCursor() {
 	}
 }
 
-func (m *controlModel) tableForTab(tab int) *kwtable.Model {
+func (m *controlModel) tableForTab(tab int) *table.Model {
 	switch tab {
 	case tabPredict:
 		return &m.predTable
@@ -1169,15 +1169,15 @@ func kpiValueStyleForCount(n, threshold int) lipgloss.Style {
 	return kpiSuccessStyle
 }
 
-// ── Table helpers (kwtable) ──
+// ── Table helpers ──
 
-func initTable(cols []kwtable.Column) kwtable.Model {
-	t := kwtable.New(
-		kwtable.WithColumns(cols),
-		kwtable.WithFocused(true),
-		kwtable.WithHeight(10),
+func initTable(cols []table.Column) table.Model {
+	t := table.New(
+		table.WithColumns(cols),
+		table.WithFocused(true),
+		table.WithHeight(10),
 	)
-	t.SetStyles(kwtable.Styles{
+	t.SetStyles(table.Styles{
 		Header: lipgloss.NewStyle().Bold(true).Foreground(colorMuted).Padding(0, 1),
 		Cell:   lipgloss.NewStyle().Foreground(colorSubtle).Padding(0, 1),
 		Selected: lipgloss.NewStyle().
@@ -1189,8 +1189,8 @@ func initTable(cols []kwtable.Column) kwtable.Model {
 	return t
 }
 
-func predCols() []kwtable.Column {
-	return []kwtable.Column{
+func predCols() []table.Column {
+	return []table.Column{
 		{Title: "TYPE", Width: 14},
 		{Title: "ENTITY", Width: 24},
 		{Title: "SCORE", Width: 8},
@@ -1199,8 +1199,8 @@ func predCols() []kwtable.Column {
 	}
 }
 
-func anomCols() []kwtable.Column {
-	return []kwtable.Column{
+func anomCols() []table.Column {
+	return []table.Column{
 		{Title: "PATTERN", Width: 10},
 		{Title: "ENTITY", Width: 24},
 		{Title: "SCORE", Width: 8},
@@ -1208,8 +1208,8 @@ func anomCols() []kwtable.Column {
 	}
 }
 
-func recentCols() []kwtable.Column {
-	return []kwtable.Column{
+func recentCols() []table.Column {
+	return []table.Column{
 		{Title: "TYPE", Width: 10},
 		{Title: "ENTITY", Width: 24},
 		{Title: "SCORE", Width: 8},
@@ -1217,8 +1217,8 @@ func recentCols() []kwtable.Column {
 	}
 }
 
-func auditCols() []kwtable.Column {
-	return []kwtable.Column{
+func auditCols() []table.Column {
+	return []table.Column{
 		{Title: "STATUS", Width: 14},
 		{Title: "ACTION", Width: 28},
 		{Title: "COUNT", Width: 7},
@@ -1227,8 +1227,8 @@ func auditCols() []kwtable.Column {
 	}
 }
 
-func approvalCols() []kwtable.Column {
-	return []kwtable.Column{
+func approvalCols() []table.Column {
+	return []table.Column{
 		{Title: "TIER", Width: 10},
 		{Title: "ACTION", Width: 28},
 		{Title: "COUNT", Width: 7},
@@ -1237,8 +1237,8 @@ func approvalCols() []kwtable.Column {
 	}
 }
 
-func healthCols() []kwtable.Column {
-	return []kwtable.Column{
+func healthCols() []table.Column {
+	return []table.Column{
 		{Title: "ENTITY", Width: 24},
 		{Title: "NAMESPACE", Width: 16},
 		{Title: "SCORE", Width: 8},
@@ -1248,13 +1248,13 @@ func healthCols() []kwtable.Column {
 
 // ── Table row builders ──
 
-func buildPredRows(preds []models.PredictionResult) []kwtable.Row {
+func buildPredRows(preds []models.PredictionResult) []table.Row {
 	if len(preds) == 0 {
 		return nil
 	}
-	rows := make([]kwtable.Row, len(preds))
+	rows := make([]table.Row, len(preds))
 	for i, p := range preds {
-		rows[i] = kwtable.Row{
+		rows[i] = table.Row{
 			p.Type,
 			p.Entity,
 			scoreStyle(p.Score).Render(fmt.Sprintf("%.0f%%", p.Score*100)),
@@ -1265,17 +1265,17 @@ func buildPredRows(preds []models.PredictionResult) []kwtable.Row {
 	return rows
 }
 
-func buildAnomRows(anomalies []models.AnomalyRecord) []kwtable.Row {
+func buildAnomRows(anomalies []models.AnomalyRecord) []table.Row {
 	if len(anomalies) == 0 {
 		return nil
 	}
-	rows := make([]kwtable.Row, len(anomalies))
+	rows := make([]table.Row, len(anomalies))
 	for i, a := range anomalies {
 		pat := a.Pattern
 		if pat == "" {
 			pat = "statistical"
 		}
-		rows[i] = kwtable.Row{
+		rows[i] = table.Row{
 			pat,
 			a.Entity,
 			scoreStyle(a.Score).Render(fmt.Sprintf("%.2f", a.Score)),
@@ -1285,11 +1285,11 @@ func buildAnomRows(anomalies []models.AnomalyRecord) []kwtable.Row {
 	return rows
 }
 
-func buildAuditRows(groups []auditGroup) []kwtable.Row {
+func buildAuditRows(groups []auditGroup) []table.Row {
 	if len(groups) == 0 {
 		return nil
 	}
-	rows := make([]kwtable.Row, len(groups))
+	rows := make([]table.Row, len(groups))
 	for i, g := range groups {
 		r := g.Records[0]
 		action := fmt.Sprintf("%s/%s", r.Plan.Action.Type, r.Plan.Action.Target)
@@ -1298,7 +1298,7 @@ func buildAuditRows(groups []auditGroup) []kwtable.Row {
 		if len(g.Records) > 1 {
 			count = fmt.Sprintf("%dx", len(g.Records))
 		}
-		rows[i] = kwtable.Row{
+		rows[i] = table.Row{
 			statusStyle(status).Render(status),
 			action,
 			count,
@@ -1309,11 +1309,11 @@ func buildAuditRows(groups []auditGroup) []kwtable.Row {
 	return rows
 }
 
-func buildApprovalRows(groups []auditGroup) []kwtable.Row {
+func buildApprovalRows(groups []auditGroup) []table.Row {
 	if len(groups) == 0 {
 		return nil
 	}
-	rows := make([]kwtable.Row, len(groups))
+	rows := make([]table.Row, len(groups))
 	for i, g := range groups {
 		r := g.Records[0]
 		action := fmt.Sprintf("%s %s/%s", r.Plan.Action.Type, r.Plan.Action.Namespace, r.Plan.Action.Target)
@@ -1327,7 +1327,7 @@ func buildApprovalRows(groups []auditGroup) []kwtable.Row {
 		if len(g.Records) > 1 {
 			count = fmt.Sprintf("%dx", len(g.Records))
 		}
-		rows[i] = kwtable.Row{
+		rows[i] = table.Row{
 			riskTierStyle(string(r.RiskTier)).Render(string(r.RiskTier)),
 			action,
 			count,
@@ -1338,11 +1338,11 @@ func buildApprovalRows(groups []auditGroup) []kwtable.Row {
 	return rows
 }
 
-func buildHealthRows(scores []models.HealthScore) []kwtable.Row {
+func buildHealthRows(scores []models.HealthScore) []table.Row {
 	if len(scores) == 0 {
 		return nil
 	}
-	rows := make([]kwtable.Row, len(scores))
+	rows := make([]table.Row, len(scores))
 	for i, hs := range scores {
 		var factors []string
 		for _, f := range hs.Factors {
@@ -1356,7 +1356,7 @@ func buildHealthRows(scores []models.HealthScore) []kwtable.Row {
 		if len(factors) > 0 {
 			factorStr = strings.Join(factors, " ")
 		}
-		rows[i] = kwtable.Row{
+		rows[i] = table.Row{
 			hs.Entity,
 			hs.Namespace,
 			scoreStyle(hs.Score / 100.0).Render(fmt.Sprintf("%.0f", hs.Score)),
@@ -1366,7 +1366,7 @@ func buildHealthRows(scores []models.HealthScore) []kwtable.Row {
 	return rows
 }
 
-func buildHealthRowsTop(scores []models.HealthScore, limit int) []kwtable.Row {
+func buildHealthRowsTop(scores []models.HealthScore, limit int) []table.Row {
 	rows := buildHealthRows(scores)
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
@@ -1374,7 +1374,7 @@ func buildHealthRowsTop(scores []models.HealthScore, limit int) []kwtable.Row {
 	return rows
 }
 
-func buildApprovalRowsTop(groups []auditGroup, limit int) []kwtable.Row {
+func buildApprovalRowsTop(groups []auditGroup, limit int) []table.Row {
 	rows := buildApprovalRows(groups)
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
@@ -1382,7 +1382,7 @@ func buildApprovalRowsTop(groups []auditGroup, limit int) []kwtable.Row {
 	return rows
 }
 
-func buildRecentRows(preds []models.PredictionResult, anomalies []models.AnomalyRecord, limit int) []kwtable.Row {
+func buildRecentRows(preds []models.PredictionResult, anomalies []models.AnomalyRecord, limit int) []table.Row {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -1392,14 +1392,14 @@ func buildRecentRows(preds []models.PredictionResult, anomalies []models.Anomaly
 
 	type recentItem struct {
 		at  time.Time
-		row kwtable.Row
+		row table.Row
 	}
 	items := make([]recentItem, 0, len(preds)+len(anomalies))
 
 	for _, p := range preds {
 		items = append(items, recentItem{
 			at: p.Timestamp,
-			row: kwtable.Row{
+			row: table.Row{
 				trunc(p.Type, 10),
 				trunc(p.Entity, 24),
 				scoreStyle(p.Score).Render(fmt.Sprintf("%.0f%%", p.Score*100)),
@@ -1418,7 +1418,7 @@ func buildRecentRows(preds []models.PredictionResult, anomalies []models.Anomaly
 		}
 		items = append(items, recentItem{
 			at: at,
-			row: kwtable.Row{
+			row: table.Row{
 				trunc(pat, 10),
 				trunc(a.Entity, 24),
 				scoreStyle(a.Score).Render(fmt.Sprintf("%.2f", a.Score)),
@@ -1434,7 +1434,7 @@ func buildRecentRows(preds []models.PredictionResult, anomalies []models.Anomaly
 		items = items[:limit]
 	}
 
-	rows := make([]kwtable.Row, len(items))
+	rows := make([]table.Row, len(items))
 	for i, item := range items {
 		rows[i] = item.row
 	}

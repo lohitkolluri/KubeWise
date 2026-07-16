@@ -2,7 +2,6 @@ package predictor
 
 import (
 	"math"
-	"sort"
 	"sync"
 	"time"
 
@@ -120,6 +119,7 @@ func (a *AdaptiveMedian) Count() int {
 
 // Stats returns the median, MAD, range, and count from the current window.
 // ok is false when the window is empty.
+// Uses quickselect for O(n) median/MAD instead of O(n log n) full sort.
 func (a *AdaptiveMedian) Stats() (median, mad, rng float64, n int, ok bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -129,35 +129,83 @@ func (a *AdaptiveMedian) Stats() (median, mad, rng float64, n int, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 
-	// Sort a copy for median and range.
+	// Quickselect-based median: O(n) average instead of O(n log n) full sort.
+	// We need a mutable copy since quickselect reorders elements.
 	sorted := make([]float64, n)
 	copy(sorted, a.values)
-	sort.Float64s(sorted)
 
-	rng = sorted[n-1] - sorted[0]
+	// Track min/max for range while finding median.
+	// Using quickselect avoids the O(n log n) cost of a full sort.
+	min, max := sorted[0], sorted[0]
+	for _, v := range sorted[1:] {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	rng = max - min
 
 	if n%2 == 0 {
-		median = (sorted[n/2-1] + sorted[n/2]) / 2
+		// Lower median via quickselect, then scan for the next higher value.
+		lo := quickSelectKth(sorted, n/2-1)
+		// Find the smallest value > lo (the upper median).
+		hi := max
+		for _, v := range sorted {
+			if v > lo && v < hi {
+				hi = v
+			}
+		}
+		median = (lo + hi) / 2
 	} else {
-		median = sorted[n/2]
+		median = quickSelectKth(sorted, n/2)
 	}
 
-	// Compute MAD from sorted deviations (avoids a second sort).
+	// Compute MAD: median of absolute deviations from median.
+	// Uses quickselect on deviations — O(n) per pass.
 	devs := make([]float64, n)
-	for i, v := range sorted {
+	for i, v := range a.values {
 		devs[i] = math.Abs(v - median)
 	}
-	sort.Float64s(devs)
 	if n%2 == 0 {
-		mad = (devs[n/2-1] + devs[n/2]) / 2
+		mad = (quickSelectKth(devs, n/2-1) + quickSelectKth(devs, n/2)) / 2
 	} else {
-		mad = devs[n/2]
+		mad = quickSelectKth(devs, n/2)
 	}
 	if mad < 1e-10 {
 		mad = 1e-10
 	}
 
 	return median, mad, rng, n, true
+}
+
+// quickSelectKth returns the k-th smallest element in arr (0-indexed).
+// arr is modified in-place — callers must pass a copy if the original is needed.
+// Average-case O(n); worst-case O(n²) which is acceptable for the bounded (≤100)
+// window size. Uses Lomuto partition with rightmost element as pivot.
+func quickSelectKth(arr []float64, k int) float64 {
+	left, right := 0, len(arr)-1
+	for left < right {
+		pivot := arr[right]
+		i := left
+		for j := left; j < right; j++ {
+			if arr[j] < pivot {
+				arr[i], arr[j] = arr[j], arr[i]
+				i++
+			}
+		}
+		arr[i], arr[right] = arr[right], arr[i]
+
+		if i == k {
+			return arr[k]
+		} else if k < i {
+			right = i - 1
+		} else {
+			left = i + 1
+		}
+	}
+	return arr[left]
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +303,7 @@ type VelocityResult struct {
 // sequence of MetricPoints.  Requires at least 2 points for slope and 4+
 // for meaningful acceleration. Uses actual timestamps (seconds since first
 // point) for the x-axis so the slope represents change per unit time.
+// Complexity: O(n) where n = len(points).
 func (r *RateOfChange) Velocity(points []MetricPoint) VelocityResult {
 	if len(points) < 2 {
 		return VelocityResult{}
