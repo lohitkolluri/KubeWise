@@ -1520,6 +1520,46 @@ func productionRouting(data []BenchPoint, patternName string) []bool {
 	}
 }
 
+// Isolation Forest: uses an ensemble of random trees to isolate anomalies.
+func algoIsolationForest(data []BenchPoint) []bool {
+	n := len(data)
+	preds := make([]bool, n)
+	vals := extractValues(data)
+	if n < 50 {
+		return preds
+	}
+	for i := 100; i < n; i++ {
+		history := vals[:i]
+		score := predictor.IFAnomalyScore(vals[i], history, 50, 128)
+		preds[i] = score >= 0.7
+	}
+	return preds
+}
+
+// IF + Production Routing hybrid: uses IF score to boost statistical predictions.
+func algoIFHybrid(data []BenchPoint) []bool {
+	n := len(data)
+	preds := algoRobustZScore(data)
+	cpPreds := algoChangepointRate(data)
+	vals := extractValues(data)
+
+	// Compute IF scores and use them to fill gaps
+	for i := 100; i < n; i++ {
+		history := vals[:i]
+		ifScore := predictor.IFAnomalyScore(vals[i], history, 50, 128)
+		if !preds[i] && !cpPreds[i] && ifScore >= 0.75 {
+			preds[i] = true
+		}
+	}
+	// Also include changepoint detections
+	for i := range preds {
+		if cpPreds[i] {
+			preds[i] = true
+		}
+	}
+	return preds
+}
+
 func patternToMetricName(pattern string) string {
 	switch {
 	case strings.Contains(pattern, "Normal"):
@@ -1847,6 +1887,8 @@ func main() {
 		{"Ensemble: Voting", ensembleVoting},
 		{"E5: ULTRA CASCADE", ensembleUltraCascade},
 		{"Production Routing (ProfileForMetric)", nil}, // tested with metric name mapping
+		{"Isolation Forest (ML)", algoIsolationForest},
+		{"IF + Production Routing (ML hybrid)", algoIFHybrid},
 	}
 
 	// =========================================================================
